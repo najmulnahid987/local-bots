@@ -13,12 +13,34 @@ function createWindow(): void {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false
     }
   })
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+  })
+
+  mainWindow.webContents.on('did-finish-load', async () => {
+    try {
+      const checks = await mainWindow.webContents.executeJavaScript(`({
+        require: typeof require,
+        process: typeof process,
+        windowRequire: typeof window.require,
+        windowProcess: typeof window.process,
+        windowBuffer: typeof window.Buffer
+      })`)
+      console.log('[SECURITY_VERIFICATION]', JSON.stringify(checks))
+    } catch (err) {
+      console.error('[SECURITY_VERIFICATION_ERROR]', err)
+    }
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
