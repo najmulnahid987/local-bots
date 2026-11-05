@@ -1,9 +1,14 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
+import { IPC_CHANNELS, PingRequest, PingResponse } from '../shared/ipc'
 
-// Custom APIs for renderer
-const api = {}
+// Bounded, typed APIs exposed to the Renderer
+const api = {
+  ping: (request: PingRequest): Promise<PingResponse> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.PING, request)
+  }
+}
 
-// Use `contextBridge` APIs to safely expose bounded APIs to renderer
+// Expose safe, bounded APIs using contextBridge
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('api', api)
