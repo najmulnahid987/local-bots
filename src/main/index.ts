@@ -3,7 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerIpcHandlers, isTrustedRendererUrl } from './ipc'
-import { runSqliteNativeSmokeTest } from './database/sqlite-native-smoke'
+import { databaseManager } from './database/connection'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -243,19 +243,27 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // Initialize persistent SQLite database before window creation
+  try {
+    const userDataPath = app.getPath('userData')
+    const initResult = databaseManager.initialize(userDataPath)
+    console.log(
+      '[DATABASE_INITIALIZED]',
+      JSON.stringify({
+        dbPath: initResult.dbPath,
+        foreignKeys: initResult.foreignKeys,
+        journalMode: initResult.journalMode,
+        busyTimeout: initResult.busyTimeout
+      })
+    )
+  } catch (dbError) {
+    console.error('[DATABASE_INITIALIZATION_FAILED]', dbError)
+    app.quit()
+    return
+  }
+
   // Register secure Main process IPC handlers
   registerIpcHandlers(() => mainWindow)
-
-  // In development mode, verify native SQLite module functionality
-  if (is.dev) {
-    try {
-      const smokeResult = runSqliteNativeSmokeTest()
-      console.log('[STEP_2_1_SQLITE_SMOKE_SUCCESS]', JSON.stringify(smokeResult))
-    } catch (smokeErr) {
-      console.error('[STEP_2_1_SQLITE_SMOKE_FAILURE]', smokeErr)
-      throw smokeErr
-    }
-  }
 
   createWindow()
 
@@ -271,6 +279,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// Safely close the database connection during application shutdown
+app.on('will-quit', () => {
+  databaseManager.close()
 })
 
 // In this file you can include the rest of your app's specific main process
