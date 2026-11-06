@@ -1,90 +1,18 @@
-import { ipcMain, BrowserWindow, IpcMainInvokeEvent } from 'electron'
-import { is } from '@electron-toolkit/utils'
-import { z } from 'zod'
-import { join } from 'path'
-import { pathToFileURL } from 'url'
+import { ipcMain, BrowserWindow } from 'electron'
 import { IPC_CHANNELS, PingResponse } from '../shared/ipc'
+import { pingRequestSchema } from './validation'
+import { validateIpcSender } from './security'
 
-/**
- * Strict Zod schema for PingRequest.
- * Enforces valid UUID format and strictly rejects unknown extra properties.
- */
-export const pingRequestSchema = z
-  .object({
-    requestId: z.string().uuid()
-  })
-  .strict()
-
-/**
- * Authoritative validator for trusted renderer URLs in Main process.
- * Reused across IPC sender validation and navigation event filtering.
- *
- * 1. Development: Matches only the exact configured local Vite dev server origin.
- * 2. Production: Matches only the local index.html file URL.
- */
-export function isTrustedRendererUrl(urlStr: string): boolean {
-  if (!urlStr) {
-    return false
-  }
-
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    try {
-      const parsedTargetUrl = new URL(urlStr)
-      const parsedTrustedUrl = new URL(process.env['ELECTRON_RENDERER_URL'])
-      return parsedTargetUrl.origin === parsedTrustedUrl.origin
-    } catch {
-      return false
-    }
-  } else {
-    try {
-      const expectedFilePath = join(__dirname, '../renderer/index.html')
-      const expectedFileUrl = pathToFileURL(expectedFilePath).href.toLowerCase()
-      const actualUrl = new URL(urlStr)
-      if (actualUrl.protocol !== 'file:') {
-        return false
-      }
-      return actualUrl.href.toLowerCase() === expectedFileUrl
-    } catch {
-      return false
-    }
-  }
-}
-
-/**
- * Reusable sender validation:
- * 1. Checks that the BrowserWindow exists and is not destroyed.
- * 2. Checks that event.sender is the main BrowserWindow webContents.
- * 3. Checks that event.senderFrame exists and is the main frame.
- * 4. Checks that sender frame URL matches the trusted dev or prod URL.
- */
-export function validateIpcSender(
-  event: IpcMainInvokeEvent,
-  mainWindow: BrowserWindow | null
-): boolean {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return false
-  }
-
-  if (event.sender !== mainWindow.webContents) {
-    return false
-  }
-
-  const senderFrame = event.senderFrame
-  if (!senderFrame) {
-    return false
-  }
-
-  if (senderFrame !== mainWindow.webContents.mainFrame) {
-    return false
-  }
-
-  const frameUrl = senderFrame.url
-  if (!frameUrl) {
-    return false
-  }
-
-  return isTrustedRendererUrl(frameUrl)
-}
+export { pingRequestSchema } from './validation'
+export {
+  isTrustedRendererUrl,
+  validateIpcSender,
+  type TrustedUrlOptions,
+  type WebFrameMainLike,
+  type WebContentsLike,
+  type BrowserWindowLike,
+  type IpcSenderEventLike
+} from './security'
 
 /**
  * Register Main process IPC handlers.

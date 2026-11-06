@@ -46,6 +46,7 @@ cache/
 coverage/
 .nyc_output/
 .turbo/
+.vitest/
 .eslintcache
 .stylelintcache
 
