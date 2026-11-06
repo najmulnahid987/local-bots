@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerIpcHandlers, isTrustedRendererUrl } from './ipc'
+import { runSqliteNativeSmokeTest } from './database/sqlite-native-smoke'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -244,6 +245,17 @@ app.whenReady().then(() => {
 
   // Register secure Main process IPC handlers
   registerIpcHandlers(() => mainWindow)
+
+  // In development mode, verify native SQLite module functionality
+  if (is.dev) {
+    try {
+      const smokeResult = runSqliteNativeSmokeTest()
+      console.log('[STEP_2_1_SQLITE_SMOKE_SUCCESS]', JSON.stringify(smokeResult))
+    } catch (smokeErr) {
+      console.error('[STEP_2_1_SQLITE_SMOKE_FAILURE]', smokeErr)
+      throw smokeErr
+    }
+  }
 
   createWindow()
 
