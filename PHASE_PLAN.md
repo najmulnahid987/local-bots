@@ -93,7 +93,7 @@ The engineering stack is fixed by prior Phase 0 technical approvals:
 ## 6. Implementation Phase Overview
 
 ```
-Phase 0: Architecture, Spec, Security & Planning (CURRENT)
+Phase 0: Architecture, Spec, Security & Planning
    │
    ▼
 Phase 1: Electron Foundation & Secure Desktop Shell
@@ -102,13 +102,13 @@ Phase 1: Electron Foundation & Secure Desktop Shell
 Phase 2: Local Database & Persistence Foundation (SQLite + WAL)
    │
    ▼
-Phase 3: Knowledge Base Management & Workspaces
+Phase 3: BYOK Provider Manager & Secure Credential Storage (CURRENT)
    │
    ▼
-Phase 4: Bot Management & Bot Constellation Dynamic Canvas
+Phase 4: Knowledge Base Management & Workspaces
    │
    ▼
-Phase 5: BYOK AI Provider Management & safeStorage Vault
+Phase 5: Bot Management & Bot Constellation Dynamic Canvas
    │
    ▼
 Phase 6: Multi-Model Bot Chat & Streaming Conversations
@@ -335,15 +335,137 @@ Functional SQLite persistence layer, migration manager, repository classes, auto
 
 ---
 
-## 9. Detailed Phase 3: Knowledge Base Management
+## 9. Detailed Phase 3: BYOK AI Provider Management and Secure Credential Storage
 
 ### 9.1 Phase Goal
-Implement full lifecycle management for independent Knowledge Bases, including UI dashboards, switching contexts, and filesystem directory sandboxes.
+Implement the Bring-Your-Own-Key (**BYOK**) provider management system supporting OpenAI, Anthropic, Google Gemini (with modular readiness for xAI and OpenRouter), backed by OS hardware encryption via Electron `safeStorage` and an isolated local credential file vault.
 
 ### 9.2 Prerequisites
 - Phase 2 completed and verified (Tag: `phase-2-complete`).
 
 ### 9.3 Features Included
+- Electron `safeStorage` integration in Main process (asynchronous encryption & decryption where available).
+- Isolated local credential vault (`<userData>/credentials/`) with atomic writes, orphan scavenger, and permissions isolation.
+- Schema Migration 002: evolving `provider_connections` to store opaque `credential_ref` pointers instead of in-database BLOBs.
+- Direct HTTPS provider adapters utilizing the **Vercel AI SDK**:
+  - `@ai-sdk/openai` (OpenAI & OpenAI-compatible endpoints)
+  - `@ai-sdk/anthropic` (Anthropic)
+  - `@ai-sdk/google` (Google Gemini)
+- Provider connection CRUD: `provider:create`, `provider:test`, `provider:list`, `provider:replace-key`, `provider:delete`.
+- Non-streaming "Test Connection" handshake verifying API key validity without high token costs.
+- Model Capability Registry: cataloging supported models, context window limits, and tool-calling capabilities.
+- Provider Settings UI in React:
+  - Add API key input with connection testing indicator.
+  - Masked key display (e.g., `sk-...39a1`).
+  - Auto-clearing password input fields upon save or dismissal.
+  - `ON DELETE RESTRICT` protection: alerts user if attempting to delete a provider connection assigned to active Bots.
+- Linux fallback detection: halts credential save if `basic_text` fallback is detected, showing a security warning, offering session-only memory storage.
+
+### 9.4 Features Excluded
+- Streaming chat conversations (Phase 6).
+- Embedded local LLM execution (deferred post-MVP).
+
+### 9.5 Dependencies
+- `ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`.
+
+### 9.6 Expected Files & Modules
+```
+src/
+├── main/
+│   ├── database/migrations/
+│   │   └── 002_provider_credential_refs.sql
+│   ├── services/
+│   │   └── credential-vault.ts   # safeStorage + atomic file store + scavenger
+│   ├── providers/
+│   │   ├── adapter-interface.ts  # IModelProviderAdapter interface
+│   │   ├── provider-manager.ts   # Client factory & connection registry
+│   │   ├── capability-registry.ts# Model capabilities catalog
+│   │   └── adapters/
+│   │       ├── openai-adapter.ts
+│   │       ├── anthropic-adapter.ts
+│   │       └── gemini-adapter.ts
+│   └── ipc/
+│       └── provider-handlers.ts  # Typed IPC routes with sender validation
+├── preload/
+│   └── index.ts                  # Provider API bridge contract
+├── renderer/src/
+│   ├── components/settings/
+│   │   ├── ProviderConnectionList.tsx
+│   │   ├── AddConnectionModal.tsx
+│   │   └── ReplaceKeyModal.tsx
+│   └── pages/SettingsPage.tsx
+└── shared/
+    ├── providers.ts              # ModelDescriptor, ProviderId, DTOs
+    └── ipc.ts                    # Typed provider IPC channel definitions
+```
+
+### 9.7 Ordered Implementation Tasks
+- **Step 3.0: Provider Architecture and Security Preflight (Specification Complete)**
+- **Step 3.1: Dependencies, Migration 002, and CredentialVault Service**
+- **Step 3.2: Provider Registry & Adapters (OpenAI, Anthropic, Google)**
+- **Step 3.3: Provider Connection Repository & IPC Handlers**
+- **Step 3.4: Preload Contract & Type-Safe Renderer Bridge**
+- **Step 3.5: Provider Management UI in Settings**
+- **Step 3.6: End-to-End Integration Testing & Phase 3 Verification Gate**
+
+### 9.8 Database Changes
+- Migration `002_provider_credential_refs.sql` replaces `encrypted_credentials BLOB` in `provider_connections` with `credential_ref TEXT NOT NULL UNIQUE`, `status TEXT`, and updated indexes.
+
+### 9.9 Security Requirements
+- Raw API keys must never be logged, written to SQLite, or sent to the renderer.
+- SQLite stores only opaque reference identifiers (`credential_ref`); encrypted ciphertexts reside in `<userData>/credentials/`.
+- Decrypted keys exist only ephemerally in Main process memory during active requests.
+- Linux `basic_text` fallback halts persistent saving and alerts user.
+
+### 9.10 Automated Tests
+- Test: Key saved via `CredentialVault` produces encrypted file in vault directory; raw key absent from DB and filesystem plaintext.
+- Test: "Test Connection" with invalid key returns normalized `INVALID_API_KEY` error.
+- Test: Deleting a provider connection assigned to an active Bot throws constraint violation.
+- Test: Startup scavenger purges unreferenced vault files and detects missing files.
+
+### 9.11 Manual Tests
+- Enter a valid API key in Settings; click "Test Connection" and verify latency and success badge.
+- Inspect `app.sqlite` using SQLite viewer; confirm `credential_ref` exists and zero raw keys or BLOBs reside in the database.
+- Inspect `<userData>/credentials/`; confirm file contains only binary ciphertext.
+
+### 9.12 Commands That Must Pass
+```bash
+npm run typecheck
+npm run test
+npm run lint
+npm run build
+```
+
+### 9.13 Acceptance Criteria
+- [ ] Users can enter, test, update, and remove API keys for target providers.
+- [ ] Keys are encrypted via OS `safeStorage` in local vault; zero plaintext keys on disk or in SQLite.
+- [ ] UI clears key inputs immediately and displays only masked previews.
+- [ ] Deletion of in-use provider connections is safely blocked.
+
+### 9.14 Phase Gate
+Provider connections, credential encryption, vault atomic operations, and connection handshakes pass all security and functional tests.
+
+### 9.15 Rollback Procedure
+Revert to `phase-2-complete`.
+
+### 9.16 Git Checkpoint
+Commit: `feat(providers): implement byok provider manager with safeStorage vault`  
+Tag: `phase-3-complete`
+
+### 9.17 Expected Deliverables
+Secure CredentialVault service, Migration 002, provider adapters, settings UI, model capability registry, automated test suite.
+
+---
+
+## 10. Detailed Phase 4: Knowledge Base Management
+
+### 10.1 Phase Goal
+Implement full lifecycle management for independent Knowledge Bases, including UI dashboards, switching contexts, and filesystem directory sandboxes.
+
+### 10.2 Prerequisites
+- Phase 3 completed and verified (Tag: `phase-3-complete`).
+
+### 10.3 Features Included
 - IPC handlers for Knowledge Base CRUD: `kb:create`, `kb:list`, `kb:update`, `kb:delete`, `kb:get`.
 - Automatic creation of dedicated document directories: `<userData>/documents/<knowledge_base_id>/`.
 - Knowledge Base Dashboard UI:
@@ -355,14 +477,14 @@ Implement full lifecycle management for independent Knowledge Bases, including U
 - Cascading deletion: deleting a Knowledge Base purges its database rows and removes its document directory from disk.
 - Complete data separation: modifying or deleting Knowledge Base A has zero impact on Knowledge Base B.
 
-### 9.4 Features Excluded
+### 10.4 Features Excluded
 - Ingesting files into Knowledge Bases (Phase 7).
-- Bot creation inside Knowledge Bases (Phase 4).
+- Bot creation inside Knowledge Bases (Phase 5).
 
-### 9.5 Dependencies
+### 10.5 Dependencies
 - React UI state stores (`zustand`), UI modal primitives.
 
-### 9.6 Expected Files & Modules
+### 10.6 Expected Files & Modules
 ```
 src/
 ├── main/
@@ -377,7 +499,7 @@ src/
 │   └── stores/kb-store.ts    # Zustand store for active KB state
 ```
 
-### 9.7 Ordered Implementation Tasks
+### 10.7 Ordered Implementation Tasks
 1. Implement `KBManager` service in Main process handling directory creation and DB transactions.
 2. Implement IPC handlers with Zod schema validation for KB payloads.
 3. Wire Preload API methods for KB operations.
@@ -387,59 +509,59 @@ src/
 7. Implement `KBDeleteModal` with name-confirmation check.
 8. Author automated tests for concurrent KB creation, deletion, and directory cleanup.
 
-### 9.8 Database Changes
+### 10.8 Database Changes
 - None (tables created in Phase 2).
 
-### 9.9 Security Requirements
+### 10.9 Security Requirements
 - Deleting a Knowledge Base requires explicit user confirmation.
 - Directory removal must be strictly confined to `<userData>/documents/<kb_id>/`.
 
-### 9.10 Automated Tests
+### 10.10 Automated Tests
 - Test: Creating KB creates both database record and physical disk directory.
 - Test: Deleting KB deletes database row and recursively removes disk directory.
 - Test: Deleting KB 1 leaves KB 2 documents and records intact.
 
-### 9.11 Manual Tests
+### 10.11 Manual Tests
 - Create "Architecture Docs" and "Legal Contracts" in the UI.
 - Verify both appear on the dashboard with 0 bots and 0 documents.
 - Delete "Architecture Docs" after typing confirmation; verify "Legal Contracts" remains operational.
 
-### 9.12 Commands That Must Pass
+### 10.12 Commands That Must Pass
 ```bash
 npm run typecheck
 npm run test
 npm run build
 ```
 
-### 9.13 Acceptance Criteria
+### 10.13 Acceptance Criteria
 - [ ] Users can create, view, edit, and delete independent Knowledge Bases.
 - [ ] Active Knowledge Base selection persists across application reloads.
 - [ ] Deleting a Knowledge Base safely cleans up its local storage folder without affecting other KBs.
 
-### 9.14 Phase Gate
+### 10.14 Phase Gate
 Knowledge Base management passes all CRUD, persistence, and isolation tests.
 
-### 9.15 Rollback Procedure
-Revert to `phase-2-complete`.
+### 10.15 Rollback Procedure
+Revert to `phase-3-complete`.
 
-### 9.16 Git Checkpoint
+### 10.16 Git Checkpoint
 Commit: `feat(kb): implement knowledge base workspaces and directory management`  
-Tag: `phase-3-complete`
+Tag: `phase-4-complete`
 
-### 9.17 Expected Deliverables
+### 10.17 Expected Deliverables
 Complete Knowledge Base management UI and backend services, directory isolation logic.
 
 ---
 
-## 10. Detailed Phase 4: Bot Management and Bot Constellation
+## 11. Detailed Phase 5: Bot Management and Bot Constellation
 
-### 10.1 Phase Goal
+### 11.1 Phase Goal
 Enable deployment of multiple persistent AI Bots inside selected Knowledge Bases, and implement the dynamic, mathematically driven **Bot Constellation** SVG canvas.
 
-### 10.2 Prerequisites
-- Phase 3 completed and verified (Tag: `phase-3-complete`).
+### 11.2 Prerequisites
+- Phase 4 completed and verified (Tag: `phase-4-complete`).
 
-### 10.3 Features Included
+### 11.3 Features Included
 - In-KB Bot creation: Bot binds permanently to active `knowledge_base_id`.
 - Bot configuration: Name, description, system prompt instructions, assigned provider/model ID, tool permission toggles.
 - Bot CRUD IPC handlers: `bot:create`, `bot:list-by-kb`, `bot:update`, `bot:delete`.
@@ -448,17 +570,16 @@ Enable deployment of multiple persistent AI Bots inside selected Knowledge Bases
   - SVG rendering: $N=0$ (empty), $N=1$ (center node), $N=2$ (line), $N=3$ (triangle), $N=4$ (square), $N=5$ (pentagon), $N \ge 6$ (regular $N$-gon).
   - CSS coordinate transitions for smooth morphing on Bot additions/deletions.
   - Interactive clickable nodes: clicking a vertex navigates to that Bot's dedicated workspace.
-  - Node hover cards showing Bot role and model ID.
-  - Stable node identity during re-renders.
+- Sibling Bots within the same Knowledge Base can use different providers and models.
 
-### 10.4 Features Excluded
-- Live AI chat inference (Phase 6).
-- Document retrieval tool execution (Phase 8).
+### 11.4 Features Excluded
+- Inter-bot messaging or delegation (deferred post-MVP).
+- Conversation execution (Phase 6).
 
-### 10.5 Dependencies
-- None additional (pure React SVG for Constellation).
+### 11.5 Dependencies
+- None additional (leverages React, TypeScript, Lucide Icons).
 
-### 10.6 Expected Files & Modules
+### 11.6 Expected Files & Modules
 ```
 src/
 ├── main/
@@ -476,7 +597,7 @@ src/
 │   └── stores/bot-store.ts         # Active Bot store
 ```
 
-### 10.7 Ordered Implementation Tasks
+### 11.7 Ordered Implementation Tasks
 1. Implement `BotManager` in Main process enforcing non-null `knowledge_base_id`.
 2. Implement Bot IPC handlers and Zod validation schemas.
 3. Implement `geometry-calculator.ts` with comprehensive unit tests for $N=0$ through $N=12$.
@@ -485,152 +606,49 @@ src/
 6. Wire node click events to navigate into that Bot's workspace.
 7. Author automated tests for Bot parent-binding and constellation geometry generation.
 
-### 10.8 Database Changes
+### 11.8 Database Changes
 - None (tables created in Phase 2).
 
-### 10.9 Security Requirements
+### 11.9 Security Requirements
 - Bot creation requests **must** originate within a valid Knowledge Base scope.
 - Deleting a Bot cascades to its private threads but preserves Knowledge Base documents.
 
-### 10.10 Automated Tests
+### 11.10 Automated Tests
 - Test: Bot creation fails if parent `knowledge_base_id` does not exist.
 - Test: Geometry engine returns exact coordinates for triangle ($N=3$), square ($N=4$), and pentagon ($N=5$).
 - Test: Deleting a Bot collapses an $N=4$ square into an $N=3$ triangle.
 
-### 10.11 Manual Tests
+### 11.11 Manual Tests
 - Deploy 1 Bot: verify single centered point appears.
 - Deploy 2nd Bot: verify smooth transition into horizontal line.
 - Deploy 3rd Bot: verify transition into equilateral triangle.
 - Click node: confirm UI routes into that Bot's workspace.
 
-### 10.12 Commands That Must Pass
+### 11.12 Commands That Must Pass
 ```bash
 npm run typecheck
 npm run test
 npm run build
 ```
 
-### 10.13 Acceptance Criteria
+### 11.13 Acceptance Criteria
 - [ ] Bots can only be created inside an active Knowledge Base.
 - [ ] Constellation geometry dynamically updates from $N=0$ to $N \ge 8$ without hardcoded polygon layouts.
 - [ ] Clicking any Constellation node opens that Bot's workspace.
 - [ ] Deleting a Bot preserves all parent documents and sibling Bots.
 
-### 10.14 Phase Gate
-Bot CRUD, parent KB binding, and dynamic Constellation visualization pass all tests.
-
-### 10.15 Rollback Procedure
-Revert to `phase-3-complete`.
-
-### 10.16 Git Checkpoint
-Commit: `feat(bot): implement bot management and dynamic constellation svg canvas`  
-Tag: `phase-4-complete`
-
-### 10.17 Expected Deliverables
-Bot management services, dynamic Constellation SVG canvas, navigation routing.
-
----
-
-## 11. Detailed Phase 5: BYOK AI Provider Management
-
-### 11.1 Phase Goal
-Implement the Bring-Your-Own-Key (**BYOK**) provider management system supporting OpenAI, Anthropic, Google Gemini, xAI, and OpenRouter, backed by hardware encryption via Electron `safeStorage`.
-
-### 11.2 Prerequisites
-- Phase 4 completed and verified (Tag: `phase-4-complete`).
-
-### 11.3 Features Included
-- Electron `safeStorage` integration in Main process.
-- Direct HTTPS provider adapters utilizing the **Vercel AI SDK**:
-  - `@ai-sdk/openai` (OpenAI & OpenRouter)
-  - `@ai-sdk/anthropic` (Anthropic)
-  - `@ai-sdk/google` (Google Gemini)
-  - xAI custom adapter via OpenAI-compatible endpoint.
-- Provider connection CRUD: `provider:save-key`, `provider:test-connection`, `provider:list`, `provider:delete`.
-- Non-streaming "Test Connection" handshake to verify key validity.
-- Model Capability Registry: tracks supported models, context window limits, and tool-calling capabilities.
-- Provider Settings UI:
-  - Add API key input with connection testing indicator.
-  - Masked key display (e.g., `sk-...39a1`).
-  - Model selection dropdown with custom model override.
-  - Independent model assignment per Bot.
-- `ON DELETE RESTRICT` protection: alerts user if attempting to delete a provider connection assigned to active Bots.
-- Linux fallback detection: halts credential save if `basic_text` fallback is detected, showing a security warning.
-
-### 11.4 Features Excluded
-- Streaming chat conversations (Phase 6).
-- Embedded local LLM execution (deferred post-MVP).
-
-### 11.5 Dependencies
-- `ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`.
-
-### 11.6 Expected Files & Modules
-```
-src/main/
-├── providers/
-│   ├── adapter-interface.ts  # IModelProviderAdapter interface
-│   ├── provider-manager.ts   # Client factory & connection registry
-│   ├── capability-registry.ts# Model capabilities catalog
-│   └── adapters/
-│       ├── openai-adapter.ts
-│       ├── anthropic-adapter.ts
-│       ├── gemini-adapter.ts
-│       └── openrouter-adapter.ts
-├── services/credential-manager.ts # safeStorage wrapper
-└── ipc/provider-handlers.ts  # Provider IPC routes
-```
-
-### 11.7 Ordered Implementation Tasks
-1. Implement `CredentialManager` wrapping `safeStorage.encryptString()` and `decryptString()`.
-2. Implement Linux fallback detection alerting on insecure storage backends.
-3. Implement `IModelProviderAdapter` interface and specific provider adapters using Vercel AI SDK.
-4. Implement `CapabilityRegistry` mapping models to tool-calling capabilities.
-5. Implement IPC handlers for saving, testing, and listing provider connections.
-6. Build Provider Settings UI with "Test Connection" button and masked previews.
-7. Author automated tests for key encryption at rest and provider error normalization.
-
-### 11.8 Database Changes
-- None (table `provider_connections` created in Phase 2).
-
-### 11.9 Security Requirements
-- Raw API keys must never be logged, written to SQLite plaintext, or sent to the renderer.
-- Decrypted keys must exist only ephemerally in Main process memory during active requests.
-
-### 11.10 Automated Tests
-- Test: Key saved via `CredentialManager` produces encrypted binary BLOB in SQLite; raw key string absent from DB file.
-- Test: "Test Connection" with invalid key returns normalized `AUTH_INVALID_KEY` error.
-- Test: Deleting a provider connection assigned to an active Bot throws constraint violation.
-
-### 11.11 Manual Tests
-- Enter a valid Anthropic API key in Settings; click "Test Connection" and verify success badge.
-- Assign Anthropic Claude 3.5 Sonnet to Bot 1, and OpenAI GPT-4o to Bot 2.
-- Inspect `workspace.db` using hex viewer; confirm raw API keys are nowhere in the file.
-
-### 11.12 Commands That Must Pass
-```bash
-npm run typecheck
-npm run test:providers
-npm run build
-```
-
-### 11.13 Acceptance Criteria
-- [ ] Users can enter, test, update, and remove API keys for all 5 target providers.
-- [ ] Keys are encrypted via OS `safeStorage`; zero plaintext keys on disk.
-- [ ] Bots in the same Knowledge Base can use different providers and models.
-- [ ] Deletion of in-use provider connections is safely blocked.
-
 ### 11.14 Phase Gate
-Provider connections, credential encryption, and connection handshakes pass all security and functional tests.
+Bot CRUD, parent KB binding, and dynamic Constellation visualization pass all tests.
 
 ### 11.15 Rollback Procedure
 Revert to `phase-4-complete`.
 
 ### 11.16 Git Checkpoint
-Commit: `feat(providers): implement byok provider manager with safeStorage encryption`  
+Commit: `feat(bot): implement bot management and dynamic constellation svg canvas`  
 Tag: `phase-5-complete`
 
 ### 11.17 Expected Deliverables
-Secure credential manager, provider adapters, settings UI, model capability registry.
+Bot management services, dynamic Constellation SVG canvas, navigation routing.
 
 ---
 
