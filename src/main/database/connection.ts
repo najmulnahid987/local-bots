@@ -1,6 +1,15 @@
 import Database from 'better-sqlite3'
 import { join, resolve, dirname, basename, isAbsolute } from 'path'
-import { existsSync, mkdirSync, renameSync, statSync, lstatSync, unlinkSync } from 'fs'
+import {
+  existsSync,
+  mkdirSync,
+  statSync,
+  lstatSync,
+  unlinkSync,
+  linkSync,
+  copyFileSync,
+  constants
+} from 'fs'
 import { randomUUID } from 'crypto'
 
 export interface DatabaseInitResult {
@@ -446,12 +455,37 @@ export class DatabaseManager {
         }
       }
 
-      // 3. Confirm destination still does not exist and safely rename
+      // 3. Atomically finalize to destination using safe no-clobber semantics.
+      // Eliminates TOCTOU race conditions where destination is created between check and move.
       if (existsSync(normalizedDestination)) {
         throw new Error(`Backup destination file already exists: '${normalizedDestination}'.`)
       }
 
-      renameSync(tempBackupPath, normalizedDestination)
+      try {
+        linkSync(tempBackupPath, normalizedDestination)
+        unlinkSync(tempBackupPath)
+      } catch (linkErr: unknown) {
+        const linkCode = (linkErr as NodeJS.ErrnoException).code
+        if (linkCode === 'EEXIST') {
+          throw new Error(`Backup destination file already exists: '${normalizedDestination}'.`, {
+            cause: linkErr
+          })
+        }
+        // Fallback for filesystems that do not support hardlinks (e.g., FAT32, exFAT, network mounts)
+        try {
+          copyFileSync(tempBackupPath, normalizedDestination, constants.COPYFILE_EXCL)
+          unlinkSync(tempBackupPath)
+        } catch (copyErr: unknown) {
+          const copyCode = (copyErr as NodeJS.ErrnoException).code
+          if (copyCode === 'EEXIST') {
+            throw new Error(`Backup destination file already exists: '${normalizedDestination}'.`, {
+              cause: copyErr
+            })
+          }
+          throw copyErr
+        }
+      }
+
       const finalStat = statSync(normalizedDestination)
 
       return {

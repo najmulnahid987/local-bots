@@ -404,4 +404,37 @@ describe('DatabaseManager Online Backup Operations (Step 2.7B)', () => {
       restoredManager.close()
     }
   })
+
+  // Test K: No-clobber regression test under concurrent file creation
+  it('K: guarantees no-clobber behavior if destination file is created concurrently before finalization', async () => {
+    const concurrentDest = join(tempBaseDir, 'concurrent-target.sqlite.bak')
+
+    // Spy on better-sqlite3 backup to inject a concurrent file at the destination path
+    // immediately after the online backup finishes writing to the temporary file,
+    // simulating a TOCTOU race condition before finalization.
+    const origBackup = Database.prototype.backup
+    vi.spyOn(Database.prototype, 'backup').mockImplementation(async function (
+      this: Database.Database,
+      destPath: string,
+      options?: Database.BackupOptions
+    ) {
+      // Execute the real SQLite online backup to write valid temp database bytes
+      const res = await origBackup.call(this, destPath, options)
+      // Simulate concurrent process creating the destination file right before finalization
+      writeFileSync(concurrentDest, 'CONCURRENT_PROCESS_PAYLOAD_DO_NOT_OVERWRITE')
+      return res
+    })
+
+    await expect(manager.backup(concurrentDest)).rejects.toThrow(
+      /Backup destination file already exists/i
+    )
+
+    // Verify destination was NOT clobbered and preserved external content
+    expect(readFileSync(concurrentDest, 'utf8')).toBe('CONCURRENT_PROCESS_PAYLOAD_DO_NOT_OVERWRITE')
+
+    // Verify temporary files were cleanly unlinked
+    const remainingFiles = fs.readdirSync(tempBaseDir)
+    const tempTmpFiles = remainingFiles.filter((f) => f.startsWith('.') && f.endsWith('.tmp'))
+    expect(tempTmpFiles).toHaveLength(0)
+  })
 })

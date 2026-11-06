@@ -313,10 +313,12 @@ npm run test
 ```
 
 ### 8.13 Acceptance Criteria
-- [ ] Database boots in WAL mode with foreign key enforcement active.
-- [ ] All 14 schema tables and FTS5 virtual table instantiate cleanly.
-- [ ] Orphaned Bot insertion is blocked at the database engine level.
-- [ ] Composite foreign key prevents cross-KB chunk insertion.
+- [x] Database boots in WAL mode with foreign key enforcement active (Steps 2.2, 2.7B).
+- [x] Core schema tables instantiate cleanly with composite isolation (Step 2.4B, Migration 001; FTS5 deferred to Phase 7).
+- [x] Orphaned Bot insertion is blocked at the database engine level (Step 2.5B).
+- [x] Composite foreign key prevents cross-KB chunk insertion (Step 2.4B, 2.5A).
+- [x] Atomic no-clobber online backup and WAL checkpointing verified (Steps 2.7B, 2.8).
+- [x] Packaged Electron application and native SQLite runtime validated on Windows (Step 2.8).
 
 ### 8.14 Phase Gate
 Relational schema passes all foreign key, composite key, cascade, and integrity tests.
