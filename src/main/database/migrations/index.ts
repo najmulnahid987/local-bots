@@ -1,4 +1,5 @@
 import type { Migration } from './types'
+import initialSchemaSql from './001_initial_schema.sql?raw'
 
 export * from './types'
 export * from './runner'
@@ -6,7 +7,12 @@ export * from './runner'
 /**
  * Production migration registry.
  *
- * For Step 2.3, this registry is intentionally empty.
- * Core application domain migrations will be added starting in Step 2.4.
+ * Migration 001 establishes the 11 core application relational tables and indexes.
  */
-export const migrations: readonly Migration[] = []
+export const migrations: readonly Migration[] = [
+  {
+    version: 1,
+    name: 'initial_schema',
+    sql: initialSchemaSql
+  }
+]
