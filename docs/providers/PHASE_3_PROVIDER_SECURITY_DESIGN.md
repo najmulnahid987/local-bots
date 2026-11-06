@@ -900,5 +900,165 @@ Comprehensive test suites were implemented and executed:
 - **No Provider Adapters or SDKs:** Direct SDK integrations (`ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`) are deferred to Step 3.3.
 - **No Orphan Scavenger:** Startup reconciliation between SQLite `credential_ref`s and filesystem files is deferred to Step 3.3.
 
+---
+
+## 17. Step 3.3 Implementation: Provider Registry and Typed Interfaces
+
+### 17.1 Objective and Scope
+Step 3.3 establishes the authoritative provider and model metadata registry along with provider-independent TypeScript interface contracts for the first three AI providers:
+1. **OpenAI**
+2. **Anthropic**
+3. **Google Gemini**
+
+This module resides strictly in the Electron Main-process domain layer (`src/main/providers/`). It is completely independent of SQLite and Electron runtime APIs, requires zero external SDK dependencies, makes zero HTTP network requests, and maintains complete immutability at runtime.
+
+### 17.2 Domain Type Specifications (`src/main/providers/types.ts`)
+
+#### 17.2.1 ProviderDescriptor
+Defines an authoritative AI provider:
+```typescript
+export interface ProviderDescriptor {
+  readonly id: ProviderId
+  readonly displayName: string
+  readonly description: string
+  readonly docUrl: string
+  readonly isSupported: boolean
+  readonly defaultModelId: string
+}
+```
+
+#### 17.2.2 ModelDescriptor
+Defines an authoritative AI model:
+```typescript
+export interface ModelDescriptor {
+  readonly id: string
+  readonly providerId: ProviderId
+  readonly displayName: string
+  readonly description: string
+  readonly availability: ModelAvailability // 'stable' | 'preview' | 'deprecated'
+  readonly contextWindow?: ContextWindowMetadata
+  readonly capabilities: ModelCapabilities
+  readonly docUrl: string
+}
+```
+
+#### 17.2.3 Capability Metadata
+Strictly typed capability structure declared per model:
+```typescript
+export interface ModelCapabilities {
+  readonly streaming: boolean
+  readonly tools: boolean
+  readonly imageInput: boolean
+  readonly structuredOutput: boolean
+}
+```
+**Inviolable Capability Rules:**
+- Capabilities are declared explicitly per individual model.
+- No model assumes capabilities merely because another model from the same provider supports them.
+- Unknown models or providers default strictly to `false` across all capability flags.
+- Unsupported capabilities are never silently dropped or assumed to be supported.
+
+### 17.3 Curated Initial Model Catalog & Official Verification Sources
+
+| Provider | Model ID | Display Name | Availability | Context Window (In / Out) | Streaming | Tools | Image Input | Structured Output | Official Verification Reference |
+|---|---|---|---|---|---|---|---|---|---|
+| **OpenAI** | `gpt-4o` | GPT-4o | `stable` | 128,000 / 16,384 | Yes | Yes | Yes | Yes | [OpenAI Models](https://developers.openai.com/api/docs/models) |
+| **OpenAI** | `gpt-4o-mini` | GPT-4o mini | `stable` | 128,000 / 16,384 | Yes | Yes | Yes | Yes | [OpenAI Models](https://developers.openai.com/api/docs/models) |
+| **OpenAI** | `o1-mini` | o1-mini | `stable` | 128,000 / 65,536 | Yes | **No** | **No** | Yes | [OpenAI Models](https://developers.openai.com/api/docs/models) |
+| **OpenAI** | `o1-preview` | o1-preview | `preview` | 128,000 / 32,768 | **No** | **No** | **No** | **No** | [OpenAI Models](https://developers.openai.com/api/docs/models) |
+| **Anthropic** | `claude-3-5-sonnet-20241022` | Claude 3.5 Sonnet | `stable` | 200,000 / 8,192 | Yes | Yes | Yes | Yes | [Anthropic Models](https://platform.claude.com/docs/en/models/overview) |
+| **Anthropic** | `claude-3-5-haiku-20241022` | Claude 3.5 Haiku | `stable` | 200,000 / 8,192 | Yes | Yes | **No** | Yes | [Anthropic Models](https://platform.claude.com/docs/en/models/overview) |
+| **Anthropic** | `claude-3-opus-20240229` | Claude 3 Opus | `stable` | 200,000 / 4,096 | Yes | Yes | Yes | Yes | [Anthropic Models](https://platform.claude.com/docs/en/models/overview) |
+| **Google** | `gemini-1.5-pro` | Gemini 1.5 Pro | `stable` | 2,097,152 / 8,192 | Yes | Yes | Yes | Yes | [Gemini Models](https://ai.google.dev/gemini-api/docs/models) |
+| **Google** | `gemini-1.5-flash` | Gemini 1.5 Flash | `stable` | 1,048,576 / 8,192 | Yes | Yes | Yes | Yes | [Gemini Models](https://ai.google.dev/gemini-api/docs/models) |
+| **Google** | `gemini-2.0-flash-exp` | Gemini 2.0 Flash Exp | `preview` | 1,048,576 / 8,192 | Yes | Yes | Yes | Yes | [Gemini Models](https://ai.google.dev/gemini-api/docs/models) |
+
+#### Important Catalog Design Decisions
+- **Zero Generic Aliases:** No unpinned `latest` aliases (`gpt-4o-latest`, `gemini-flash-latest`) are used as permanent registry identifiers.
+- **Zero Deprecated/Retired Models:** Outdated models (`gpt-3.5-turbo`, `claude-2.1`, `gemini-1.0-pro`) are omitted.
+- **Preview Clear Separation:** Experimental reasoning and preview models (`o1-preview`, `gemini-2.0-flash-exp`) are explicitly flagged with `availability: 'preview'`.
+
+### 17.4 Provider Registry Operations (`src/main/providers/provider-registry.ts`)
+The `ProviderRegistry` class manages immutable model and provider records:
+- `getProvider(providerId: string): ProviderDescriptor | null`
+- `getProviders(): ProviderDescriptor[]`
+- `getModels(providerId?: string): ModelDescriptor[]`
+- `getModel(providerId: string, modelId: string): ModelDescriptor | null`
+- `getDefaultModel(providerId: string): ModelDescriptor | null`
+- `supportsCapability(providerId: string, modelId: string, capability: keyof ModelCapabilities): boolean`
+- `validateCapabilities(model: ModelDescriptor, requested: RequestedCapabilities): CapabilityValidationResult`
+
+**Immutability Protection:**
+- All registry records are recursively frozen at construction time using `deepFreeze`.
+- All getter methods return defensive clones to prevent external consumers from mutating internal registry state.
+
+### 17.5 Capability Validation Utility (`src/main/providers/capability-validator.ts`)
+Validates requested capabilities (e.g., from Bot configuration or agent execution steps) against authoritative model metadata:
+```typescript
+export function validateModelCapabilities(
+  model: ModelDescriptor,
+  requested: RequestedCapabilities
+): CapabilityValidationResult
+```
+- If all requested capabilities set to `true` are supported, returns `{ valid: true }`.
+- If any requested capability is unsupported, returns:
+  ```typescript
+  {
+    valid: false,
+    reason: "Model 'o1-mini' from provider 'openai' does not support requested capability: tool calling.",
+    unsupportedCapabilities: ['tools']
+  }
+  ```
+
+### 17.6 Provider Adapter Interface Contracts (`src/main/providers/types.ts`)
+Establishes provider-independent contracts for future execution adapters:
+- `ChatMessage`, `MessageContentPart` (multimodal vision + text)
+- `ToolDefinition`, `ToolCall`, `ToolResult` (function calling)
+- `GenerateTextOptions`, `GenerateTextResult`, `TokenUsage`
+- `StreamTextChunk`, `StreamTextOptions`
+- `ConnectionTestResult`
+- `ProviderError`, `ProviderErrorCode` (`AUTHENTICATION_FAILED`, `RATE_LIMITED`, `MODEL_NOT_FOUND`, `CONTEXT_LENGTH_EXCEEDED`, `NETWORK_ERROR`, `INVALID_REQUEST`, `SERVER_ERROR`, `UNSUPPORTED_CAPABILITY`, `OPERATION_ABORTED`, `UNKNOWN_ERROR`)
+- `ProviderAdapter` interface:
+  ```typescript
+  export interface ProviderAdapter {
+    readonly providerId: ProviderId
+    testConnection(apiKey: string, modelId?: string, signal?: AbortSignal): Promise<ConnectionTestResult>
+    generateText(apiKey: string, options: GenerateTextOptions): Promise<GenerateTextResult>
+    streamText(apiKey: string, options: GenerateTextOptions): AsyncIterable<StreamTextChunk>
+  }
+  ```
+
+### 17.7 Centralization of ProviderId
+To prevent type fragmentation:
+- `SUPPORTED_PROVIDER_IDS` and `ProviderId` are defined authoritatively in `src/main/providers/types.ts`.
+- `src/main/database/repositories/types.ts` imports and re-exports them without breaking existing database repositories or migration tests.
+
+### 17.8 Automated Test Verification
+18 automated tests in `src/main/providers/provider-registry.test.ts` verify:
+1. Registration of all three first-wave providers.
+2. Complete metadata on provider descriptors.
+3. Every model belongs to a valid provider.
+4. Safe handling of unknown providers.
+5. Safe handling of unknown models (never assumed capabilities).
+6. Rejection of duplicate model IDs within the same provider.
+7. Capability metadata presence and boolean types.
+8. Provider model list filtering.
+9. Verified default model resolution.
+10. Preview vs stable availability classification.
+11. Rejection of unsupported image input (e.g., Claude 3.5 Haiku, o1-mini).
+12. Rejection of unsupported tool calling (e.g., o1-mini, o1-preview).
+13. Rejection of unsupported structured output (e.g., o1-preview).
+14. Rejection of unsupported streaming (e.g., o1-preview).
+15. Safe fallback for unknown capability requests.
+16. Runtime immutability (frozen objects prevent mutation).
+17. Repository compatibility with centralized `ProviderId`.
+18. Purely synchronous in-memory execution with zero network calls.
+
+### 17.9 Known Catalog Maintenance Limitations
+1. **Static Catalog Updates:** As frontier providers release new model checkpoints (e.g. newer Sonnet/Haiku snapshots or new Gemini releases), `INITIAL_MODELS` must be updated with verified parameters.
+2. **Provider Scope:** xAI and OpenRouter definitions remain deferred until approved post-Phase 3.
+3. **No Dynamic Model Fetching:** In compliance with local-first security boundaries, the application does not dynamically query `/v1/models` endpoints to download unverified model lists over the network.
+
+
 
 

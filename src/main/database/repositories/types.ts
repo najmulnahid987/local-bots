@@ -246,10 +246,10 @@ export const updateBotSchema = z
   )
 
 /**
- * Supported first-wave provider IDs for application-level operations in Phase 3.
+ * Supported first-wave provider IDs centralized from domain provider registry.
  */
-export const SUPPORTED_PROVIDER_IDS = ['openai', 'anthropic', 'google'] as const
-export type ProviderId = (typeof SUPPORTED_PROVIDER_IDS)[number]
+import { SUPPORTED_PROVIDER_IDS, type ProviderId } from '../../providers'
+export { SUPPORTED_PROVIDER_IDS, type ProviderId }
 
 /**
  * All provider IDs permitted by SQLite schema CHECK constraint.
