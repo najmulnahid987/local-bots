@@ -496,8 +496,16 @@ describe('BotRepository', () => {
     const provId = '00000000-0000-4000-8000-000000000011'
     const now = Date.now()
     db.prepare(
-      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(provId, 'openai', 'Secret OpenAI Key', Buffer.from('super-secret-bytes'), now, now)
+      'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      provId,
+      'openai',
+      'Secret OpenAI Key',
+      'cred_00000000-0000-4000-8000-000000000011',
+      'active',
+      now,
+      now
+    )
 
     const bot = botRepo.create({
       knowledgeBaseId: defaultKbId,
@@ -716,7 +724,7 @@ describe('BotRepository', () => {
     botRepo.delete(bot.id, defaultKbId)
 
     const fetchedProv = db
-      .prepare('SELECT id, connection_name FROM provider_connections WHERE id = ?')
+      .prepare('SELECT id, label FROM provider_connections WHERE id = ?')
       .get(prov.id)
     expect(fetchedProv).toBeDefined()
   })

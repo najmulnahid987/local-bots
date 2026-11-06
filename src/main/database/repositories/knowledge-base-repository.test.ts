@@ -326,8 +326,16 @@ describe('KnowledgeBaseRepository', () => {
     const provId = '00000000-0000-4000-8000-000000000099'
     const now = Date.now()
     db.prepare(
-      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(provId, 'anthropic', 'Global Claude', Buffer.from('cipher'), now, now)
+      'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      provId,
+      'anthropic',
+      'Global Claude',
+      'cred_00000000-0000-4000-8000-000000000099',
+      'active',
+      now,
+      now
+    )
 
     const kb = repo.create({ name: 'KB With Key' })
     const botId = '00000000-0000-4000-8000-000000000088'
@@ -337,9 +345,7 @@ describe('KnowledgeBaseRepository', () => {
 
     repo.delete(kb.id)
 
-    const prov = db
-      .prepare('SELECT id, connection_name FROM provider_connections WHERE id = ?')
-      .get(provId)
+    const prov = db.prepare('SELECT id, label FROM provider_connections WHERE id = ?').get(provId)
     expect(prov).toBeDefined()
   })
 

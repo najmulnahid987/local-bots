@@ -67,41 +67,50 @@ export interface ProviderConnectionFixture {
   id: string
   providerName: string
   connectionName: string
+  providerId: string
+  label: string
+  credentialRef: string
 }
 
 /**
- * Inserts a synthetic provider connection record for testing.
- * Uses fake encrypted credential BLOB bytes. Never uses real API keys.
+ * Inserts a synthetic provider connection record for testing Migration 002 schema.
+ * Stores opaque credential reference and metadata only; never stores plaintext or raw keys.
  */
 export function createProviderConnectionFixture(
   db: Database.Database,
   overrides?: {
     id?: string
     providerName?: 'openai' | 'anthropic' | 'google' | 'xai' | 'openrouter'
+    providerId?: 'openai' | 'anthropic' | 'google' | 'xai' | 'openrouter'
     connectionName?: string
-    keyPreview?: string
+    label?: string
+    credentialRef?: string
+    status?: 'active' | 'revoked' | 'error'
   }
 ): ProviderConnectionFixture {
   const id = overrides?.id ?? randomUUID()
-  const providerName = overrides?.providerName ?? 'anthropic'
-  const connectionName = overrides?.connectionName ?? `Test Provider ${provCounter++}`
-  const keyPreview = overrides?.keyPreview ?? 'sk-ant-test-...1234'
-  const fakeCiphertext = Buffer.from(`fake-test-ciphertext-${id}`)
+  const providerId = overrides?.providerId ?? overrides?.providerName ?? 'anthropic'
+  const label = overrides?.label ?? overrides?.connectionName ?? `Test Provider ${provCounter++}`
+  const credentialRef = overrides?.credentialRef ?? `cred_${randomUUID()}`
+  const status = overrides?.status ?? 'active'
   const now = Date.now()
 
   db.prepare(
     `
     INSERT INTO provider_connections (
-      id, provider_name, connection_name, encrypted_credentials, key_preview, created_at, updated_at
+      id, provider_id, label, credential_ref, status, created_at, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?
     )
   `
-  ).run(id, providerName, connectionName, fakeCiphertext, keyPreview, now, now)
+  ).run(id, providerId, label, credentialRef, status, now, now)
 
   return {
     id,
-    providerName,
-    connectionName
+    providerName: providerId,
+    connectionName: label,
+    providerId,
+    label,
+    credentialRef
   }
 }

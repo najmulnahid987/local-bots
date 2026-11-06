@@ -9,7 +9,8 @@ import {
   getMigrationStatus,
   ensureTrackingTable,
   computeChecksum,
-  validateMigrationDefinitions
+  validateMigrationDefinitions,
+  migrations
 } from './migrations'
 import type { Migration } from './migrations/types'
 import { DatabaseManager } from './connection'
@@ -390,5 +391,306 @@ describe('Versioned SQLite Migration Engine', () => {
     expect(row.note).toBe('saved note')
 
     manager.close()
+  })
+})
+
+describe('Migration 002: Provider Credential References Schema (Phase 3 Step 3.2)', () => {
+  let db: Database.Database
+
+  beforeEach(() => {
+    db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+  })
+
+  afterEach(() => {
+    if (db && db.open) {
+      db.close()
+    }
+  })
+
+  it('1. applies migrations 001 and 002 successfully on a fresh database with zero FK violations', () => {
+    const result = runMigrations(db, migrations)
+    expect(result.appliedCount).toBe(2)
+    expect(result.currentVersion).toBe(2)
+    expect(result.appliedVersions).toEqual([1, 2])
+
+    const fkCheck = db.pragma('foreign_key_check') as unknown[]
+    expect(fkCheck).toEqual([])
+  })
+
+  it('2. verifies provider_connections has the expected new schema columns', () => {
+    runMigrations(db, migrations)
+
+    const columns = db.prepare('PRAGMA table_info(provider_connections)').all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      pk: number
+    }>
+    const colNames = columns.map((c) => c.name)
+
+    expect(colNames).toEqual([
+      'id',
+      'provider_id',
+      'label',
+      'credential_ref',
+      'status',
+      'created_at',
+      'updated_at'
+    ])
+  })
+
+  it('3. confirms encrypted_credentials BLOB column no longer exists in SQLite', () => {
+    runMigrations(db, migrations)
+    const columns = (
+      db.prepare('PRAGMA table_info(provider_connections)').all() as Array<{ name: string }>
+    ).map((c) => c.name)
+    expect(columns.includes('encrypted_credentials')).toBe(false)
+  })
+
+  it('4. confirms key_preview column no longer exists in SQLite', () => {
+    runMigrations(db, migrations)
+    const columns = (
+      db.prepare('PRAGMA table_info(provider_connections)').all() as Array<{ name: string }>
+    ).map((c) => c.name)
+    expect(columns.includes('key_preview')).toBe(false)
+  })
+
+  it('5. enforces NOT NULL constraint on credential_ref', () => {
+    runMigrations(db, migrations)
+    const now = Date.now()
+
+    expect(() => {
+      db.prepare(
+        'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run('prov-1', 'openai', 'Test Key', null, 'active', now, now)
+    }).toThrow(/NOT NULL constraint failed/)
+  })
+
+  it('6. rejects duplicate credential references across connections', () => {
+    runMigrations(db, migrations)
+    const now = Date.now()
+    const duplicateRef = 'cred_11111111-1111-4111-8111-111111111111'
+
+    db.prepare(
+      'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('prov-1', 'openai', 'Key 1', duplicateRef, 'active', now, now)
+
+    expect(() => {
+      db.prepare(
+        'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run('prov-2', 'anthropic', 'Key 2', duplicateRef, 'active', now, now)
+    }).toThrow(/UNIQUE constraint failed/)
+  })
+
+  it('7. rejects blank or empty credential references via CHECK constraint', () => {
+    runMigrations(db, migrations)
+    const now = Date.now()
+
+    expect(() => {
+      db.prepare(
+        'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run('prov-1', 'openai', 'Key 1', '   ', 'active', now, now)
+    }).toThrow(/CHECK constraint failed/)
+  })
+
+  it('8. rejects invalid provider IDs via CHECK constraint', () => {
+    runMigrations(db, migrations)
+    const now = Date.now()
+
+    expect(() => {
+      db.prepare(
+        'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(
+        'prov-1',
+        'unknown_vendor',
+        'Key',
+        'cred_22222222-2222-4222-8222-222222222222',
+        'active',
+        now,
+        now
+      )
+    }).toThrow(/CHECK constraint failed/)
+  })
+
+  it('9. rejects invalid connection statuses via CHECK constraint', () => {
+    runMigrations(db, migrations)
+    const now = Date.now()
+
+    expect(() => {
+      db.prepare(
+        'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(
+        'prov-1',
+        'openai',
+        'Key',
+        'cred_22222222-2222-4222-8222-222222222222',
+        'invalid_status',
+        now,
+        now
+      )
+    }).toThrow(/CHECK constraint failed/)
+  })
+
+  it('10. verifies Bot-to-provider foreign-key relationship remains valid after migration', () => {
+    runMigrations(db, migrations)
+    const now = Date.now()
+
+    // Create KB
+    db.prepare(
+      'INSERT INTO knowledge_bases (id, name, storage_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).run('kb-1', 'KB 1', 'documents/kb-1', now, now)
+
+    // Valid provider connection
+    db.prepare(
+      'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      'prov-valid',
+      'anthropic',
+      'Valid Key',
+      'cred_33333333-3333-4333-8333-333333333333',
+      'active',
+      now,
+      now
+    )
+
+    // Bot with valid provider succeeds
+    db.prepare(
+      'INSERT INTO bots (id, knowledge_base_id, provider_connection_id, name, model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('bot-1', 'kb-1', 'prov-valid', 'Claude Bot', 'claude-3-5-sonnet', now, now)
+
+    // Bot with non-existent provider fails
+    expect(() => {
+      db.prepare(
+        'INSERT INTO bots (id, knowledge_base_id, provider_connection_id, name, model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run('bot-2', 'kb-1', 'prov-nonexistent', 'Ghost Bot', 'claude-3-5-sonnet', now, now)
+    }).toThrow(/FOREIGN KEY constraint failed/)
+  })
+
+  it('11. verifies a referenced provider cannot be deleted while a Bot uses it (ON DELETE RESTRICT)', () => {
+    runMigrations(db, migrations)
+    const now = Date.now()
+
+    db.prepare(
+      'INSERT INTO knowledge_bases (id, name, storage_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).run('kb-1', 'KB 1', 'documents/kb-1', now, now)
+
+    db.prepare(
+      'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      'prov-restricted',
+      'openai',
+      'Restricted Key',
+      'cred_44444444-4444-4444-8444-444444444444',
+      'active',
+      now,
+      now
+    )
+
+    db.prepare(
+      'INSERT INTO bots (id, knowledge_base_id, provider_connection_id, name, model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('bot-1', 'kb-1', 'prov-restricted', 'Attached Bot', 'gpt-4o', now, now)
+
+    expect(() => {
+      db.prepare('DELETE FROM provider_connections WHERE id = ?').run('prov-restricted')
+    }).toThrow(/FOREIGN KEY constraint failed/)
+
+    // Deleting bot unlocks provider deletion
+    db.prepare('DELETE FROM bots WHERE id = ?').run('bot-1')
+    const del = db.prepare('DELETE FROM provider_connections WHERE id = ?').run('prov-restricted')
+    expect(del.changes).toBe(1)
+  })
+
+  it('12. idempotently recognizes Migration 002 on subsequent startup', () => {
+    const firstRun = runMigrations(db, migrations)
+    expect(firstRun.appliedCount).toBe(2)
+
+    const secondRun = runMigrations(db, migrations)
+    expect(secondRun.appliedCount).toBe(0)
+    expect(secondRun.currentVersion).toBe(2)
+  })
+
+  it('13. confirms migration checksums are recorded accurately', () => {
+    runMigrations(db, migrations)
+
+    const history = db
+      .prepare('SELECT version, name, checksum FROM schema_migrations ORDER BY version ASC')
+      .all() as Array<{ version: number; name: string; checksum: string }>
+
+    expect(history.length).toBe(2)
+    expect(history[0].version).toBe(1)
+    expect(history[0].checksum).toBe(computeChecksum(migrations[0].sql))
+
+    expect(history[1].version).toBe(2)
+    expect(history[1].name).toBe('provider_credential_refs')
+    expect(history[1].checksum).toBe(computeChecksum(migrations[1].sql))
+  })
+
+  it('14. safely aborts and rolls back Migration 002 if legacy provider rows exist', () => {
+    // Apply Migration 001 only
+    runMigrations(db, [migrations[0]])
+    const now = Date.now()
+
+    // Insert legacy row with BLOB credentials
+    db.prepare(
+      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, key_preview, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      'legacy-prov-1',
+      'openai',
+      'Legacy Key',
+      Buffer.from('legacy-secret-blob'),
+      'sk-proj-...1234',
+      now,
+      now
+    )
+
+    // Attempting to apply Migration 002 must abort due to the safety guard
+    expect(() => runMigrations(db, migrations)).toThrow(
+      /CHECK constraint failed: legacy_rows_count = 0/
+    )
+  })
+
+  it('15. verifies failed migration leaves original schema and legacy records 100% intact', () => {
+    // Apply Migration 001 only
+    runMigrations(db, [migrations[0]])
+    const now = Date.now()
+    const legacyCiphertext = Buffer.from('legacy-secret-blob-payload')
+
+    db.prepare(
+      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, key_preview, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('legacy-prov-1', 'anthropic', 'Legacy Claude', legacyCiphertext, 'ant-...9876', now, now)
+
+    // Attempt Migration 002 (should fail)
+    try {
+      runMigrations(db, migrations)
+    } catch {
+      // Expected rollback
+    }
+
+    // Verify schema_migrations is still at version 1
+    const currentVersion = db.prepare('SELECT max(version) as v FROM schema_migrations').get() as {
+      v: number
+    }
+    expect(currentVersion.v).toBe(1)
+
+    // Verify legacy table still has encrypted_credentials column and data
+    const row = db
+      .prepare(
+        'SELECT id, provider_name, connection_name, encrypted_credentials FROM provider_connections WHERE id = ?'
+      )
+      .get('legacy-prov-1') as {
+      id: string
+      provider_name: string
+      connection_name: string
+      encrypted_credentials: Buffer
+    }
+
+    expect(row).toBeDefined()
+    expect(row.provider_name).toBe('anthropic')
+    expect(row.connection_name).toBe('Legacy Claude')
+    expect(row.encrypted_credentials.equals(legacyCiphertext)).toBe(true)
+
+    // Confirm foreign keys remain clean
+    expect(db.pragma('foreign_key_check')).toEqual([])
   })
 })

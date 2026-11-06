@@ -473,10 +473,10 @@ describe('SQLite Journal Modes, WAL, Backup and Restoration Evaluation (Step 2.7
 
       const restoredDb = manager.getDatabase()
 
-      // Re-run migration runner to confirm idempotency and version 1
+      // Re-run migration runner to confirm idempotency and version
       const migResult = runMigrations(restoredDb, migrations)
       expect(migResult.appliedCount).toBe(0)
-      expect(migResult.currentVersion).toBe(1)
+      expect(migResult.currentVersion).toBe(migrations.length)
 
       const kbRepo = new KnowledgeBaseRepository(restoredDb)
       const botRepo = new BotRepository(restoredDb)

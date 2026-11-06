@@ -21,13 +21,13 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     }
   })
 
-  // Test A — Migration 001 execution on clean database
-  it('Test A: applies migration 001 on a clean database and records metadata in schema_migrations', () => {
+  // Test A — Migration execution on clean database
+  it('Test A: applies migration on a clean database and records metadata in schema_migrations', () => {
     const result = runMigrations(db, migrations)
 
-    expect(result.appliedCount).toBe(1)
-    expect(result.appliedVersions).toEqual([1])
-    expect(result.currentVersion).toBe(1)
+    expect(result.appliedCount).toBe(migrations.length)
+    expect(result.appliedVersions).toEqual(migrations.map((m) => m.version))
+    expect(result.currentVersion).toBe(migrations.length)
 
     const migrationRow = db
       .prepare(
@@ -100,6 +100,7 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'idx_knowledge_sources_status',
       'idx_messages_conversation',
       'idx_provider_connections_provider',
+      'idx_provider_connections_ref',
       'idx_tool_events_run'
     ]
 
@@ -117,13 +118,13 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
   // Test D — Idempotency on second run
   it('Test D: ensures migration execution is strictly idempotent on subsequent runs', () => {
     const firstRun = runMigrations(db, migrations)
-    expect(firstRun.appliedCount).toBe(1)
-    expect(firstRun.currentVersion).toBe(1)
+    expect(firstRun.appliedCount).toBe(migrations.length)
+    expect(firstRun.currentVersion).toBe(migrations.length)
 
     const secondRun = runMigrations(db, migrations)
     expect(secondRun.appliedCount).toBe(0)
     expect(secondRun.appliedVersions).toEqual([])
-    expect(secondRun.currentVersion).toBe(1)
+    expect(secondRun.currentVersion).toBe(migrations.length)
   })
 
   // Test E — Full valid entity insertion and relationships
@@ -148,10 +149,17 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     ).run(kbId, 'Engineering Docs', 'Core engineering KB', `documents/${kbId}`, now, now)
 
     // 2. provider_connections
-    const secretBuffer = Buffer.from('encrypted-safe-storage-ciphertext-payload')
     db.prepare(
-      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, key_preview, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(providerId, 'anthropic', 'Work Claude API', secretBuffer, 'sk-ant-...4a91', now, now)
+      'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      providerId,
+      'anthropic',
+      'Work Claude API',
+      'cred_00000000-0000-4000-8000-000000000002',
+      'active',
+      now,
+      now
+    )
 
     // 3. app_settings
     db.prepare('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)').run(
@@ -454,17 +462,25 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     runMigrations(db, migrations)
     const now = Date.now()
 
-    // 1. Insert binary ciphertext
-    const secretBuffer = Buffer.from([0x01, 0x02, 0xff, 0xfe, 0xaa, 0x55, 0x10])
+    // 1. Insert provider connection with opaque credential reference
     db.prepare(
-      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run('prov-1', 'openai', 'My OpenAI', secretBuffer, now, now)
+      'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      'prov-1',
+      'openai',
+      'My OpenAI',
+      'cred_00000000-0000-4000-8000-000000000001',
+      'active',
+      now,
+      now
+    )
 
     const storedProv = db
-      .prepare('SELECT encrypted_credentials FROM provider_connections WHERE id = ?')
-      .get('prov-1') as { encrypted_credentials: Buffer }
-    expect(Buffer.isBuffer(storedProv.encrypted_credentials)).toBe(true)
-    expect(storedProv.encrypted_credentials.equals(secretBuffer)).toBe(true)
+      .prepare(
+        'SELECT id, provider_id, label, credential_ref FROM provider_connections WHERE id = ?'
+      )
+      .get('prov-1') as { id: string; provider_id: string; label: string; credential_ref: string }
+    expect(storedProv.credential_ref).toBe('cred_00000000-0000-4000-8000-000000000001')
 
     // 2. Link a bot to this provider connection
     db.prepare(
@@ -605,8 +621,16 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
 
     // 1. Shared provider connection
     db.prepare(
-      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run('shared-prov', 'openai', 'Company Key', Buffer.from('cipher'), now, now)
+      'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      'shared-prov',
+      'openai',
+      'Company Key',
+      'cred_00000000-0000-4000-8000-000000000099',
+      'active',
+      now,
+      now
+    )
 
     // 2. Knowledge Base A & B
     db.prepare(
@@ -851,8 +875,16 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'INSERT INTO knowledge_bases (id, name, storage_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
     ).run('kb-1', 'KB 1', 'documents/kb-1', now, now)
     db.prepare(
-      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run('prov-1', 'google', 'Gemini Pro', Buffer.from('token'), now, now)
+      'INSERT INTO provider_connections (id, provider_id, label, credential_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      'prov-1',
+      'google',
+      'Gemini Pro',
+      'cred_00000000-0000-4000-8000-000000000088',
+      'active',
+      now,
+      now
+    )
     db.prepare(
       'INSERT INTO bots (id, knowledge_base_id, provider_connection_id, name, model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run('bot-1', 'kb-1', 'prov-1', 'Research Bot', 'gemini-1.5-pro', now, now)
@@ -898,7 +930,7 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       // Verify migration idempotency on reopen
       const rerunResult = runMigrations(db2, migrations)
       expect(rerunResult.appliedCount).toBe(0)
-      expect(rerunResult.currentVersion).toBe(1)
+      expect(rerunResult.currentVersion).toBe(migrations.length)
 
       // Verify data persisted
       const setting = db2

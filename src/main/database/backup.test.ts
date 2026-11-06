@@ -377,7 +377,7 @@ describe('DatabaseManager Online Backup Operations (Step 2.7B)', () => {
       // Confirm migrations idempotency
       const migResult = runMigrations(restoredDb, migrations)
       expect(migResult.appliedCount).toBe(0)
-      expect(migResult.currentVersion).toBe(1)
+      expect(migResult.currentVersion).toBe(migrations.length)
 
       // Confirm integrity and foreign keys
       const integrity = restoredDb.pragma('integrity_check') as Array<{ integrity_check: string }>

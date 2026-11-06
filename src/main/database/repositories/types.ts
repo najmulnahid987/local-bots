@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { type CredentialRef, isValidCredentialRef } from '../../security/credential-vault'
+export type { CredentialRef }
 
 /**
  * Domain entity representing an isolated Knowledge Base.
@@ -242,3 +244,97 @@ export const updateBotSchema = z
       data.toolPermissions !== undefined,
     { message: 'At least one editable Bot field must be provided for update.' }
   )
+
+/**
+ * Supported first-wave provider IDs for application-level operations in Phase 3.
+ */
+export const SUPPORTED_PROVIDER_IDS = ['openai', 'anthropic', 'google'] as const
+export type ProviderId = (typeof SUPPORTED_PROVIDER_IDS)[number]
+
+/**
+ * All provider IDs permitted by SQLite schema CHECK constraint.
+ */
+export const ALL_DATABASE_PROVIDER_IDS = [
+  'openai',
+  'anthropic',
+  'google',
+  'xai',
+  'openrouter'
+] as const
+export type DatabaseProviderId = (typeof ALL_DATABASE_PROVIDER_IDS)[number]
+
+/**
+ * Valid connection statuses for provider_connections.
+ */
+export const PROVIDER_CONNECTION_STATUSES = ['active', 'revoked', 'error'] as const
+export type ProviderConnectionStatus = (typeof PROVIDER_CONNECTION_STATUSES)[number]
+
+/**
+ * Domain entity representing an AI model provider connection.
+ * SQLite stores metadata and opaque credential references only; never raw API keys or ciphertexts.
+ */
+export interface ProviderConnection {
+  readonly id: string
+  readonly providerId: DatabaseProviderId
+  readonly label: string
+  readonly credentialRef: CredentialRef
+  readonly status: ProviderConnectionStatus
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+/**
+ * Input for creating a new provider connection record.
+ */
+export interface CreateProviderConnectionInput {
+  readonly providerId: ProviderId
+  readonly label: string
+  readonly credentialRef: CredentialRef
+  readonly status?: ProviderConnectionStatus
+}
+
+/**
+ * Zod schemas for ProviderConnection operations.
+ */
+export const createProviderConnectionSchema = z
+  .object({
+    providerId: z.enum(SUPPORTED_PROVIDER_IDS, {
+      message: `Invalid provider ID. Supported first-wave providers: ${SUPPORTED_PROVIDER_IDS.join(', ')}`
+    }),
+    label: z
+      .string()
+      .trim()
+      .min(1, { message: 'Provider connection label cannot be blank.' })
+      .max(255, { message: 'Provider connection label cannot exceed 255 characters.' }),
+    credentialRef: z.string().refine(isValidCredentialRef, {
+      message: 'Invalid credential reference: must match opaque format cred_<uuidv4>.'
+    }),
+    status: z.enum(PROVIDER_CONNECTION_STATUSES).optional().default('active')
+  })
+  .strict()
+
+export const updateProviderConnectionLabelSchema = z
+  .object({
+    label: z
+      .string()
+      .trim()
+      .min(1, { message: 'Provider connection label cannot be blank.' })
+      .max(255, { message: 'Provider connection label cannot exceed 255 characters.' })
+  })
+  .strict()
+
+export const updateProviderCredentialRefSchema = z
+  .object({
+    credentialRef: z.string().refine(isValidCredentialRef, {
+      message: 'Invalid credential reference: must match opaque format cred_<uuidv4>.'
+    })
+  })
+  .strict()
+
+export const updateProviderConnectionStatusSchema = z
+  .object({
+    status: z.enum(PROVIDER_CONNECTION_STATUSES, {
+      message: `Invalid provider status. Allowed values: ${PROVIDER_CONNECTION_STATUSES.join(', ')}`
+    })
+  })
+  .strict()

@@ -770,4 +770,135 @@ All vault exceptions inherit from `CredentialVaultError` with specific machine-r
 2. **Same-User Session Isolation:** On Windows DPAPI and unlocked Linux/macOS sessions, processes executing under the identical OS user account can access native decryption APIs. Protection relies on host OS account boundaries.
 3. **Session-Only Memory Mode:** Deferred to provider manager integration in later steps.
 
+---
+
+## 16. Step 3.2 Implementation: Provider Database Migration and Repository
+
+### 16.1 Objective and Scope
+Step 3.2 connects the OS-backed `CredentialVault` architecture to SQLite by establishing a clean metadata schema and a dedicated, Main-process-only `ProviderConnectionRepository`.
+
+The core architectural invariant enforced in this step is:
+- **CredentialVault** exclusively stores encrypted credential files on disk (`<userData>/credentials/<credential_ref>.enc`).
+- **SQLite** stores connection metadata, user-defined labels, status, timestamps, and an opaque `credential_ref TEXT NOT NULL UNIQUE`.
+- **Zero Plaintext or Ciphertext Keys in SQLite:** No API keys, partial fragments, key previews, or encrypted ciphertext BLOBs reside in SQLite or its WAL files.
+- **Main-Process Confinement:** Neither `CredentialVault` nor `ProviderConnectionRepository` is exposed across the Preload IPC bridge or made available to the Renderer.
+
+### 16.2 SQLite Migration 002 (`002_provider_credential_refs.sql`)
+Migration 002 transforms `provider_connections` from its Phase 2 structure to the decoupled credential-reference schema.
+
+```sql
+-- Migration 002: Replace legacy encrypted_credentials BLOB with credential_ref
+
+-- Step 1: SQL-Level Pre-flight Safety Guard
+-- If any legacy provider rows exist, abort immediately to prevent unmigrated credential loss.
+CREATE TEMP TABLE __migration_002_guard (
+    legacy_rows_count INTEGER NOT NULL CHECK (legacy_rows_count = 0)
+);
+
+INSERT INTO __migration_002_guard (legacy_rows_count)
+SELECT count(*) FROM provider_connections;
+
+DROP TABLE __migration_002_guard;
+
+-- Step 2: Create new table with updated schema
+CREATE TABLE provider_connections_new (
+    id TEXT PRIMARY KEY NOT NULL,
+    provider_id TEXT NOT NULL CHECK (provider_id IN ('openai', 'anthropic', 'google', 'xai', 'openrouter')),
+    label TEXT NOT NULL CHECK (length(trim(label)) > 0 AND length(label) <= 255),
+    credential_ref TEXT NOT NULL UNIQUE CHECK (length(credential_ref) > 0),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'error')),
+    created_at INTEGER NOT NULL CHECK (created_at > 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
+);
+
+-- Step 3: Replace legacy table
+DROP TABLE provider_connections;
+ALTER TABLE provider_connections_new RENAME TO provider_connections;
+
+-- Step 4: Recreate indexes
+CREATE INDEX idx_provider_connections_provider ON provider_connections(provider_id);
+CREATE INDEX idx_provider_connections_status ON provider_connections(status);
+CREATE INDEX idx_provider_connections_cred_ref ON provider_connections(credential_ref);
+```
+
+#### Key Schema Features
+1. **Field Renames & Normalization:**
+   - `provider_name` -> `provider_id`
+   - `connection_name` -> `label`
+   - `encrypted_credentials` & `key_preview` -> Completely purged.
+   - `credential_ref` -> Added as `TEXT NOT NULL UNIQUE`.
+   - `status` -> Added with CHECK constraint `('active', 'revoked', 'error')`, defaulting to `'active'`.
+2. **Foreign Key Integrity:**
+   - The foreign key from `bots`:
+     ```sql
+     FOREIGN KEY (provider_connection_id) REFERENCES provider_connections(id) ON DELETE RESTRICT ON UPDATE CASCADE
+     ```
+     remains fully enforced by SQLite. Attempting to delete a `provider_connections` row that is actively referenced by any Bot raises an immediate `FOREIGN KEY constraint failed` error.
+3. **Transaction Safety and Abort Guard:**
+   - Standard SQLite throws an error on `CHECK (legacy_rows_count = 0)` in `__migration_002_guard` if any legacy rows exist prior to migration.
+   - Because the migration runner executes all migration steps inside an atomic `db.transaction()`, any violation automatically rolls back the transaction, leaving the database unmodified and preserving existing data.
+
+### 16.3 ProviderConnectionRepository (`src/main/database/repositories/provider-connection-repository.ts`)
+The `ProviderConnectionRepository` manages provider connection metadata in SQLite using prepared SQL statements, transactional execution, and strict Zod validation.
+
+#### Application vs Database Provider Scope
+While the SQLite CHECK constraint accepts `('openai', 'anthropic', 'google', 'xai', 'openrouter')` to accommodate future providers without requiring schema revisions, the application-level validation strictly enforces first-wave providers:
+- `openai`
+- `anthropic`
+- `google`
+
+Requests attempting to create connections with deferred providers (e.g., `openrouter`, `xai`) or unrecognized strings are rejected at the repository validation boundary with a `ValidationError`.
+
+#### Repository Public Interface
+- `create(input: CreateProviderConnectionInput): ProviderConnection`
+  - Validates input with Zod schema (`providerId`, `label`, `credentialRef`, optional `status`).
+  - Verifies format of `credentialRef` via `isValidCredentialRef`.
+  - Inserts row with `created_at` and `updated_at` timestamps.
+- `getById(id: string): ProviderConnection | null`
+  - Retrieves connection by UUID or returns `null` if not found.
+  - Throws `ValidationError` if ID is not a valid UUID.
+- `getByCredentialRef(credentialRef: CredentialRef): ProviderConnection | null`
+  - Retrieves connection by its opaque reference.
+- `list(): ProviderConnection[]`
+  - Lists all connections ordered by `created_at DESC`.
+- `updateLabel(id: string, label: string): ProviderConnection`
+  - Updates user-facing label and sets `updated_at = Date.now()`.
+- `updateCredentialRef(id: string, credentialRef: CredentialRef): ProviderConnection`
+  - Updates `credential_ref` upon key replacement and validates uniqueness.
+- `updateStatus(id: string, status: ProviderConnectionStatus): ProviderConnection`
+  - Updates operational status (`active`, `revoked`, `error`).
+- `delete(id: string): boolean`
+  - Deletes metadata row if no active Bot references it.
+  - Catches foreign key restrict violations and wraps them in a descriptive `RepositoryError`.
+
+### 16.4 Test Matrix and Verification Results
+Comprehensive test suites were implemented and executed:
+1. **Migration 002 Verification (`migrations.test.ts` — 25 tests):**
+   - Applies migration 001 and 002 in sequence on clean and existing databases.
+   - Verifies all new columns (`id`, `provider_id`, `label`, `credential_ref`, `status`, `created_at`, `updated_at`).
+   - Verifies legacy columns (`encrypted_credentials`, `key_preview`) are completely removed.
+   - Verifies table indexes (`idx_provider_connections_provider`, `status`, `cred_ref`).
+   - Verifies CHECK constraints on `provider_id` and `status`.
+   - Verifies UNIQUE constraint on `credential_ref`.
+   - Verifies `ON DELETE RESTRICT` constraint with active Bots.
+   - Verifies migration idempotency.
+   - Verifies SQL safety guard halts and rolls back cleanly if legacy rows exist.
+2. **Repository Verification (`provider-connection-repository.test.ts` — 15 tests):**
+   - CRUD lifecycle for `openai`, `anthropic`, and `google`.
+   - Strict Zod rejection for invalid labels, unsupported provider IDs, and malformed credential refs.
+   - Uniqueness enforcement for `credential_ref`.
+   - `ON DELETE RESTRICT` foreign key protection with active Bots.
+   - Sanitization check verifying zero plaintext keys or secret bytes exist in SQLite rows.
+3. **Full Regression Suite:**
+   - 232 tests passing across 16 test files.
+   - TypeScript validation (`npm run typecheck`): 0 errors (Node & Web).
+   - ESLint validation (`npm run lint`): 0 errors / 0 warnings.
+   - Production bundle build (`npm run build`): Clean build.
+
+### 16.5 Boundaries and Deferred Scope
+- **No IPC Bridge Exposure:** Provider connection methods remain internal to Electron Main. Preload/Renderer exposure is deferred to Step 3.4.
+- **No Provider Adapters or SDKs:** Direct SDK integrations (`ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`) are deferred to Step 3.3.
+- **No Orphan Scavenger:** Startup reconciliation between SQLite `credential_ref`s and filesystem files is deferred to Step 3.3.
+
+
 

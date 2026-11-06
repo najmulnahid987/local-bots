@@ -65,7 +65,7 @@ describe('Database Testing Helpers and Fixtures (database/testing)', () => {
     }
   })
 
-  it('3. creates a synthetic provider connection fixture with fake BLOB credentials', () => {
+  it('3. creates a synthetic provider connection fixture with opaque credential reference', () => {
     const context = createMigratedTestDatabase()
 
     try {
@@ -77,12 +77,16 @@ describe('Database Testing Helpers and Fixtures (database/testing)', () => {
       expect(prov.providerName).toBe('openai')
       expect(prov.connectionName).toBe('Synthetic OpenAI Key')
 
-      // Verify stored in DB
+      // Verify stored in DB with Migration 002 schema
       const row = context.db
-        .prepare('SELECT id, encrypted_credentials FROM provider_connections WHERE id = ?')
-        .get(prov.id) as { id: string; encrypted_credentials: Buffer }
+        .prepare(
+          'SELECT id, provider_id, label, credential_ref FROM provider_connections WHERE id = ?'
+        )
+        .get(prov.id) as { id: string; provider_id: string; label: string; credential_ref: string }
       expect(row).toBeDefined()
-      expect(Buffer.isBuffer(row.encrypted_credentials)).toBe(true)
+      expect(row.provider_id).toBe('openai')
+      expect(row.label).toBe('Synthetic OpenAI Key')
+      expect(row.credential_ref).toMatch(/^cred_[0-9a-f-]{36}$/i)
     } finally {
       context.cleanup()
     }
