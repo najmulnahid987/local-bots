@@ -5,6 +5,7 @@ import { migrations } from '../migrations'
 import { KnowledgeBaseRepository } from './knowledge-base-repository'
 import { BotRepository } from './bot-repository'
 import { ValidationError, RepositoryError } from './types'
+import { createProviderConnectionFixture } from '../testing'
 
 describe('BotRepository', () => {
   let db: Database.Database
@@ -462,20 +463,20 @@ describe('BotRepository', () => {
   })
 
   it('31. assigns an existing provider connection to a Bot', () => {
-    const provId = '00000000-0000-4000-8000-000000000010'
-    const now = Date.now()
-    db.prepare(
-      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(provId, 'anthropic', 'Work Claude', Buffer.from('cipher-blob'), now, now)
+    const prov = createProviderConnectionFixture(db, {
+      id: '00000000-0000-4000-8000-000000000010',
+      providerName: 'anthropic',
+      connectionName: 'Work Claude'
+    })
 
     const bot = botRepo.create({
       knowledgeBaseId: defaultKbId,
       name: 'Connected Bot',
       modelId: 'claude-3-5-sonnet-20241022',
-      providerConnectionId: provId
+      providerConnectionId: prov.id
     })
 
-    expect(bot.providerConnectionId).toBe(provId)
+    expect(bot.providerConnectionId).toBe(prov.id)
   })
 
   it('32. rejects assigning a nonexistent provider connection', () => {
@@ -510,27 +511,27 @@ describe('BotRepository', () => {
   })
 
   it('34. verifies provider connection deletion remains restricted (ON DELETE RESTRICT) when a Bot references it', () => {
-    const provId = '00000000-0000-4000-8000-000000000012'
-    const now = Date.now()
-    db.prepare(
-      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(provId, 'openai', 'Restricted Key', Buffer.from('cipher'), now, now)
+    const prov = createProviderConnectionFixture(db, {
+      id: '00000000-0000-4000-8000-000000000012',
+      providerName: 'openai',
+      connectionName: 'Restricted Key'
+    })
 
     const bot = botRepo.create({
       knowledgeBaseId: defaultKbId,
       name: 'Holding Bot',
       modelId: 'gpt-4o',
-      providerConnectionId: provId
+      providerConnectionId: prov.id
     })
 
     // Attempting to delete the provider connection while referenced by a bot must throw FOREIGN KEY constraint failed
     expect(() => {
-      db.prepare('DELETE FROM provider_connections WHERE id = ?').run(provId)
+      db.prepare('DELETE FROM provider_connections WHERE id = ?').run(prov.id)
     }).toThrow(/FOREIGN KEY constraint failed/i)
 
     // After deleting the bot, provider connection can be deleted
     botRepo.delete(bot.id, defaultKbId)
-    const delResult = db.prepare('DELETE FROM provider_connections WHERE id = ?').run(provId)
+    const delResult = db.prepare('DELETE FROM provider_connections WHERE id = ?').run(prov.id)
     expect(delResult.changes).toBe(1)
   })
 
@@ -699,25 +700,25 @@ describe('BotRepository', () => {
   })
 
   it('42. verifies global provider connections remain intact after Bot deletion', () => {
-    const provId = '00000000-0000-4000-8000-000000000050'
-    const now = Date.now()
-    db.prepare(
-      'INSERT INTO provider_connections (id, provider_name, connection_name, encrypted_credentials, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(provId, 'anthropic', 'Shared Anthropic', Buffer.from('data'), now, now)
+    const prov = createProviderConnectionFixture(db, {
+      id: '00000000-0000-4000-8000-000000000050',
+      providerName: 'anthropic',
+      connectionName: 'Shared Anthropic'
+    })
 
     const bot = botRepo.create({
       knowledgeBaseId: defaultKbId,
       name: 'Bot using Shared Key',
       modelId: 'claude-3-5-sonnet-20241022',
-      providerConnectionId: provId
+      providerConnectionId: prov.id
     })
 
     botRepo.delete(bot.id, defaultKbId)
 
-    const prov = db
+    const fetchedProv = db
       .prepare('SELECT id, connection_name FROM provider_connections WHERE id = ?')
-      .get(provId)
-    expect(prov).toBeDefined()
+      .get(prov.id)
+    expect(fetchedProv).toBeDefined()
   })
 
   // === Final Integrity Tests ===
