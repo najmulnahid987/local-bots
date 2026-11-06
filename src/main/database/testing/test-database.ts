@@ -30,6 +30,19 @@ export function createMigratedTestDatabase(): MigratedTestDatabaseContext {
   const manager = new DatabaseManager()
   const initResult = manager.initialize(canonicalTempDir)
 
+  // Verify that test database honors production WAL pragma baselines
+  if (
+    initResult.journalMode !== 'wal' ||
+    initResult.synchronous !== 2 ||
+    !initResult.foreignKeys ||
+    initResult.busyTimeout !== 5000 ||
+    initResult.walAutoCheckpoint !== 1000
+  ) {
+    throw new Error(
+      `Test database initialization failed expected pragmas: ${JSON.stringify(initResult)}`
+    )
+  }
+
   const db = manager.getDatabase()
   runMigrations(db, migrations)
 

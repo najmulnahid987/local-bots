@@ -311,3 +311,77 @@ For the subsequent implementation step (Step 2.7B), execute the following techni
    - Add unit tests for `dbManager.backup()` and `dbManager.checkpoint()`.
 5. **Quality Verification:**
    - Ensure all unit tests, typechecks, linter checks, and Electron smoke tests pass.
+
+---
+
+## 15. Step 2.7B Implementation Summary & Final Configuration
+
+In Phase 2 — Step 2.7B, the production SQLite configuration was transitioned to Write-Ahead Logging (WAL) with durability hardening and safe backup/checkpoint infrastructure.
+
+### 15.1 Approved Production Pragma Settings
+The `DatabaseManager` in [`src/main/database/connection.ts`](../../src/main/database/connection.ts) initializes with the following verified pragma configuration:
+
+| Pragma Directive | Setting | Verified Value | Architectural Purpose |
+|---|---|---|---|
+| `PRAGMA foreign_keys = ON;` | `ON` | `1` | Enforces referential integrity and composite cross-KB isolation invariants on all connections. |
+| `PRAGMA journal_mode = WAL;` | `WAL` | `wal` | Enables MVCC concurrency so readers never block writers and writers never block readers. |
+| `PRAGMA synchronous = FULL;` | `FULL` | `2` | **Durability Hardening:** Flushes WAL frames to physical disk storage on commit, providing strict durability against OS crashes and power losses. |
+| `PRAGMA busy_timeout = 5000;` | `5000` | `5000` | Gives concurrent operations up to 5 seconds to acquire locks before failing with `SQLITE_BUSY`. |
+| `PRAGMA wal_autocheckpoint = 1000;` | `1000` | `1000` | Automatically flushes WAL frames to the main database file when the WAL reaches 1,000 pages (approx. 4 MB). |
+
+> [!IMPORTANT]
+> **Durability Decision (Synchronous = FULL):**
+> Step 2.7A originally evaluated `synchronous = NORMAL` for maximum write speed. For production data safety, the application owner mandated `synchronous = FULL` (numeric `2`) for initial release. This ensures zero transaction loss in the event of an abrupt power cut or OS crash, prioritizing user data integrity over raw benchmark throughput.
+
+### 15.2 Checkpoint Architecture (`DatabaseManager.checkpoint()`)
+Internal Main-process method for routine and maintenance WAL checkpoints:
+- **API Signature:** `checkpoint(mode: WalCheckpointMode = 'PASSIVE'): WalCheckpointResult`
+- **Supported Modes:** Allowlisted `'PASSIVE'`, `'FULL'`, `'RESTART'`, `'TRUNCATE'`. Unrecognized runtime strings are strictly rejected.
+- **Return Type:**
+  ```typescript
+  export interface WalCheckpointResult {
+    mode: WalCheckpointMode
+    busy: number
+    logFrames: number
+    checkpointedFrames: number
+    completed: boolean
+  }
+  ```
+- **Completion Semantics:** `completed` is `true` only when `busy === 0` and either all frames were checkpointed (`checkpointedFrames >= logFrames`) or the WAL was truncated to zero (`logFrames === 0`). If active readers block recent frames during `PASSIVE` mode, `completed` correctly evaluates to `false`.
+
+### 15.3 Online Backup Architecture (`DatabaseManager.backup()`)
+Internal Main-process method providing atomic, consistent online backups:
+- **API Signature:** `async backup(destinationPath: string): Promise<DatabaseBackupResult>`
+- **Native Engine:** Invokes `better-sqlite3`'s native Online Backup API (`await this.db.backup(tempPath)`).
+- **Concurrency Guard:** Rejects attempts if the source connection is inside an active transaction (`db.inTransaction`), or if another backup is already in progress (`isBackupInProgress`).
+- **Destination Path Validation:**
+  - Must be a non-empty, absolute filesystem path (`path.isAbsolute(dest)`).
+  - Parent directory must exist, must be a directory, and must not be a symbolic link.
+  - Destination file must not already exist (no accidental overwrite).
+  - Destination path must not be an existing directory.
+  - Destination must not be a symbolic link.
+  - Destination cannot be the active database or any of its auxiliary sidecar files (`-wal`, `-shm`, `-journal`).
+- **Staging and Validation Protocol:**
+  1. Writes to a unique temporary file (`.${basename}.${uuid}.tmp`) in the destination directory.
+  2. Opens an isolated read-only inspection connection (`readonly: true`) with foreign keys enabled.
+  3. Verifies `PRAGMA integrity_check = ok`.
+  4. Verifies `PRAGMA foreign_key_check = []` (0 violations).
+  5. Verifies `schema_migrations` table exists with applied migrations.
+  6. Verifies all 11 core application relational tables exist.
+  7. Confirms basic queryability against `knowledge_bases`.
+  8. Closes inspection connection cleanly in a `finally` block.
+  9. Atomically renames temporary file to destination path (`fs.renameSync`).
+- **Failure Cleanliness:** Any failure during backup creation or validation safely unlinks only the specific temporary file and rethrows without corrupting the destination or interrupting the active database.
+
+### 15.4 Restoration Verification
+Cold restoration was tested by initializing a brand-new `DatabaseManager` instance against a destination database restored from backup:
+- Reopened cleanly in `journal_mode = WAL`.
+- Pragma settings verified: `foreign_keys = 1`, `synchronous = 2`, `busy_timeout = 5000`, `wal_autocheckpoint = 1000`.
+- Migration runner verified existing version 1 schema idempotently (`appliedCount = 0`).
+- `KnowledgeBaseRepository` and `BotRepository` retrieved all restored domain entities with relationships intact.
+
+### 15.5 Inviolable WAL Sidecar Rules
+1. **Never Copy Live `.sqlite` Files Directly:** Standard OS file copies miss uncheckpointed WAL frames. Always invoke `DatabaseManager.backup()`.
+2. **Sidecar Colocation:** The `-wal` and `-shm` files must remain adjacent to `app.sqlite` in the same directory.
+3. **Internal Main-Process Custody:** Checkpoint and backup methods are never exposed to IPC or the React Renderer.
+

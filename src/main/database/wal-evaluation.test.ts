@@ -469,7 +469,7 @@ describe('SQLite Journal Modes, WAL, Backup and Restoration Evaluation (Step 2.7
     try {
       const initResult = manager.initialize(destUserData)
       expect(initResult.foreignKeys).toBe(true)
-      expect(initResult.journalMode).toBe('delete') // Production DatabaseManager default
+      expect(initResult.journalMode).toBe('wal') // Production DatabaseManager WAL mode
 
       const restoredDb = manager.getDatabase()
 

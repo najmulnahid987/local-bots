@@ -252,9 +252,11 @@ app.whenReady().then(() => {
       '[DATABASE_INITIALIZED]',
       JSON.stringify({
         dbPath: initResult.dbPath,
-        foreignKeys: initResult.foreignKeys,
+        foreignKeys: initResult.foreignKeys ? 1 : 0,
         journalMode: initResult.journalMode,
-        busyTimeout: initResult.busyTimeout
+        synchronous: initResult.synchronous,
+        busyTimeout: initResult.busyTimeout,
+        walAutoCheckpoint: initResult.walAutoCheckpoint
       })
     )
 

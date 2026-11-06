@@ -20,6 +20,13 @@ describe('Database Testing Helpers and Fixtures (database/testing)', () => {
       expect(context.kbRepo).toBeDefined()
       expect(context.botRepo).toBeDefined()
 
+      // Verify production WAL and durability pragmas are active
+      expect(String(context.db.pragma('journal_mode', { simple: true })).toLowerCase()).toBe('wal')
+      expect(Number(context.db.pragma('synchronous', { simple: true }))).toBe(2)
+      expect(Number(context.db.pragma('foreign_keys', { simple: true }))).toBe(1)
+      expect(Number(context.db.pragma('busy_timeout', { simple: true }))).toBe(5000)
+      expect(Number(context.db.pragma('wal_autocheckpoint', { simple: true }))).toBe(1000)
+
       // Verify migration 001 was applied
       const tables = context.db
         .prepare(
