@@ -1,8 +1,8 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { registerIpcHandlers } from './ipc'
+import { registerIpcHandlers, isTrustedRendererUrl } from './ipc'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -35,51 +35,101 @@ function createWindow(): void {
     mainWindow = null
   })
 
+  // Safe Navigation Restrictions:
+  // Block any frame navigation targeting untrusted origins
+  mainWindow.webContents.on('will-frame-navigate', (event) => {
+    if (!isTrustedRendererUrl(event.url)) {
+      event.preventDefault()
+    }
+  })
+
+  // Block top-level main frame navigation targeting untrusted origins
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    if (!isTrustedRendererUrl(navigationUrl)) {
+      event.preventDefault()
+    }
+  })
+
+  // Block unauthorized server-side redirects
+  mainWindow.webContents.on('will-redirect', (event, redirectUrl) => {
+    if (!isTrustedRendererUrl(redirectUrl)) {
+      event.preventDefault()
+    }
+  })
+
+  // Safe Window Opening Restrictions:
+  // Deny all child/popup window creations without invoking shell.openExternal
+  mainWindow.webContents.setWindowOpenHandler(() => {
+    return { action: 'deny' }
+  })
+
   if (is.dev) {
     mainWindow.webContents.on('did-finish-load', async () => {
       try {
         const results = await mainWindow?.webContents.executeJavaScript(`(async () => {
+          // Test A: CSP presence
+          const cspMeta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
           const testA = {
-            apiKeys: Object.keys(window.api),
-            hasInvoke: typeof window.api.invoke,
-            hasSend: typeof window.api.send,
-            hasIpcRenderer: typeof window.api.ipcRenderer,
-            hasElectron: typeof window.electron
+            hasCspMeta: Boolean(cspMeta),
+            cspContent: cspMeta?.content ?? null
           };
 
-          const validUuid = crypto.randomUUID();
-          let testB = null;
+          // Test B: External in-page navigation attempt
+          const initialUrl = window.location.href;
+          const link = document.createElement('a');
+          link.href = 'https://example.com';
+          link.textContent = 'External test';
+          document.body.appendChild(link);
+          link.click();
+          await new Promise((r) => setTimeout(r, 60));
+          const testB = {
+            stayedOnLocal: window.location.href === initialUrl,
+            currentUrl: window.location.href
+          };
+          link.remove();
+
+          // Test C: Window open restriction
+          let testC = { windowOpenResult: null };
           try {
-            testB = await window.api.ping({ requestId: validUuid });
+            const popup = window.open('https://example.com');
+            testC.windowOpenResult = popup === null ? 'denied' : 'opened';
           } catch (e) {
-            testB = { error: e.message };
+            testC.windowOpenResult = 'error: ' + e.message;
           }
 
-          let testC1 = null;
+          // Test D: Iframe external restriction (CSP frame-src 'none')
+          let testD = { iframeBlocked: false };
+          const frame = document.createElement('iframe');
+          let cspViolationCaught = false;
+          const onSecurityPolicyViolation = (e) => {
+            if (e.violatedDirective === 'frame-src' || String(e.blockedURI).includes('example.com')) {
+              cspViolationCaught = true;
+            }
+          };
+          document.addEventListener('securitypolicyviolation', onSecurityPolicyViolation);
+          frame.src = 'https://example.com';
+          document.body.appendChild(frame);
+          await new Promise((r) => setTimeout(r, 60));
+          document.removeEventListener('securitypolicyviolation', onSecurityPolicyViolation);
+          frame.remove();
+          testD.iframeBlocked = cspViolationCaught;
+
+          // Test E: Existing IPC validation
+          let testE = { validPing: null, invalidPing: null };
+          try {
+            testE.validPing = await window.api.ping({ requestId: crypto.randomUUID() });
+          } catch (e) {
+            testE.validPing = { error: e.message };
+          }
           try {
             await window.api.ping({ requestId: 123 });
-            testC1 = { passed: false };
+            testE.invalidPing = { passed: false };
           } catch (e) {
-            testC1 = { rejected: true, message: e.message };
+            testE.invalidPing = { rejected: true, message: e.message };
           }
 
-          let testC2 = null;
-          try {
-            await window.api.ping({});
-            testC2 = { passed: false };
-          } catch (e) {
-            testC2 = { rejected: true, message: e.message };
-          }
-
-          let testC3 = null;
-          try {
-            await window.api.ping({ requestId: crypto.randomUUID(), extraProperty: 'unexpected' });
-            testC3 = { passed: false };
-          } catch (e) {
-            testC3 = { rejected: true, message: e.message };
-          }
-
-          const testD = {
+          // Test F: Node & Sandbox isolation
+          const testF = {
             require: typeof require,
             process: typeof process,
             windowRequire: typeof window.require,
@@ -87,19 +137,14 @@ function createWindow(): void {
             windowBuffer: typeof window.Buffer
           };
 
-          return { testA, testB, testC1, testC2, testC3, testD };
+          return { testA, testB, testC, testD, testE, testF };
         })()`)
-        console.log('[STEP_1_3_VERIFICATION]', JSON.stringify(results))
+        console.log('[STEP_1_4_VERIFICATION]', JSON.stringify(results))
       } catch (err) {
-        console.error('[STEP_1_3_VERIFICATION_ERROR]', err)
+        console.error('[STEP_1_4_VERIFICATION_ERROR]', err)
       }
     })
   }
-
-  mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
-    return { action: 'deny' }
-  })
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.

@@ -19,4 +19,3 @@ export interface PingResponse {
   requestId: string
   timestamp: number
 }
-

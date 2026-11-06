@@ -16,6 +16,41 @@ export const pingRequestSchema = z
   .strict()
 
 /**
+ * Authoritative validator for trusted renderer URLs in Main process.
+ * Reused across IPC sender validation and navigation event filtering.
+ *
+ * 1. Development: Matches only the exact configured local Vite dev server origin.
+ * 2. Production: Matches only the local index.html file URL.
+ */
+export function isTrustedRendererUrl(urlStr: string): boolean {
+  if (!urlStr) {
+    return false
+  }
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    try {
+      const parsedTargetUrl = new URL(urlStr)
+      const parsedTrustedUrl = new URL(process.env['ELECTRON_RENDERER_URL'])
+      return parsedTargetUrl.origin === parsedTrustedUrl.origin
+    } catch {
+      return false
+    }
+  } else {
+    try {
+      const expectedFilePath = join(__dirname, '../renderer/index.html')
+      const expectedFileUrl = pathToFileURL(expectedFilePath).href.toLowerCase()
+      const actualUrl = new URL(urlStr)
+      if (actualUrl.protocol !== 'file:') {
+        return false
+      }
+      return actualUrl.href.toLowerCase() === expectedFileUrl
+    } catch {
+      return false
+    }
+  }
+}
+
+/**
  * Reusable sender validation:
  * 1. Checks that the BrowserWindow exists and is not destroyed.
  * 2. Checks that event.sender is the main BrowserWindow webContents.
@@ -48,30 +83,7 @@ export function validateIpcSender(
     return false
   }
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    try {
-      const parsedFrameUrl = new URL(frameUrl)
-      const parsedTrustedUrl = new URL(process.env['ELECTRON_RENDERER_URL'])
-      if (parsedFrameUrl.origin !== parsedTrustedUrl.origin) {
-        return false
-      }
-    } catch {
-      return false
-    }
-  } else {
-    try {
-      const expectedFilePath = join(__dirname, '../renderer/index.html')
-      const expectedFileUrl = pathToFileURL(expectedFilePath).href.toLowerCase()
-      const actualFileUrl = frameUrl.toLowerCase()
-      if (actualFileUrl !== expectedFileUrl) {
-        return false
-      }
-    } catch {
-      return false
-    }
-  }
-
-  return true
+  return isTrustedRendererUrl(frameUrl)
 }
 
 /**
@@ -101,4 +113,3 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     }
   })
 }
-
