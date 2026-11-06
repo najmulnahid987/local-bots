@@ -137,11 +137,86 @@ function createWindow(): void {
             windowBuffer: typeof window.Buffer
           };
 
-          return { testA, testB, testC, testD, testE, testF };
+          // Test G: React Router navigation & active state verification
+          const initialHash = window.location.hash;
+
+          // Click Knowledge Bases nav link
+          const kbLink = document.querySelector('a[href="#/knowledge-bases"]');
+          kbLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          await new Promise((r) => setTimeout(r, 60));
+          const kbHash = window.location.hash;
+          const kbTitle = document.querySelector('.page-title')?.textContent;
+          const kbActive = kbLink?.classList.contains('active') ?? false;
+
+          // Click Activity nav link
+          const actLink = document.querySelector('a[href="#/activity"]');
+          actLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          await new Promise((r) => setTimeout(r, 60));
+          const actHash = window.location.hash;
+          const actTitle = document.querySelector('.page-title')?.textContent;
+          const actActive = actLink?.classList.contains('active') ?? false;
+
+          // Click Settings nav link
+          const setLink = document.querySelector('a[href="#/settings"]');
+          setLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          await new Promise((r) => setTimeout(r, 60));
+          const setHash = window.location.hash;
+          const setTitle = document.querySelector('.page-title')?.textContent;
+          const setActive = setLink?.classList.contains('active') ?? false;
+
+          // Navigate back to Home
+          const homeLink = document.querySelector('a[href="#/home"]');
+          homeLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          await new Promise((r) => setTimeout(r, 60));
+          const homeHash = window.location.hash;
+          const homeTitle = document.querySelector('.page-title')?.textContent;
+          const homeActive = homeLink?.classList.contains('active') ?? false;
+
+          // Test "Explore Knowledge Bases" link from Home
+          const exploreBtn = document.querySelector('.btn-primary-link');
+          exploreBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          await new Promise((r) => setTimeout(r, 60));
+          const exploreHash = window.location.hash;
+
+          // Test History back & forward
+          window.history.back();
+          await new Promise((r) => setTimeout(r, 60));
+          const backHash = window.location.hash;
+
+          window.history.forward();
+          await new Promise((r) => setTimeout(r, 60));
+          const forwardHash = window.location.hash;
+
+          // Test unknown route redirect
+          window.location.hash = '#/unknown-route';
+          await new Promise((r) => setTimeout(r, 80));
+          const unknownHash = window.location.hash;
+
+          const testG = {
+            initialHash,
+            kbHash,
+            kbTitle,
+            kbActive,
+            actHash,
+            actTitle,
+            actActive,
+            setHash,
+            setTitle,
+            setActive,
+            homeHash,
+            homeTitle,
+            homeActive,
+            exploreHash,
+            backHash,
+            forwardHash,
+            unknownHash
+          };
+
+          return { testA, testB, testC, testD, testE, testF, testG };
         })()`)
-        console.log('[STEP_1_4_VERIFICATION]', JSON.stringify(results))
+        console.log('[STEP_1_5_VERIFICATION]', JSON.stringify(results))
       } catch (err) {
-        console.error('[STEP_1_4_VERIFICATION_ERROR]', err)
+        console.error('[STEP_1_5_VERIFICATION_ERROR]', err)
       }
     })
   }

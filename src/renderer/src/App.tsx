@@ -1,28 +1,24 @@
-import Versions from './components/Versions'
-import electronLogo from './assets/electron.svg'
+import { ReactElement } from 'react'
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AppLayout } from './components/layout/AppLayout'
+import { HomePage } from './pages/HomePage'
+import { KnowledgeBasesPage } from './pages/KnowledgeBasesPage'
+import { ActivityPage } from './pages/ActivityPage'
+import { SettingsPage } from './pages/SettingsPage'
 
-function App(): React.JSX.Element {
+export default function App(): ReactElement {
   return (
-    <>
-      <img alt="logo" className="logo" src={electronLogo} />
-      <div className="creator">Powered by electron-vite</div>
-      <div className="text">
-        Build an Electron app with <span className="react">React</span>
-        &nbsp;and <span className="ts">TypeScript</span>
-      </div>
-      <p className="tip">
-        Please try pressing <code>F12</code> to open the devTool
-      </p>
-      <div className="actions">
-        <div className="action">
-          <a href="https://electron-vite.org/" target="_blank" rel="noreferrer">
-            Documentation
-          </a>
-        </div>
-      </div>
-      <Versions></Versions>
-    </>
+    <HashRouter>
+      <Routes>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<Navigate to="/home" replace />} />
+          <Route path="/home" element={<HomePage />} />
+          <Route path="/knowledge-bases" element={<KnowledgeBasesPage />} />
+          <Route path="/activity" element={<ActivityPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/home" replace />} />
+        </Route>
+      </Routes>
+    </HashRouter>
   )
 }
-
-export default App
