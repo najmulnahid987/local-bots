@@ -53,12 +53,12 @@ export function isTrustedRendererUrl(urlStr: string, options?: TrustedUrlOptions
   } else {
     try {
       const expectedFilePath = options?.prodHtmlPath ?? join(__dirname, '../renderer/index.html')
-      const expectedFileUrl = pathToFileURL(expectedFilePath).href.toLowerCase()
+      const expectedUrl = new URL(pathToFileURL(expectedFilePath).href)
       const actualUrl = new URL(urlStr)
       if (actualUrl.protocol !== 'file:') {
         return false
       }
-      return actualUrl.href.toLowerCase() === expectedFileUrl
+      return actualUrl.pathname.toLowerCase() === expectedUrl.pathname.toLowerCase()
     } catch {
       return false
     }

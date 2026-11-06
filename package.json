@@ -2,6 +2,7 @@
   "name": "local-first-ai-workspace",
   "version": "1.0.0",
   "description": "Local-First Multi-Model AI Agent Workspace",
+  "packageManager": "npm@11.19.0",
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",

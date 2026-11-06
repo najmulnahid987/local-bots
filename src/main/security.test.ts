@@ -62,6 +62,11 @@ describe('Security: isTrustedRendererUrl', () => {
       expect(isTrustedRendererUrl(prodFileUrl.toUpperCase(), prodOptions)).toBe(true)
     })
 
+    it('accepts production file URLs containing hash routes', () => {
+      expect(isTrustedRendererUrl(`${prodFileUrl}#/home`, prodOptions)).toBe(true)
+      expect(isTrustedRendererUrl(`${prodFileUrl}#/knowledge-bases`, prodOptions)).toBe(true)
+    })
+
     it('rejects arbitrary file system paths', () => {
       const untrustedFilePath = resolve('C:/Windows/System32/calc.exe')
       const untrustedFileUrl = pathToFileURL(untrustedFilePath).href
