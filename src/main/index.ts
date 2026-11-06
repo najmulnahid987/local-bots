@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerIpcHandlers, isTrustedRendererUrl } from './ipc'
 import { databaseManager } from './database/connection'
+import { runMigrations, migrations } from './database/migrations'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -243,7 +244,7 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // Initialize persistent SQLite database before window creation
+  // Initialize persistent SQLite database and execute migrations before window creation
   try {
     const userDataPath = app.getPath('userData')
     const initResult = databaseManager.initialize(userDataPath)
@@ -256,6 +257,11 @@ app.whenReady().then(() => {
         busyTimeout: initResult.busyTimeout
       })
     )
+
+    // Run versioned migrations against the open database
+    const db = databaseManager.getDatabase()
+    const migrationResult = runMigrations(db, migrations)
+    console.log('[MIGRATIONS_COMPLETED]', JSON.stringify(migrationResult))
   } catch (dbError) {
     console.error('[DATABASE_INITIALIZATION_FAILED]', dbError)
     app.quit()
