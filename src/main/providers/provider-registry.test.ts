@@ -166,18 +166,14 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
 
     const googleDefault = providerRegistry.getDefaultModel('google')
     expect(googleDefault).not.toBeNull()
-    expect(googleDefault?.id).toBe('gemini-1.5-pro')
+    expect(googleDefault?.id).toBe('gemini-3.8-flash')
   })
 
-  // Test 10: Preview models are clearly distinguished from stable models
-  it('10. verifies preview models are clearly distinguished from stable models', () => {
+  // Test 10: Preview and deprecated models are clearly distinguished from stable models
+  it('10. verifies preview and deprecated models are clearly distinguished from stable models', () => {
     const terraPreview = providerRegistry.getModel('openai', 'gpt-6.1-terra')
     expect(terraPreview).not.toBeNull()
     expect(terraPreview?.availability).toBe('preview')
-
-    const geminiExp = providerRegistry.getModel('google', 'gemini-2.0-flash-exp')
-    expect(geminiExp).not.toBeNull()
-    expect(geminiExp?.availability).toBe('preview')
 
     const gptLuna = providerRegistry.getModel('openai', 'gpt-6-luna')
     expect(gptLuna?.availability).toBe('stable')
@@ -185,8 +181,11 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     const claudeSonnet = providerRegistry.getModel('anthropic', 'claude-sonnet-5-5')
     expect(claudeSonnet?.availability).toBe('stable')
 
-    const geminiPro = providerRegistry.getModel('google', 'gemini-1.5-pro')
-    expect(geminiPro?.availability).toBe('stable')
+    const geminiFlash = providerRegistry.getModel('google', 'gemini-3.8-flash')
+    expect(geminiFlash?.availability).toBe('stable')
+
+    const geminiLegacy = providerRegistry.getModel('google', 'gemini-1.5-pro')
+    expect(geminiLegacy?.availability).toBe('deprecated')
   })
 
   // Test 11: Unsupported image capability is rejected

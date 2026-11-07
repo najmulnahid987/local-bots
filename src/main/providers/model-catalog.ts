@@ -27,10 +27,10 @@ export const INITIAL_PROVIDERS: ReadonlyArray<ProviderDescriptor> = Object.freez
     id: 'google',
     displayName: 'Google Gemini',
     description:
-      'Multimodal foundation models with massive context windows up to 2 million tokens.',
+      'Multimodal foundation models with massive context windows up to 1 million tokens.',
     docUrl: 'https://ai.google.dev/gemini-api/docs/models',
     isSupported: true,
-    defaultModelId: 'gemini-1.5-pro'
+    defaultModelId: 'gemini-3.8-flash'
   })
 ])
 
@@ -182,52 +182,71 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
 
   // --- Google Gemini Models ---
   Object.freeze({
+    id: 'gemini-3.8-flash',
+    providerId: 'google',
+    displayName: 'Gemini 3.8 Flash',
+    description:
+      'Flagship multimodal model engineered for high-throughput reasoning, frontier code generation, and 1M context.',
+    availability: 'stable',
+    contextWindow: Object.freeze({
+      inputTokens: 1048576,
+      outputTokens: 65536
+    }),
+    capabilities: Object.freeze({
+      streaming: true,
+      tools: true,
+      imageInput: true,
+      structuredOutput: true
+    }),
+    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
+  }),
+  Object.freeze({
+    id: 'gemini-3.7-flash',
+    providerId: 'google',
+    displayName: 'Gemini 3.7 Flash',
+    description:
+      'High-speed multimodal model combining responsive performance and reasoning efficiency with 1M context.',
+    availability: 'stable',
+    contextWindow: Object.freeze({
+      inputTokens: 1048576,
+      outputTokens: 65536
+    }),
+    capabilities: Object.freeze({
+      streaming: true,
+      tools: true,
+      imageInput: true,
+      structuredOutput: true
+    }),
+    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
+  }),
+  Object.freeze({
+    id: 'gemini-3.6-flash',
+    providerId: 'google',
+    displayName: 'Gemini 3.6 Flash',
+    description:
+      'Balanced multimodal model optimized for lightweight tasks and cost-efficient processing.',
+    availability: 'stable',
+    contextWindow: Object.freeze({
+      inputTokens: 1048576,
+      outputTokens: 65536
+    }),
+    capabilities: Object.freeze({
+      streaming: true,
+      tools: true,
+      imageInput: true,
+      structuredOutput: true
+    }),
+    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
+  }),
+  Object.freeze({
     id: 'gemini-1.5-pro',
     providerId: 'google',
-    displayName: 'Gemini 1.5 Pro',
+    displayName: 'Gemini 1.5 Pro (Legacy)',
     description:
-      'Highly capable multimodal model with a 2-million-token context window for massive file and document analysis.',
-    availability: 'stable',
+      'Legacy multimodal model with 2M context window. Deprecated in favor of Gemini 3.x series.',
+    availability: 'deprecated',
     contextWindow: Object.freeze({
       inputTokens: 2097152,
-      outputTokens: 8192
-    }),
-    capabilities: Object.freeze({
-      streaming: true,
-      tools: true,
-      imageInput: true,
-      structuredOutput: true
-    }),
-    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
-  }),
-  Object.freeze({
-    id: 'gemini-1.5-flash',
-    providerId: 'google',
-    displayName: 'Gemini 1.5 Flash',
-    description:
-      'High-speed, low-latency multimodal model built for efficiency, cost-effective reasoning, and 1M context.',
-    availability: 'stable',
-    contextWindow: Object.freeze({
-      inputTokens: 1048576,
-      outputTokens: 8192
-    }),
-    capabilities: Object.freeze({
-      streaming: true,
-      tools: true,
-      imageInput: true,
-      structuredOutput: true
-    }),
-    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
-  }),
-  Object.freeze({
-    id: 'gemini-2.0-flash-exp',
-    providerId: 'google',
-    displayName: 'Gemini 2.0 Flash Experimental',
-    description:
-      'Next-generation experimental multimodal model with upgraded real-time reasoning and lower latency.',
-    availability: 'preview',
-    contextWindow: Object.freeze({
-      inputTokens: 1048576,
       outputTokens: 8192
     }),
     capabilities: Object.freeze({

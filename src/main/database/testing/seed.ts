@@ -53,7 +53,7 @@ export function seedTestWorkspace(context: SeedContext): TestWorkspace {
 
   const botGamma = createBotFixture(botRepo, kbB.id, {
     name: 'Bot Gamma',
-    modelId: 'gemini-1.5-pro',
+    modelId: 'gemini-3.8-flash',
     description: 'Compliance reviewer agent',
     toolPermissions: ['list_knowledge_base_documents']
   })

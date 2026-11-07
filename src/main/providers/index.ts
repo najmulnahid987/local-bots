@@ -6,6 +6,7 @@ export * from './provider-registry'
 // Namespace exports for individual providers
 export * as openai from './openai'
 export * as anthropic from './anthropic'
+export * as google from './google'
 
 // Direct provider adapters and configuration
 export {
@@ -22,3 +23,10 @@ export {
   type AnthropicAdapterOptions,
   sanitizeAnthropicError
 } from './anthropic'
+
+export {
+  GoogleAdapter,
+  GOOGLE_OFFICIAL_BASE_URL,
+  type GoogleAdapterOptions,
+  sanitizeGoogleError
+} from './google'

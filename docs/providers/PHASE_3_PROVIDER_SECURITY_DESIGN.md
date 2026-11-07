@@ -1275,9 +1275,125 @@ All raw Anthropic exceptions, HTTP errors, and network failures are intercepted 
 33. Zero API key leakage in error objects and messages.
 
 ### 19.10 Post-Step 3.5 Scope Boundaries
-- **Google Gemini Adapter:** Deferred to Step 3.6.
+- **Google Gemini Adapter:** Implemented in Step 3.6.
 - **Provider Manager Service & IPC:** Deferred to Step 3.7.
 - **Settings UI & Connection Testing UI:** Deferred to Step 3.8.
+- **Multimodal & Tool Orchestration:** Deferred to Step 3.9+.
+
+---
+
+## 20. Google Gemini Provider Adapter Specification (Step 3.6)
+
+### 20.1 Architectural Scope & Core Invariants
+The Google Gemini provider adapter operates exclusively within the Electron Main process (`src/main/providers/google/`) and implements the shared `ProviderAdapter` contract established in Step 3.3.
+
+It conducts direct HTTPS communication with Google's official Gemini Developer API with zero intermediary proxies, cloud gateways, or persistent key caching:
+- **Official Base URL:** Fixed to `https://generativelanguage.googleapis.com/v1beta` via `GOOGLE_OFFICIAL_BASE_URL`.
+- **Environment Overrides Forbidden:** `process.env.GOOGLE_GENERATIVE_AI_BASE_URL` and `process.env.GOOGLE_BASE_URL` are explicitly ignored. All outbound requests route solely to the hardcoded official domain.
+- **Header Protocol:** Uses `x-goog-api-key: <apiKey>` in HTTP headers. Never transmits keys via URL query strings (`?key=...`) or `Authorization: Bearer` headers.
+- **Ephemeral Lifecycle:** Provider instances are instantiated on-demand per request via `createGoogleGenerativeAI({ apiKey, baseURL, fetch })`. Decrypted keys reside only ephemerally in active call stacks.
+
+### 20.2 Package Installation & Dependency Compatibility
+- **Package:** `@ai-sdk/google@4.0.112` (pinned without `^` or `~` in `package.json`).
+- Fully compatible with `ai@7.0.164`, `@ai-sdk/openai@4.0.110`, `@ai-sdk/anthropic@4.0.98`, and `zod@3.25.76`.
+- Verified direct peer dependencies: `@ai-sdk/provider@4.0.36`, `@ai-sdk/provider-utils@5.0.75`.
+- Strict Node.js 24 and TypeScript 5.x runtime compatibility without native C++ compilation.
+
+### 20.3 Gemini Model Catalog & Capability Matrix
+The model catalog (`src/main/providers/model-catalog.ts`) defines verified, authoritative metadata for the Google Gemini family:
+- **`gemini-3.8-flash` (Default):** Stable; 1,048,576 input tokens; 65,536 output tokens. Flagship high-throughput reasoning and code generation.
+- **`gemini-3.7-flash`:** Stable; 1,048,576 input tokens; 65,536 output tokens. Low-latency multimodal reasoning efficiency.
+- **`gemini-3.6-flash`:** Stable; 1,048,576 input tokens; 65,536 output tokens. Cost-sensitive lightweight workflows.
+- **`gemini-1.5-pro`:** Deprecated; 2,097,152 input tokens; 8,192 output tokens. Preserved in catalog to prevent breaking legacy bot references.
+
+### 20.4 Google API Key Authentication & Transition Policy
+- **Key Transition Context:** On May 28, 2026, Google made Authorization API keys the default in Google AI Studio and announced the deprecation and rejection of legacy standard API keys starting September 2026.
+- **Authorization Guidance:** The adapter guides users whose keys fail with `API_KEY_INVALID` or legacy deprecation notices to generate a new Authorization key at Google AI Studio (`https://aistudio.google.com/`).
+- **Header Security Invariant:** Outgoing requests are verified by automated tests to ensure API keys are strictly passed via `x-goog-api-key` and never leaked into URLs, logs, or Renderer contexts.
+
+### 20.5 Free Tier vs. Paid Tier Data Privacy & Retention
+- **Free Tier:** As documented in Google Gemini API terms, submitted prompts and model outputs may be used to train and improve Google products, and human reviewers may access and review submitted data.
+- **Paid Tier:** Prompts and responses submitted under paid billing accounts are **not** used to train Google models or improve Google products.
+- **Direct Privacy Notice:** Because this is a BYOK application, data flows directly from the user's machine to Google over TLS 1.3 without intermediary servers. The user's account tier directly governs data processing and retention.
+
+### 20.6 Connection Testing (Zero-Token Model Retrieval)
+- **Method:** `testConnection(apiKey: string, modelId?: string, signal?: AbortSignal): Promise<ConnectionTestResult>`
+- **Endpoint:** `GET https://generativelanguage.googleapis.com/v1beta/models/{modelId}`
+- **Zero Token Guarantee:** Verifies key authentication and model visibility using an authenticated GET request against the model metadata endpoint without consuming generation tokens.
+- **Validation Checks:**
+  1. Validates that the returned model `name` matches `models/{modelId}`.
+  2. Confirms that `supportedGenerationMethods` includes `'generateContent'`.
+
+### 20.7 Text Generation & System Prompt Separation
+- **Endpoint:** `generateContent` via `@ai-sdk/google`.
+- **System Instruction Mapping:** `options.systemPrompt` and `{ role: 'system' }` messages are separated from conversation turns and passed into the top-level `system` property, which serializes into Gemini's `systemInstruction: { parts: [{ text: "..." }] }` structure.
+- **Capability Gating:** Rejects unsupported capabilities (tools, JSON schemas, image input) in Step 3.6 with typed `UNSUPPORTED_CAPABILITY` errors.
+
+### 20.8 Text Streaming Implementation
+- **Endpoint:** `streamGenerateContent?alt=sse` via `@ai-sdk/google`.
+- Yields asynchronous `StreamTextChunk` events (`text-delta`, `finish`, `error`).
+- Translates SSE chunks into normalized deltas.
+- Maps stop reasons (`STOP` -> `stop`, `MAX_TOKENS` -> `length`, `SAFETY` -> `content_filter`).
+- Handles `AbortSignal` cancellation immediately without leaking network sockets.
+
+### 20.9 Error Classification & Sanitization
+All raw Google exceptions, HTTP errors, and RPC status objects are normalized into sanitized `ProviderError` instances:
+
+| Google API Condition / Status | Application Error Code | Sanitized Message | Retryable |
+|---|---|---|---|
+| `API_KEY_INVALID` / Key expired | `AUTHENTICATION_FAILED` | Google API key was rejected or has expired. If using a legacy key, generate a new Authorization key at Google AI Studio. | No |
+| HTTP 401 / `UNAUTHENTICATED` | `AUTHENTICATION_FAILED` | Google Gemini authentication failed. Please verify your API key. | No |
+| HTTP 403 / `PERMISSION_DENIED` | `PERMISSION_DENIED` | Access forbidden. Your Google API key does not have permission for this resource. | No |
+| HTTP 404 / `NOT_FOUND` | `MODEL_NOT_FOUND` | The requested Google Gemini model was not found or is unavailable for this key. | No |
+| HTTP 429 (`rate_limit`) | `RATE_LIMITED` | Google Gemini rate limit exceeded. Please retry after a brief delay. | Yes |
+| HTTP 429 / `RESOURCE_EXHAUSTED` (quota) | `QUOTA_EXCEEDED` | Google Gemini account quota exceeded. Please check your plan and billing details. | No |
+| HTTP 400 / 422 / `INVALID_ARGUMENT` | `INVALID_REQUEST` | The request was rejected by Google Gemini as invalid. | No |
+| HTTP 500 / 503 / `UNAVAILABLE` / `INTERNAL` | `SERVER_ERROR` | Google Gemini servers are temporarily unavailable. Please retry later. | Yes |
+| Timeout / AbortController | `TIMEOUT` | Request to Google Gemini timed out. | Yes |
+| Network / Socket Error | `NETWORK_ERROR` | Network connection failure while contacting Google Gemini. | Yes |
+| AbortSignal | `OPERATION_ABORTED` | The operation was aborted by the client. | No |
+
+**Security Guarantee:** Sanitized error structures never contain API keys, `x-goog-api-key` headers, or user prompt content.
+
+### 20.10 Automated Test Suite (`google-adapter.test.ts`)
+33 comprehensive automated tests verify all required adapter behaviors using mock fetch injection:
+1. Adapter identifies as `google`.
+2. Valid model acceptance (`gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`).
+3. Unknown model rejection.
+4. Cross-provider model rejection (`gpt-6-luna`, `claude-sonnet-5-5`).
+5. Connection test sends authenticated GET to `/v1beta/models/{modelId}`.
+6. Sends authentication via `x-goog-api-key` header and never `Authorization: Bearer`.
+7. Proves API key never appears in request URL or query strings.
+8. Expected base URL is targeted.
+9. Fixed base URL enforced (`GOOGLE_GENERATIVE_AI_BASE_URL` ignored).
+10. Model metadata validated.
+11. Rejects models missing `generateContent` in `supportedGenerationMethods`.
+12. Maps `API_KEY_INVALID` to `AUTHENTICATION_FAILED`.
+13. Produces reconnect guidance for legacy/expired keys.
+14. HTTP 403 maps to `PERMISSION_DENIED`.
+15. HTTP 404 maps to `MODEL_NOT_FOUND`.
+16. HTTP 429 rate limit maps to `RATE_LIMITED` (retryable: true).
+17. HTTP 429 quota exhaustion maps to `QUOTA_EXCEEDED` (retryable: false).
+18. HTTP 500/503 maps to `SERVER_ERROR`.
+19. Network errors sanitized to `NETWORK_ERROR`.
+20. Connection test timeout handling.
+21. Pre-aborted and mid-flight cancellation handling.
+22. Single text generation with normalized usage and finish reason.
+23. System instruction mapping to Gemini generateContent structure.
+24. Token usage normalization.
+25. Streaming ordered text deltas.
+26. Streaming finish event with finish reason and usage.
+27. Streaming error chunk sanitization.
+28. Mid-stream abort cancellation handling.
+29. Rejects multimodal image input with `UNSUPPORTED_CAPABILITY`.
+30. Rejects tool requests with `UNSUPPORTED_CAPABILITY`.
+31. Rejects structured output with `UNSUPPORTED_CAPABILITY`.
+32. Zero API key leakage in error objects and messages.
+33. Proves all requests route strictly to official Google endpoints (no gateways/proxies).
+
+### 20.11 Post-Step 3.6 Scope Boundaries
+- **Provider Manager Service & IPC Bridge:** Deferred to Step 3.7.
+- **Provider Manager UI (`SettingsPage`):** Deferred to Step 3.8.
 - **Multimodal & Tool Orchestration:** Deferred to Step 3.9+.
 
 
