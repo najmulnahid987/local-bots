@@ -13,7 +13,7 @@
 
 The objective of **Phase 3** is to implement the Bring-Your-Own-Key (**BYOK**) Provider Manager and OS-backed Secure Credential Storage vault. 
 
-This phase enables users to securely connect their personal API credentials for frontier AI model providers (**OpenAI**, **Anthropic**, **Google Gemini** in the first wave; **xAI** and **OpenRouter** modularly prepared), test connection viability, configure model parameters, and safely execute inference requests directly over TLS 1.3 without intermediary servers or plaintext credential exposure.
+This phase enables users to securely connect their personal API credentials for frontier AI model providers (**OpenAI**, **Anthropic**, **Google Gemini** in the first wave; **xAI** and **OpenRouter** modularly prepared), test connection viability, configure model parameters, and safely execute inference requests directly over standard HTTPS to fixed official endpoints without an application-configured proxy, intermediary gateway, or plaintext credential exposure.
 
 **Step 3.0** is strictly an architecture, research, security evaluation, and preflight specification step. In accordance with project instructions, **no implementation code, database alterations, package installations, or outbound network calls are executed during this step.**
 
@@ -388,7 +388,7 @@ export interface IModelProviderAdapter {
 
 ## 7. Direct Provider Request Architecture & Inference Lifecycle
 
-In accordance with [`SECURITY.md`](../../SECURITY.md) and [`ARCHITECTURE.md`](../../ARCHITECTURE.md), network requests travel directly from the user's desktop client to official provider endpoints over TLS 1.3.
+In accordance with [`SECURITY.md`](../../SECURITY.md) and [`ARCHITECTURE.md`](../../ARCHITECTURE.md), network requests travel directly from the user's desktop client to official provider endpoints over standard HTTPS without an application-configured proxy or intermediary gateway.
 
 ```mermaid
 sequenceDiagram
@@ -398,7 +398,7 @@ sequenceDiagram
     participant REPO as Bot & Provider Repositories
     participant VAULT as CredentialVault
     participant ADAPT as Provider Adapter
-    participant EXT as Official Provider Endpoint (TLS 1.3)
+    participant EXT as Official Provider Endpoint (HTTPS)
 
     UI->>IPC: invoke('chat:send-prompt', { botId, prompt, ... })
     IPC->>SEC: validateIpcSender(event) & Zod parse
@@ -567,7 +567,7 @@ The provider management interface will be implemented within `src/renderer/src/p
 | **TH-08** | **Unsafe Linux Fallback** | Linux workstation lacks GNOME Keyring / KWallet, causing Electron to select `basic_text` obfuscation. | Startup guard checks `getSelectedStorageBackend()`. If `basic_text` is detected, persistent credential saving is completely blocked. User is warned. | User must run desktop secret daemon or use session-only memory keys. |
 | **TH-09** | **Provider Error Leakage** | External provider returns error body containing client key or authorization header. | Provider adapters sanitize all error responses before returning them to IPC. Raw headers stripped. | Low. UI receives only sanitized provider error codes. |
 | **TH-10** | **Stream & Cancellation Leaks** | Memory leaks or lingering socket connections during aborted streaming responses. | Explicit `AbortController.abort()` unbinds network handles. SSE parser discards lingering chunks and releases ephemeral key reference immediately. | Minimal. Clean socket termination. |
-| **TH-11** | **External Provider Data Privacy** | Outbound prompts and document excerpts transmitted over the internet to model vendors. | Direct HTTPS routing over TLS 1.3 to official endpoints (no proxy). UI clearly discloses model provider and privacy boundaries. | Cloud provider retains data according to commercial API terms (zero training on API data under standard commercial terms). |
+| **TH-11** | **External Provider Data Privacy** | Outbound prompts and document excerpts transmitted over the internet to model vendors. | Direct HTTPS routing to fixed official provider endpoints without an application-configured proxy or intermediary gateway. UI clearly discloses model provider and privacy boundaries. | Cloud provider retains data according to commercial API terms (zero training on API data under standard commercial terms). Note: User network environments, corporate proxies, or provider negotiation may use TLS 1.2 or 1.3. |
 
 ---
 
@@ -1314,7 +1314,7 @@ The model catalog (`src/main/providers/model-catalog.ts`) defines verified, auth
 ### 20.5 Free Tier vs. Paid Tier Data Privacy & Retention
 - **Free Tier:** As documented in Google Gemini API terms, submitted prompts and model outputs may be used to train and improve Google products, and human reviewers may access and review submitted data.
 - **Paid Tier:** Prompts and responses submitted under paid billing accounts are **not** used to train Google models or improve Google products.
-- **Direct Privacy Notice:** Because this is a BYOK application, data flows directly from the user's machine to Google over TLS 1.3 without intermediary servers. The user's account tier directly governs data processing and retention.
+- **Direct Privacy Notice:** Because this is a BYOK application, data flows directly from the user's machine to Google over HTTPS without an application-configured proxy or intermediary gateway. The user's account tier directly governs data processing and retention.
 
 ### 20.6 Connection Testing (Zero-Token Model Retrieval)
 - **Method:** `testConnection(apiKey: string, modelId?: string, signal?: AbortSignal): Promise<ConnectionTestResult>`
@@ -1392,9 +1392,149 @@ All raw Google exceptions, HTTP errors, and RPC status objects are normalized in
 33. Proves all requests route strictly to official Google endpoints (no gateways/proxies).
 
 ### 20.11 Post-Step 3.6 Scope Boundaries
-- **Provider Manager Service & IPC Bridge:** Deferred to Step 3.7.
+- **Provider Manager Service:** Implemented in Step 3.7A.
+- **IPC Bridge & Preload Integration:** Deferred to Step 3.7B.
 - **Provider Manager UI (`SettingsPage`):** Deferred to Step 3.8.
 - **Multimodal & Tool Orchestration:** Deferred to Step 3.9+.
+
+---
+
+## 21. Step 3.7A: Provider Manager Service and Credential Lifecycle Orchestration
+
+### 21.1 Executive Summary & Architectural Position
+The `ProviderManagerService` serves as the centralized orchestration layer in the Electron Main process, bridging:
+1. `CredentialVault`: OS-backed encrypted credential file storage.
+2. `ProviderConnectionRepository`: Relational metadata storage and opaque reference linking in SQLite.
+3. `ProviderRegistry`: Authoritative provider and model capability definitions.
+4. Concrete Provider Adapters: `OpenAIAdapter`, `AnthropicAdapter`, and `GoogleAdapter`.
+
+The service guarantees:
+- **Zero Secret Exposure:** Plaintext keys, ciphertexts, and internal `credential_ref` pointers are never returned in public DTOs or leaked into error logs.
+- **Just-In-Time Secret Access:** Credentials are read and decrypted only during active inference or connection testing calls, and released immediately from memory.
+- **Cross-Resource Consistency:** Compensatory cleanup deletes orphaned credential files if database writes fail during connection creation.
+- **Bot Referential Integrity:** Active Bot associations prevent connection deletion at the database boundary before credential files are touched.
+- **Self-Healing Reconciliation:** Application startup cleans orphaned vault files, marks missing-secret connections as `error`, and purges stale temporary files.
+
+```mermaid
+graph TD
+    UI["Renderer / Future IPC Bridge"] -->|"Public DTOs / No Secrets"| PMS["ProviderManagerService"]
+    PMS -->|"Registry Queries"| PR["ProviderRegistry"]
+    PMS -->|"Metadata & Foreign Keys"| PCR["ProviderConnectionRepository"]
+    PMS -->|"Encrypted Files (.enc)"| CV["CredentialVault"]
+    PMS -->|"JIT Decrypted Key"| OA["OpenAIAdapter"]
+    PMS -->|"JIT Decrypted Key"| AA["AnthropicAdapter"]
+    PMS -->|"JIT Decrypted Key"| GA["GoogleAdapter"]
+    OA -->|"Direct HTTPS"| OAPI["api.openai.com"]
+    AA -->|"Direct HTTPS"| AAPI["api.anthropic.com"]
+    GA -->|"Direct HTTPS"| GAPI["generativelanguage.googleapis.com"]
+```
+
+### 21.2 Public Data Transfer Objects (DTOs) & Information Security Boundary
+The service strictly segregates internal database records (`ProviderConnectionRecord`) from client-facing summaries (`ProviderConnectionSummary`).
+
+```typescript
+export interface ProviderConnectionSummary {
+  readonly id: string
+  readonly providerId: ProviderId
+  readonly label: string
+  readonly keyPreview: string
+  readonly status: ProviderConnectionStatus
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+```
+
+**Security Invariants:**
+1. Neither plaintext API keys nor encrypted ciphertext buffers are present in `ProviderConnectionSummary`.
+2. The internal `credentialRef` string (e.g., `cred_...`) is **strictly omitted** from the DTO, preventing leakage to future IPC channels or the Renderer process.
+3. Errors returned by the service are sanitized by `sanitizeErrorMessage`, stripping API key patterns (`sk-`, `ant-`, `AIzaSy`), bearer tokens, and internal `cred_` IDs.
+
+### 21.3 Connection Lifecycle Operations
+
+#### 1. Draft Connection Testing (`testDraftConnection`)
+- Verifies draft API keys in-memory before storing.
+- Does **not** write to `CredentialVault` or insert into SQLite.
+- Resolves the provider's default model (or verifies user-selected model against provider registry).
+- Rejects unknown providers and cross-provider model mismatches.
+
+#### 2. Connection Creation (`createConnection`)
+- Executes draft verification test first.
+- Writes encrypted secret to `CredentialVault`, receiving an opaque `credentialRef`.
+- Saves metadata record to `ProviderConnectionRepository` inside SQLite.
+- **Compensatory Cleanup Invariant:** If SQLite insertion fails (e.g. constraint violation or database lock), `ProviderManagerService` automatically executes `vault.delete(credentialRef)` to prevent orphaned encrypted files on disk.
+
+#### 3. Saved Connection Testing (`testConnection`)
+- Retrieves and decrypts the stored key just-in-time from `CredentialVault`.
+- Runs test via adapter `testConnection`.
+- **Status Transition Logic:**
+  - On success: updates connection status to `'active'`.
+  - On permanent failure (`AUTHENTICATION_FAILED`, `PERMISSION_DENIED`, `MODEL_NOT_FOUND`): updates connection status to `'error'`.
+  - On transient failure (`RATE_LIMITED`, `TIMEOUT`, `NETWORK_ERROR`, `SERVER_ERROR`, `OPERATION_ABORTED`): retains current status to prevent unnecessary invalidation of valid keys during network blips.
+
+#### 4. Credential Replacement (`replaceCredential`)
+- Validates the new API key against the provider adapter in-memory first.
+- Replaces ciphertext in `CredentialVault` via atomic replace (`vault.replace(credentialRef, newKey)`).
+- Updates `keyPreview` and resets status to `'active'` in SQLite.
+- Serialized by per-connection mutex to prevent race conditions during concurrent replacements.
+
+#### 5. Connection Removal (`removeConnection`)
+- **Ordering Invariant:** SQLite deletion is executed **first**.
+- If a Bot references the connection, SQLite throws `FOREIGN KEY constraint failed` (or `RESTRICT_VIOLATION`), halting removal and preserving the credential file.
+- If SQLite deletion succeeds, `vault.delete(credentialRef)` is called.
+- If filesystem deletion encounters an error, the operation still reports `success: true` with `credentialCleaned: false`, and the startup reconciler will clean the orphan file on subsequent launches.
+
+### 21.4 Startup Credential Reconciliation (`initialize()`)
+On startup, `ProviderManagerService.initialize()` performs bidirectional self-healing:
+1. **Missing Credential File Detection:** Inspects all active connections in SQLite. If `vault.exists(conn.credentialRef)` returns `false`, marks the connection as `'error'` (`missingCredentialConnectionsMarkedError`).
+2. **Orphan Credential File Cleanup:** Lists all `.enc` files in the vault. If any file does not correspond to a valid `credentialRef` in SQLite, it is securely purged from disk (`orphanFilesCleaned`).
+3. **Stale Temp File Scavenging:** Purges temporary atomic write files (`.tmp_*`) older than 24 hours (`staleTempFilesCleaned`), while preserving recent temp files (< 24h) and ignoring non-vault / unrecognized files or symlinks.
+
+### 21.5 Model Dispatch & Streaming Lifecycle
+- **Just-In-Time Credential Resolution:** `generateText` and `streamText` resolve connection metadata, decrypt the key via `CredentialVault.retrieve()`, and immediately pass it to the adapter. Plaintext keys are never cached in memory or on the service instance.
+- **Capability Gating:** Rejects unsupported capabilities at the service boundary with typed `UNSUPPORTED_CAPABILITY` errors before dispatching to the network:
+  - Multimodal image content
+  - Tool definitions (`tools`)
+  - Structured schema output (`jsonSchema`)
+- **Normalized Streaming:** Wraps adapter streaming generators, ensuring proper event translation, error sanitization, and clean cancellation via `AbortSignal`.
+
+### 21.6 30 Automated Test Scenarios (`provider-manager-service.test.ts`)
+The `ProviderManagerService` test suite verifies:
+1. Adapter selection for each supported provider.
+2. Rejection of unknown providers.
+3. Rejection of unknown model IDs during draft testing.
+4. Rejection of cross-provider model mismatches.
+5. Draft testing memory-only guarantee (no disk or SQLite writes).
+6. Connection creation returning safe summary DTO.
+7. Creation aborts on invalid key.
+8. Database failure triggers compensatory vault cleanup.
+9. Cleanup failure during compensation handled safely.
+10. Saved connection testing with status update to active.
+11. Auth failure during testing updates status to error.
+12. Transient failures preserve connection status.
+13. Successful credential replacement resets status to active.
+14. Failed replacement preserves original credential.
+15. Label update returns updated summary.
+16. Removal of unreferenced connection cleans file and record.
+17. Removal rejection when referenced by Bot (foreign key guard).
+18. Credential file preserved when DB delete rejected.
+19. Filesystem deletion error reported gracefully.
+20. Startup reconciliation marks missing files as error.
+21. Startup reconciliation purges orphan `.enc` files.
+22. Startup reconciliation preserves unrecognized files.
+23. Startup reconciliation ignores symbolic links.
+24. Startup reconciliation purges stale temp files older than 24 hours.
+25. Startup reconciliation preserves recent temp files (< 24 hours).
+26. Text generation dispatches with JIT credential retrieval.
+27. Capability gating blocks unsupported features.
+28. No in-memory credential caching across requests.
+29. Mutex serialization of concurrent mutations.
+30. Public DTOs and errors never contain keys or `credential_ref` strings.
+
+### 21.7 Post-Step 3.7A Scope Boundaries
+- **IPC Handlers & Preload Bridge:** Reserved for Step 3.7B.
+- **Provider Manager UI (`SettingsPage`):** Reserved for Step 3.8.
+- **Multimodal & Tool Orchestration:** Reserved for Step 3.9+.
+
 
 
 

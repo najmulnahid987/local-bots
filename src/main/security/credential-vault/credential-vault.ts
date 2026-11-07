@@ -395,6 +395,98 @@ export class CredentialVault {
   }
 
   /**
+   * Checks whether a credential reference file currently exists on disk.
+   */
+  public async exists(credentialRef: string): Promise<boolean> {
+    if (!isValidCredentialRef(credentialRef)) {
+      return false
+    }
+    try {
+      const finalPath = this.getCredentialFilePath(credentialRef)
+      const stat = await fs.promises.lstat(finalPath)
+      return stat.isFile() && !stat.isSymbolicLink()
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Enumerates all valid encrypted credential references currently present in the vault directory.
+   * Invariant: Never follows symbolic links; ignores unrecognized files and temp files.
+   */
+  public async listStoredCredentialRefs(): Promise<CredentialRef[]> {
+    try {
+      await this.ensureVaultDir()
+      const entries = await fs.promises.readdir(this.vaultDir, { withFileTypes: true })
+      const refs: CredentialRef[] = []
+
+      for (const entry of entries) {
+        if (!entry.isFile() || entry.isSymbolicLink()) {
+          continue
+        }
+        if (!entry.name.endsWith(CREDENTIAL_FILE_EXTENSION)) {
+          continue
+        }
+        const candidateRef = entry.name.slice(0, -CREDENTIAL_FILE_EXTENSION.length)
+        if (isValidCredentialRef(candidateRef)) {
+          refs.push(candidateRef)
+        }
+      }
+
+      return refs
+    } catch (err: unknown) {
+      const nodeErr = err as NodeJS.ErrnoException
+      if (nodeErr.code === 'ENOENT') {
+        return []
+      }
+      const message = err instanceof Error ? err.message : 'Unknown readdir failure'
+      throw new FilesystemWriteError(`Failed to list credential files: ${message}`)
+    }
+  }
+
+  /**
+   * Cleans up stale temporary files older than maxAgeMs (default 24h).
+   * Invariant: Only touches files matching TEMP_FILE_PREFIX; never deletes directories or symlinks.
+   */
+  public async cleanStaleTempFiles(maxAgeMs: number = 24 * 60 * 60 * 1000): Promise<number> {
+    try {
+      await this.ensureVaultDir()
+      const entries = await fs.promises.readdir(this.vaultDir, { withFileTypes: true })
+      let cleanedCount = 0
+      const now = Date.now()
+
+      for (const entry of entries) {
+        if (!entry.isFile() || entry.isSymbolicLink()) {
+          continue
+        }
+        if (!entry.name.startsWith(TEMP_FILE_PREFIX)) {
+          continue
+        }
+
+        const fullPath = path.join(this.vaultDir, entry.name)
+        try {
+          const stat = await fs.promises.lstat(fullPath)
+          if (now - stat.mtimeMs > maxAgeMs) {
+            await fs.promises.unlink(fullPath)
+            cleanedCount++
+          }
+        } catch {
+          // Ignore individual file removal errors during cleanup
+        }
+      }
+
+      return cleanedCount
+    } catch (err: unknown) {
+      const nodeErr = err as NodeJS.ErrnoException
+      if (nodeErr.code === 'ENOENT') {
+        return 0
+      }
+      const message = err instanceof Error ? err.message : 'Unknown temp cleanup failure'
+      throw new FilesystemWriteError(`Failed to clean temp files: ${message}`)
+    }
+  }
+
+  /**
    * Canonical path resolution and boundary verification.
    * Hard-blocks path traversal, absolute injection, and null byte exploits.
    */

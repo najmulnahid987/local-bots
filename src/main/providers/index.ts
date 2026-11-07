@@ -30,3 +30,5 @@ export {
   type GoogleAdapterOptions,
   sanitizeGoogleError
 } from './google'
+
+export * from './provider-manager'

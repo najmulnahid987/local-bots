@@ -400,13 +400,17 @@ src/
 ```
 
 ### 9.7 Ordered Implementation Tasks
-- **Step 3.0: Provider Architecture and Security Preflight (Specification Complete)**
-- **Step 3.1: Dependencies, Migration 002, and CredentialVault Service**
-- **Step 3.2: Provider Registry & Adapters (OpenAI, Anthropic, Google)**
-- **Step 3.3: Provider Connection Repository & IPC Handlers**
-- **Step 3.4: Preload Contract & Type-Safe Renderer Bridge**
-- **Step 3.5: Provider Management UI in Settings**
-- **Step 3.6: End-to-End Integration Testing & Phase 3 Verification Gate**
+- **Step 3.0: Provider Architecture and Security Preflight (Completed)**
+- **Step 3.1: Secure Credential Vault Foundation (Completed)**
+- **Step 3.2: Provider Database Migration and Repository (Completed)**
+- **Step 3.3: Provider Registry and Typed Interfaces (Completed)**
+- **Step 3.4: OpenAI Provider Adapter (Completed)**
+- **Step 3.5: Anthropic Claude Provider Adapter (Completed)**
+- **Step 3.6: Google Gemini Provider Adapter (Completed)**
+- **Step 3.7A: Provider Manager Service and Credential Lifecycle Orchestration (Completed)**
+- **Step 3.7B: Secure IPC Bridge and Renderer Preload Integration (Pending)**
+- **Step 3.8: Provider Management UI in Settings (Pending)**
+- **Step 3.9: End-to-End Integration Testing & Phase 3 Verification Gate (Pending)**
 
 ### 9.8 Database Changes
 - Migration `002_provider_credential_refs.sql` replaces `encrypted_credentials BLOB` in `provider_connections` with `credential_ref TEXT NOT NULL UNIQUE`, `status TEXT`, and updated indexes.
