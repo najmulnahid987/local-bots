@@ -1059,6 +1059,120 @@ To prevent type fragmentation:
 2. **Provider Scope:** xAI and OpenRouter definitions remain deferred until approved post-Phase 3.
 3. **No Dynamic Model Fetching:** In compliance with local-first security boundaries, the application does not dynamically query `/v1/models` endpoints to download unverified model lists over the network.
 
+---
+
+## 18. Step 3.4 Implementation: OpenAI Provider Adapter
+
+### 18.1 Objective and Scope
+Step 3.4 implements the first concrete provider adapter: **OpenAI**. 
+
+The adapter resides strictly within the Electron Main process (`src/main/providers/openai/`) and implements the provider-independent `ProviderAdapter` contract established in Step 3.3. It executes direct HTTPS requests to official OpenAI endpoints with zero intermediate proxies, zero gateway fallbacks, and zero persistent key caching in memory.
+
+### 18.2 AI SDK Dependencies & Version Pinning
+The adapter utilizes the official Vercel AI SDK and the direct OpenAI provider:
+- **`ai`:** `7.0.164` (pinned exact in `package.json`)
+- **`@ai-sdk/openai`:** `4.0.110` (pinned exact in `package.json`)
+
+**Compatibility Baselines:**
+- Full compatibility with Node.js 24 runtime and TypeScript 5.x.
+- Clean integration with project peer dependency `zod@^4.6.7`.
+- No experimental prereleases (alpha, beta, canary) or unpinned floating ranges (`^`, `~`).
+
+### 18.3 Updated OpenAI Model Catalog
+In accordance with current documentation, the curated initial OpenAI catalog was updated to modern flagship offerings:
+
+| Model ID | Display Name | Availability | Context Window (In / Out) | Capabilities (Stream / Tools / Image / Schema) | Role & Characteristics |
+|---|---|---|---|---|---|
+| `gpt-6-luna` | GPT-6 Luna | `stable` | 128,000 / 16,384 | Yes / Yes / Yes / Yes | Cost-sensitive, high-speed default model. |
+| `gpt-6.1-sol` | GPT-6.1 Sol | `stable` | 256,000 / 32,768 | Yes / Yes / Yes / Yes | Balanced flagship model for multi-step tasks. |
+| `gpt-6-astra` | GPT-6 Astra | `stable` | 256,000 / 65,536 | Yes / Yes / Yes / Yes | Advanced frontier intelligence and deep synthesis. |
+| `gpt-6.1-terra` | GPT-6.1 Terra | `preview` | 256,000 / 65,536 | **No** / **No** / **No** / **No** | Preview frontier reasoning model with self-verification. |
+
+### 18.4 Direct Endpoint Policy & Environment Variable Guard
+- **Fixed Official Base URL:** `https://api.openai.com/v1` is passed explicitly to `createOpenAI({ baseURL: ... })`.
+- **Environment Isolation:** The adapter completely ignores any host `OPENAI_BASE_URL` environment variables, preventing inherited shell configurations or malicious processes from rerouting API traffic to untrusted proxies.
+- **Zero AI Gateway:** Neither AI Gateway nor third-party intermediaries are configured or permitted.
+
+### 18.5 Responses API & `store: false` Privacy Enforcement
+- **OpenAI Responses API:** The adapter explicitly instantiates language models via `openai.responses(modelId)`.
+- **Data Privacy Guarantee:** Every generation and streaming request enforces `providerOptions: { openai: { store: false } }`. OpenAI is explicitly instructed never to store user prompts, chat messages, or outputs on server storage for model training or logging.
+
+### 18.6 Connection Testing (Zero-Token Model Retrieval)
+- **Method:** `testConnection(apiKey: string, modelId?: string, signal?: AbortSignal): Promise<ConnectionTestResult>`
+- **Endpoint:** `GET https://api.openai.com/v1/models/{modelId}`
+- **Zero Generation Cost:** Rather than generating tokens solely to verify key validity, connection testing executes an authenticated GET request against the model metadata endpoint.
+- **Verification Guarantee:** Confirms API key authentication and model visibility while consuming zero generation tokens.
+
+### 18.7 Text Generation & Streaming Implementation
+- **Text Generation (`generateText`):**
+  - Resolves model through `ProviderRegistry`. Rejects unknown or non-OpenAI models.
+  - Normalizes system instructions and conversation turns.
+  - Enforces temperature and token output constraints.
+  - Normalizes return data into typed `GenerateTextResult` (`text`, `finishReason`, `usage`).
+- **Text Streaming (`streamText`):**
+  - Yields asynchronous chunks matching the `StreamTextChunk` contract (`text-delta`, `finish`, `error`).
+  - Converts OpenAI SSE delta events into real-time text chunks.
+  - Returns final usage statistics and normalized finish reason upon completion.
+
+### 18.8 Ephemeral Credential Lifecycle & Cancellation
+- **No Global Client Caching:** `OpenAIAdapter` never caches provider instances or stores API keys in instance variables. Clients are instantiated ephemerally inside individual method invocations.
+- **Cancellation & Timeout Handling:**
+  - Connection tests default to a 15,000ms timeout.
+  - Generation and streaming requests default to a 60,000ms timeout.
+  - All operations listen to caller-supplied `AbortSignal` instances and abort HTTP connections immediately when triggered.
+
+### 18.9 Error Sanitization Architecture
+All OpenAI API errors, network issues, and timeouts are intercepted and converted into sanitized `ProviderError` instances:
+
+| OpenAI HTTP / Exception State | Application Error Code | Sanitized User Message | Retryable |
+|---|---|---|---|
+| HTTP 401 | `AUTHENTICATION_FAILED` | OpenAI authentication failed. Please verify your API key. | No |
+| HTTP 403 | `PERMISSION_DENIED` | Access forbidden. Your OpenAI API key does not have permission for this resource. | No |
+| HTTP 404 | `MODEL_NOT_FOUND` | The requested OpenAI model was not found or is unavailable for this key. | No |
+| HTTP 429 (rate limit) | `RATE_LIMITED` | OpenAI rate limit exceeded. Please retry after a brief delay. | Yes |
+| HTTP 429 (quota) | `QUOTA_EXCEEDED` | OpenAI account quota exceeded. Please check your plan and billing details. | No |
+| HTTP 400 / 422 | `INVALID_REQUEST` | The request was rejected by OpenAI as invalid. | No |
+| HTTP 5xx | `SERVER_ERROR` | OpenAI servers are temporarily unavailable. Please retry later. | Yes |
+| TypeError / Connection Refused | `NETWORK_ERROR` | Network connection failure while contacting OpenAI. | Yes |
+| Timeout | `TIMEOUT` | Request to OpenAI timed out. | Yes |
+| AbortSignal triggered | `OPERATION_ABORTED` | The operation was aborted by the client. | No |
+
+**Security Invariant:** Sanitized errors never contain plaintext API keys, authorization headers, raw response bodies, or user prompt content.
+
+### 18.10 Automated Test Suite (`openai-adapter.test.ts`)
+25 comprehensive automated tests verify all required adapter behaviors using injected mock fetch handlers (no live network calls or real API keys):
+1. Adapter identifies as `openai`.
+2. Only registered OpenAI models are accepted.
+3. Unknown models are rejected.
+4. Another provider's model is rejected.
+5. Connection test sends an authenticated GET to the official models endpoint.
+6. Successful model lookup returns success and latency.
+7. HTTP 401 maps to `AUTHENTICATION_FAILED`.
+8. HTTP 404 maps to `MODEL_NOT_FOUND`.
+9. HTTP 429 maps to `RATE_LIMITED` or `QUOTA_EXCEEDED`.
+10. HTTP 5xx maps to `SERVER_ERROR`.
+11. Network failures are sanitized into `NETWORK_ERROR`.
+12. Test request cancellation works via `AbortSignal`.
+13. Test timeout works.
+14. Text generation produces normalized text, finish reason, and usage.
+15. Message conversion preserves ordering and roles.
+16. Streaming emits ordered text delta events.
+17. Streaming emits completion with finish reason and usage.
+18. Streaming errors are sanitized into error chunks.
+19. Streaming cancellation stops processing immediately.
+20. Unsupported tool requests are rejected with `UNSUPPORTED_CAPABILITY`.
+21. Unsupported image input is rejected with `UNSUPPORTED_CAPABILITY`.
+22. Unsupported structured output is rejected with `UNSUPPORTED_CAPABILITY`.
+23. `store: false` is explicitly passed in all generation requests.
+24. Fixed official base URL is used even if `OPENAI_BASE_URL` is set in the environment.
+25. No API key or Authorization header appears in returned errors or sanitized messages.
+
+### 18.11 Limitations Deferred to Step 3.9
+1. **Tool Calling & Multimodal Vision:** Deferred to dedicated agent tool and multimodal prompt steps (Step 3.9+).
+2. **Other Providers:** Anthropic Claude and Google Gemini adapters are implemented in subsequent steps (Steps 3.5 and 3.6).
+3. **Renderer Exposure:** Adapter remains purely Main-process and is not yet exposed via Preload IPC.
+
+
 
 
 

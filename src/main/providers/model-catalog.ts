@@ -9,10 +9,10 @@ export const INITIAL_PROVIDERS: ReadonlyArray<ProviderDescriptor> = Object.freez
     id: 'openai',
     displayName: 'OpenAI',
     description:
-      'Frontier intelligence models including GPT-4o, reasoning models (o1), and structured output support.',
+      'Frontier intelligence models including GPT-6 Luna, GPT-6.1 Sol, GPT-6 Astra, and reasoning models.',
     docUrl: 'https://developers.openai.com/api/docs/models',
     isSupported: true,
-    defaultModelId: 'gpt-4o'
+    defaultModelId: 'gpt-6-luna'
   }),
   Object.freeze({
     id: 'anthropic',
@@ -45,11 +45,11 @@ export const INITIAL_PROVIDERS: ReadonlyArray<ProviderDescriptor> = Object.freez
 export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
   // --- OpenAI Models ---
   Object.freeze({
-    id: 'gpt-4o',
+    id: 'gpt-6-luna',
     providerId: 'openai',
-    displayName: 'GPT-4o',
+    displayName: 'GPT-6 Luna',
     description:
-      'Flagship multimodal model designed for high-intelligence reasoning, tool use, and complex tasks.',
+      'Cost-sensitive, high-speed multimodal model built for responsive workflows and lightweight reasoning.',
     availability: 'stable',
     contextWindow: Object.freeze({
       inputTokens: 128000,
@@ -64,15 +64,15 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
     docUrl: 'https://developers.openai.com/api/docs/models'
   }),
   Object.freeze({
-    id: 'gpt-4o-mini',
+    id: 'gpt-6.1-sol',
     providerId: 'openai',
-    displayName: 'GPT-4o mini',
+    displayName: 'GPT-6.1 Sol',
     description:
-      'Fast, cost-efficient multimodal model for lightweight workflows, quick classification, and high volume.',
+      'Balanced flagship intelligence model for multi-step reasoning, coding, and general agentic workflows.',
     availability: 'stable',
     contextWindow: Object.freeze({
-      inputTokens: 128000,
-      outputTokens: 16384
+      inputTokens: 256000,
+      outputTokens: 32768
     }),
     capabilities: Object.freeze({
       streaming: true,
@@ -83,34 +83,34 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
     docUrl: 'https://developers.openai.com/api/docs/models'
   }),
   Object.freeze({
-    id: 'o1-mini',
+    id: 'gpt-6-astra',
     providerId: 'openai',
-    displayName: 'o1-mini',
+    displayName: 'GPT-6 Astra',
     description:
-      'Specialized reasoning model optimized for STEM, math, and code generation tasks without vision.',
+      'Advanced reasoning and frontier analytical model for deep multi-turn problem solving and synthesis.',
     availability: 'stable',
     contextWindow: Object.freeze({
-      inputTokens: 128000,
+      inputTokens: 256000,
       outputTokens: 65536
     }),
     capabilities: Object.freeze({
       streaming: true,
-      tools: false,
-      imageInput: false,
+      tools: true,
+      imageInput: true,
       structuredOutput: true
     }),
     docUrl: 'https://developers.openai.com/api/docs/models'
   }),
   Object.freeze({
-    id: 'o1-preview',
+    id: 'gpt-6.1-terra',
     providerId: 'openai',
-    displayName: 'o1-preview',
+    displayName: 'GPT-6.1 Terra',
     description:
-      'Early preview reasoning model for complex multi-step reasoning problems before response generation.',
+      'Preview frontier scientific and mathematical reasoning model with rigorous self-verification.',
     availability: 'preview',
     contextWindow: Object.freeze({
-      inputTokens: 128000,
-      outputTokens: 32768
+      inputTokens: 256000,
+      outputTokens: 65536
     }),
     capabilities: Object.freeze({
       streaming: false,

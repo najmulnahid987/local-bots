@@ -78,15 +78,15 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
 
     expect(providerRegistry.getModels('unsupported_vendor')).toEqual([])
     expect(providerRegistry.getDefaultModel('unsupported_vendor')).toBeNull()
-    expect(providerRegistry.supportsCapability('unsupported_vendor', 'gpt-4o', 'streaming')).toBe(
-      false
-    )
+    expect(
+      providerRegistry.supportsCapability('unsupported_vendor', 'gpt-6-luna', 'streaming')
+    ).toBe(false)
   })
 
   // Test 5: Unknown model lookup is handled safely
   it('5. safely handles lookup of unknown model IDs without assuming capabilities', () => {
     expect(providerRegistry.getModel('openai', 'non-existent-model')).toBeNull()
-    expect(providerRegistry.getModel('anthropic', 'gpt-4o')).toBeNull()
+    expect(providerRegistry.getModel('anthropic', 'gpt-6-luna')).toBeNull()
     expect(providerRegistry.getModel('google', '')).toBeNull()
 
     // Unknown models must NEVER receive assumed capabilities
@@ -103,9 +103,9 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     const duplicateModels: ModelDescriptor[] = [
       ...INITIAL_MODELS,
       {
-        id: 'gpt-4o',
+        id: 'gpt-6-luna',
         providerId: 'openai',
-        displayName: 'Duplicate GPT-4o',
+        displayName: 'Duplicate GPT-6 Luna',
         description: 'Duplicate registration',
         availability: 'stable',
         capabilities: {
@@ -119,7 +119,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     ]
 
     expect(() => new ProviderRegistry(INITIAL_PROVIDERS, duplicateModels)).toThrow(
-      /Duplicate model ID 'gpt-4o' registered for provider 'openai'/
+      /Duplicate model ID 'gpt-6-luna' registered for provider 'openai'/
     )
   })
 
@@ -158,7 +158,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
   it('9. verifies default model lookup returns a registered model for each provider', () => {
     const openaiDefault = providerRegistry.getDefaultModel('openai')
     expect(openaiDefault).not.toBeNull()
-    expect(openaiDefault?.id).toBe('gpt-4o')
+    expect(openaiDefault?.id).toBe('gpt-6-luna')
 
     const anthropicDefault = providerRegistry.getDefaultModel('anthropic')
     expect(anthropicDefault).not.toBeNull()
@@ -171,16 +171,16 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
 
   // Test 10: Preview models are clearly distinguished from stable models
   it('10. verifies preview models are clearly distinguished from stable models', () => {
-    const o1Preview = providerRegistry.getModel('openai', 'o1-preview')
-    expect(o1Preview).not.toBeNull()
-    expect(o1Preview?.availability).toBe('preview')
+    const terraPreview = providerRegistry.getModel('openai', 'gpt-6.1-terra')
+    expect(terraPreview).not.toBeNull()
+    expect(terraPreview?.availability).toBe('preview')
 
     const geminiExp = providerRegistry.getModel('google', 'gemini-2.0-flash-exp')
     expect(geminiExp).not.toBeNull()
     expect(geminiExp?.availability).toBe('preview')
 
-    const gpt4o = providerRegistry.getModel('openai', 'gpt-4o')
-    expect(gpt4o?.availability).toBe('stable')
+    const gptLuna = providerRegistry.getModel('openai', 'gpt-6-luna')
+    expect(gptLuna?.availability).toBe('stable')
 
     const claudeSonnet = providerRegistry.getModel('anthropic', 'claude-3-5-sonnet-20241022')
     expect(claudeSonnet?.availability).toBe('stable')
@@ -202,20 +202,20 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
       expect(result.reason).toMatch(/multimodal image input/)
     }
 
-    // o1-mini also lacks imageInput
-    const o1Mini = providerRegistry.getModel('openai', 'o1-mini')!
-    expect(o1Mini.capabilities.imageInput).toBe(false)
-    const o1Result = validateModelCapabilities(o1Mini, { imageInput: true })
-    expect(o1Result.valid).toBe(false)
+    // gpt-6.1-terra also lacks imageInput
+    const terra = providerRegistry.getModel('openai', 'gpt-6.1-terra')!
+    expect(terra.capabilities.imageInput).toBe(false)
+    const terraResult = validateModelCapabilities(terra, { imageInput: true })
+    expect(terraResult.valid).toBe(false)
   })
 
   // Test 12: Unsupported tool capability is rejected
   it('12. capability validation rejects requests requiring tools when model lacks tools', () => {
-    // o1-mini and o1-preview do not support tools
-    const o1Mini = providerRegistry.getModel('openai', 'o1-mini')!
-    expect(o1Mini.capabilities.tools).toBe(false)
+    // gpt-6.1-terra does not support tools
+    const terra = providerRegistry.getModel('openai', 'gpt-6.1-terra')!
+    expect(terra.capabilities.tools).toBe(false)
 
-    const result = validateModelCapabilities(o1Mini, { tools: true })
+    const result = validateModelCapabilities(terra, { tools: true })
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.unsupportedCapabilities).toContain('tools')
@@ -225,11 +225,11 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
 
   // Test 13: Unsupported structured output is rejected
   it('13. capability validation rejects requests requiring structured output when model lacks structuredOutput', () => {
-    // o1-preview does not support structuredOutput
-    const o1Preview = providerRegistry.getModel('openai', 'o1-preview')!
-    expect(o1Preview.capabilities.structuredOutput).toBe(false)
+    // gpt-6.1-terra does not support structuredOutput
+    const terra = providerRegistry.getModel('openai', 'gpt-6.1-terra')!
+    expect(terra.capabilities.structuredOutput).toBe(false)
 
-    const result = validateModelCapabilities(o1Preview, { structuredOutput: true })
+    const result = validateModelCapabilities(terra, { structuredOutput: true })
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.unsupportedCapabilities).toContain('structuredOutput')
@@ -239,11 +239,11 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
 
   // Test 14: Unsupported streaming is rejected
   it('14. capability validation rejects requests requiring streaming when model lacks streaming', () => {
-    // o1-preview does not support streaming
-    const o1Preview = providerRegistry.getModel('openai', 'o1-preview')!
-    expect(o1Preview.capabilities.streaming).toBe(false)
+    // gpt-6.1-terra does not support streaming
+    const terra = providerRegistry.getModel('openai', 'gpt-6.1-terra')!
+    expect(terra.capabilities.streaming).toBe(false)
 
-    const result = validateModelCapabilities(o1Preview, { streaming: true })
+    const result = validateModelCapabilities(terra, { streaming: true })
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.unsupportedCapabilities).toContain('streaming')
@@ -264,7 +264,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     expect(
       providerRegistry.supportsCapability(
         'unknown_provider' as unknown as ProviderId,
-        'gpt-4o',
+        'gpt-6-luna',
         'streaming'
       )
     ).toBe(false)
@@ -304,7 +304,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
       ;(provider as unknown as Record<string, unknown>).displayName = 'Hacked Name'
     }).toThrow()
 
-    const model = providerRegistry.getModel('openai', 'gpt-4o')!
+    const model = providerRegistry.getModel('openai', 'gpt-6-luna')!
     expect(Object.isFrozen(model)).toBe(true)
     expect(Object.isFrozen(model.capabilities)).toBe(true)
 
@@ -313,7 +313,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     }).toThrow()
 
     // Verify registry internal state remained unchanged
-    const pristineModel = providerRegistry.getModel('openai', 'gpt-4o')!
+    const pristineModel = providerRegistry.getModel('openai', 'gpt-6-luna')!
     expect(pristineModel.capabilities.streaming).toBe(true)
   })
 
@@ -364,7 +364,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     const providers = providerRegistry.getProviders()
     const allModels = providerRegistry.getModels()
     const defaultModel = providerRegistry.getDefaultModel('openai')
-    const capCheck = providerRegistry.supportsCapability('openai', 'gpt-4o', 'tools')
+    const capCheck = providerRegistry.supportsCapability('openai', 'gpt-6-luna', 'tools')
     const validation = providerRegistry.validateCapabilities(allModels[0], { streaming: true })
 
     const elapsed = performance.now() - start

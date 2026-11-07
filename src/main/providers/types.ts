@@ -88,10 +88,13 @@ export type CapabilityValidationResult =
  */
 export type ProviderErrorCode =
   | 'AUTHENTICATION_FAILED'
+  | 'PERMISSION_DENIED'
   | 'RATE_LIMITED'
+  | 'QUOTA_EXCEEDED'
   | 'MODEL_NOT_FOUND'
   | 'CONTEXT_LENGTH_EXCEEDED'
   | 'NETWORK_ERROR'
+  | 'TIMEOUT'
   | 'INVALID_REQUEST'
   | 'SERVER_ERROR'
   | 'UNSUPPORTED_CAPABILITY'

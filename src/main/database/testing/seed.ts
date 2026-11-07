@@ -33,7 +33,7 @@ export function seedTestWorkspace(context: SeedContext): TestWorkspace {
 
   const botAlpha = createBotFixture(botRepo, kbA.id, {
     name: 'Bot Alpha',
-    modelId: 'gpt-4o',
+    modelId: 'gpt-6-luna',
     description: 'Lead research agent',
     toolPermissions: ['read_knowledge_base_document', 'prepare_report']
   })

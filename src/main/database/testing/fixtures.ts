@@ -41,7 +41,7 @@ export function createBotFixture(
   overrides?: Partial<Omit<CreateBotInput, 'knowledgeBaseId'>>
 ): Bot {
   const name = overrides?.name ?? `Test Bot ${botCounter++}`
-  const modelId = overrides?.modelId ?? 'gpt-4o'
+  const modelId = overrides?.modelId ?? 'gpt-6-luna'
   const description = overrides?.description ?? 'Test Bot Fixture'
   const systemPrompt = overrides?.systemPrompt ?? 'You are a test assistant.'
   const status = overrides?.status ?? 'active'

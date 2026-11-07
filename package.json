@@ -24,8 +24,10 @@
     "build:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
+    "@ai-sdk/openai": "4.0.110",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "ai": "7.0.164",
     "better-sqlite3": "^13.0.3",
     "lucide-react": "^1.70.0",
     "react-router-dom": "^7.18.5",
