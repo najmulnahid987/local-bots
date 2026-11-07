@@ -115,16 +115,16 @@ describe('OpenAIAdapter (Phase 3 Step 3.4)', () => {
   })
 
   // 4. Another provider's model is rejected
-  it('4. rejects models belonging to another provider (e.g. Anthropic claude-3-5-sonnet)', async () => {
+  it('4. rejects models belonging to another provider (e.g. Anthropic claude-sonnet-5-5)', async () => {
     const adapter = new OpenAIAdapter()
 
-    const testRes = await adapter.testConnection(dummyApiKey, 'claude-3-5-sonnet-20241022')
+    const testRes = await adapter.testConnection(dummyApiKey, 'claude-sonnet-5-5')
     expect(testRes.success).toBe(false)
     expect(testRes.error?.code).toBe('MODEL_NOT_FOUND')
 
     await expect(
       adapter.generateText(dummyApiKey, {
-        modelId: 'claude-3-5-sonnet-20241022',
+        modelId: 'claude-sonnet-5-5',
         messages: [{ role: 'user', content: 'Hello' }]
       })
     ).rejects.toThrow(ProviderAdapterError)

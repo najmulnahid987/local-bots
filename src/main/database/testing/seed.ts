@@ -40,7 +40,7 @@ export function seedTestWorkspace(context: SeedContext): TestWorkspace {
 
   const botBeta = createBotFixture(botRepo, kbA.id, {
     name: 'Bot Beta',
-    modelId: 'claude-3-5-sonnet-20241022',
+    modelId: 'claude-sonnet-5-5',
     description: 'Code reviewer agent',
     toolPermissions: ['search_knowledge_base', 'read_project_file']
   })

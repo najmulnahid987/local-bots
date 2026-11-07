@@ -162,7 +162,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
 
     const anthropicDefault = providerRegistry.getDefaultModel('anthropic')
     expect(anthropicDefault).not.toBeNull()
-    expect(anthropicDefault?.id).toBe('claude-3-5-sonnet-20241022')
+    expect(anthropicDefault?.id).toBe('claude-sonnet-5-5')
 
     const googleDefault = providerRegistry.getDefaultModel('google')
     expect(googleDefault).not.toBeNull()
@@ -182,7 +182,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     const gptLuna = providerRegistry.getModel('openai', 'gpt-6-luna')
     expect(gptLuna?.availability).toBe('stable')
 
-    const claudeSonnet = providerRegistry.getModel('anthropic', 'claude-3-5-sonnet-20241022')
+    const claudeSonnet = providerRegistry.getModel('anthropic', 'claude-sonnet-5-5')
     expect(claudeSonnet?.availability).toBe('stable')
 
     const geminiPro = providerRegistry.getModel('google', 'gemini-1.5-pro')
@@ -191,8 +191,8 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
 
   // Test 11: Unsupported image capability is rejected
   it('11. capability validation rejects requests requiring image input when model lacks imageInput', () => {
-    // Claude 3.5 Haiku is text-only at launch (imageInput: false)
-    const haiku = providerRegistry.getModel('anthropic', 'claude-3-5-haiku-20241022')!
+    // Claude Haiku 5.5 is text-only (imageInput: false)
+    const haiku = providerRegistry.getModel('anthropic', 'claude-haiku-5-5')!
     expect(haiku.capabilities.imageInput).toBe(false)
 
     const result = validateModelCapabilities(haiku, { imageInput: true })

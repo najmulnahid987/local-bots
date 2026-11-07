@@ -18,10 +18,10 @@ export const INITIAL_PROVIDERS: ReadonlyArray<ProviderDescriptor> = Object.freez
     id: 'anthropic',
     displayName: 'Anthropic',
     description:
-      'Safety-focused frontier models including Claude 3.5 Sonnet, Claude 3.5 Haiku, and Claude 3 Opus.',
+      'Safety-focused frontier intelligence models including Claude Sonnet 5.5, Claude Opus 5.5, and Claude Haiku 5.5.',
     docUrl: 'https://platform.claude.com/docs/en/models/overview',
     isSupported: true,
-    defaultModelId: 'claude-3-5-sonnet-20241022'
+    defaultModelId: 'claude-sonnet-5-5'
   }),
   Object.freeze({
     id: 'google',
@@ -123,15 +123,15 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
 
   // --- Anthropic Models ---
   Object.freeze({
-    id: 'claude-3-5-sonnet-20241022',
+    id: 'claude-sonnet-5-5',
     providerId: 'anthropic',
-    displayName: 'Claude 3.5 Sonnet',
+    displayName: 'Claude Sonnet 5.5',
     description:
-      'Anthropic flagship model combining industry-leading reasoning, coding, and vision with fast execution.',
+      'Anthropic flagship model balancing frontier intelligence with high execution speed and 1M context.',
     availability: 'stable',
     contextWindow: Object.freeze({
-      inputTokens: 200000,
-      outputTokens: 8192
+      inputTokens: 1000000,
+      outputTokens: 128000
     }),
     capabilities: Object.freeze({
       streaming: true,
@@ -142,15 +142,15 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
     docUrl: 'https://platform.claude.com/docs/en/models/overview'
   }),
   Object.freeze({
-    id: 'claude-3-5-haiku-20241022',
+    id: 'claude-haiku-5-5',
     providerId: 'anthropic',
-    displayName: 'Claude 3.5 Haiku',
+    displayName: 'Claude Haiku 5.5',
     description:
-      'Fastest Claude model for rapid responsiveness and high-volume text operations. Text-only input.',
+      'Fastest and most cost-sensitive Claude model for high-frequency workflows and lightweight tasks. Text-only input.',
     availability: 'stable',
     contextWindow: Object.freeze({
-      inputTokens: 200000,
-      outputTokens: 8192
+      inputTokens: 1000000,
+      outputTokens: 128000
     }),
     capabilities: Object.freeze({
       streaming: true,
@@ -161,15 +161,15 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
     docUrl: 'https://platform.claude.com/docs/en/models/overview'
   }),
   Object.freeze({
-    id: 'claude-3-opus-20240229',
+    id: 'claude-opus-5-5',
     providerId: 'anthropic',
-    displayName: 'Claude 3 Opus',
+    displayName: 'Claude Opus 5.5',
     description:
-      'High-intelligence Claude model for open-ended analysis, extensive documentation synthesis, and research.',
+      'Most intelligent Claude model for open-ended analysis, extensive documentation synthesis, and deep research.',
     availability: 'stable',
     contextWindow: Object.freeze({
-      inputTokens: 200000,
-      outputTokens: 4096
+      inputTokens: 1000000,
+      outputTokens: 128000
     }),
     capabilities: Object.freeze({
       streaming: true,

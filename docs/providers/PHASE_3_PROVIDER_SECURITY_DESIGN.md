@@ -1172,6 +1172,114 @@ All OpenAI API errors, network issues, and timeouts are intercepted and converte
 2. **Other Providers:** Anthropic Claude and Google Gemini adapters are implemented in subsequent steps (Steps 3.5 and 3.6).
 3. **Renderer Exposure:** Adapter remains purely Main-process and is not yet exposed via Preload IPC.
 
+---
+
+## 19. Anthropic Claude Provider Adapter Specification (Step 3.5)
+
+### 19.1 Architectural Scope & Core Invariants
+The Anthropic Claude provider adapter resides strictly within the Electron Main process (`src/main/providers/anthropic/`) and implements the shared `ProviderAdapter` contract established in Step 3.3.
+
+It executes direct HTTPS communications with Anthropic's official API servers with zero intermediary cloud proxies, gateways, or persistent key caching:
+- **Official Base URL:** Fixed to `https://api.anthropic.com/v1` via `ANTHROPIC_OFFICIAL_BASE_URL`.
+- **Environment Overrides Forbidden:** `process.env.ANTHROPIC_BASE_URL` is explicitly ignored. All outbound requests route solely to the hardcoded official domain.
+- **Header Protocol:** Uses `x-api-key: <apiKey>` and `anthropic-version: 2023-06-01` (`ANTHROPIC_DEFAULT_VERSION`). Never sends `Authorization: Bearer` headers.
+- **Ephemeral Lifecycle:** Provider instances are instantiated on-demand per request via `createAnthropic({ apiKey, baseURL, fetch })`. Decrypted keys reside only ephemerally in active call stacks.
+
+### 19.2 Package Installation & Dependency Isolation
+The adapter uses Vercel's official Anthropic integration package:
+- Package: `@ai-sdk/anthropic@4.0.98` (pinned in `package.json`).
+- Fully compatible with `ai@7.0.164`, `@ai-sdk/openai@4.0.110`, and `zod`.
+- Strict Node.js 24 and TypeScript 5.x runtime compatibility.
+
+### 19.3 Model Catalog & Capability Matrix
+The model catalog (`src/main/providers/model-catalog.ts`) defines verified, authoritative metadata for three first-wave Anthropic models:
+- **`claude-sonnet-5-5` (Default):** Stable; 1,000,000 input tokens; 128,000 output tokens. Streaming, structured output, and tools supported; image input supported.
+- **`claude-opus-5-5`:** Stable; 1,000,000 input tokens; 128,000 output tokens. Deep architectural reasoning and code generation.
+- **`claude-haiku-5-5`:** Stable; 1,000,000 input tokens; 128,000 output tokens. High-throughput, text-only (image input marked `false`).
+
+### 19.4 Data Retention & Privacy Guarantees
+- **Commercial API Terms:** Under Anthropic's standard commercial terms, user data (prompts and completions) submitted through direct API keys is not used to train generative models and is retained for a maximum of 30 days for abuse monitoring before automatic deletion.
+- **Zero Data Retention (ZDR):** ZDR is an enterprise organizational contract arrangement with Anthropic. It cannot be assumed for arbitrary user BYOK keys.
+- **No Client `store` Parameter:** Anthropic's Messages API does not support a `store: false` parameter. Passing synthetic parameters causes API validation errors. Privacy guarantees rely on Anthropic's commercial developer terms and direct endpoint routing.
+
+### 19.5 Connection Testing (Zero-Token Model Retrieval)
+- **Method:** `testConnection(apiKey: string, modelId?: string, signal?: AbortSignal): Promise<ConnectionTestResult>`
+- **Endpoint:** `GET https://api.anthropic.com/v1/models/{model_id}`
+- **Zero Token Invariant:** Verifies API key validity, account access, and model availability using a lightweight HTTP GET request against the models metadata endpoint without consuming text generation tokens.
+
+### 19.6 Text Generation & System Prompt Separation
+- **Messages API Architecture:** Anthropic requires system instructions to be passed separately from user and assistant turns via a top-level `system` parameter.
+- **Conversion Logic:** `convertMessages()` separates `options.systemPrompt` and any `{ role: 'system' }` messages from conversational turns, concatenating them into the `system` parameter while preserving conversational turn order (`user` / `assistant`).
+- **Capability Gating:** Rejects unsupported capabilities (tools, JSON schemas, image input) in Phase 3 Step 3.5 with typed `UNSUPPORTED_CAPABILITY` errors.
+
+### 19.7 Text Streaming Implementation
+- Yields asynchronous `StreamTextChunk` events (`text-delta`, `finish`, `error`).
+- Translates Anthropic SSE events (`content_block_delta`, `message_delta`, `message_stop`) into normalized chunks.
+- Maps stop reasons (`end_turn` -> `stop`, `max_tokens` -> `length`).
+- Handles `AbortSignal` cancellation immediately without leaking network sockets.
+
+### 19.8 Error Normalization & Sanitization
+All raw Anthropic exceptions, HTTP errors, and network failures are intercepted and normalized into sanitized `ProviderError` instances:
+
+| Anthropic HTTP / Error Type | Application Error Code | Sanitized Message | Retryable |
+|---|---|---|---|
+| HTTP 401 (`authentication_error`) | `AUTHENTICATION_FAILED` | Anthropic authentication failed. Please verify your API key. | No |
+| HTTP 403 (`permission_error`) | `PERMISSION_DENIED` | Access forbidden. Your Anthropic API key does not have permission for this resource. | No |
+| HTTP 404 (`not_found_error`) | `MODEL_NOT_FOUND` | The requested Anthropic model was not found or is unavailable for this key. | No |
+| HTTP 413 (`invalid_request_error`) | `CONTEXT_LENGTH_EXCEEDED` | The prompt or context length exceeds Anthropic model limits. | No |
+| HTTP 429 (`rate_limit_error`) | `RATE_LIMITED` | Anthropic rate limit exceeded. Please retry after a brief delay. | Yes |
+| HTTP 429 (credit / balance low) | `QUOTA_EXCEEDED` | Anthropic account quota or credit balance exhausted. Please check your billing details. | No |
+| HTTP 529 (`overloaded_error`) | `SERVER_ERROR` | Anthropic servers are temporarily overloaded. Please retry later. | Yes |
+| HTTP 5xx (`api_error`) | `SERVER_ERROR` | Anthropic servers are temporarily unavailable. Please retry later. | Yes |
+| HTTP 400 / 422 | `INVALID_REQUEST` | The request was rejected by Anthropic as invalid. | No |
+| Timeout / AbortController | `TIMEOUT` | Request to Anthropic timed out. | Yes |
+| Network / Socket Error | `NETWORK_ERROR` | Network connection failure while contacting Anthropic. | Yes |
+| AbortSignal | `OPERATION_ABORTED` | The operation was aborted by the client. | No |
+
+**Security Guarantee:** Sanitized error structures never contain API keys, `x-api-key` headers, or user prompt content.
+
+### 19.9 Automated Test Suite (`anthropic-adapter.test.ts`)
+33 comprehensive automated tests verify all required adapter behaviors using mock fetch injection:
+1. Adapter identifies as `anthropic`.
+2. Valid model acceptance (`claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-opus-5-5`).
+3. Unknown model rejection.
+4. Cross-provider model rejection (`gpt-6-luna`, `gemini-3.1-pro`).
+5. Connection test sends authenticated GET to `/v1/models/{model_id}`.
+6. Custom model selection in connection test.
+7. Default model fallback (`claude-sonnet-5-5`).
+8. Sends required Anthropic headers (`x-api-key`, `anthropic-version: 2023-06-01`, `User-Agent`).
+9. Rejects empty or whitespace-only keys without network calls.
+10. HTTP 401 maps to `AUTHENTICATION_FAILED`.
+11. HTTP 403 maps to `PERMISSION_DENIED`.
+12. HTTP 404 maps to `MODEL_NOT_FOUND`.
+13. HTTP 413 maps to `CONTEXT_LENGTH_EXCEEDED`.
+14. HTTP 429 maps to `RATE_LIMITED`.
+15. HTTP 429 credit exhaustion maps to `QUOTA_EXCEEDED`.
+16. HTTP 529 overloaded maps to `SERVER_ERROR`.
+17. HTTP 500/503 maps to `SERVER_ERROR`.
+18. Unexpected HTTP status code (418) maps to `UNKNOWN_ERROR`.
+19. Connection test timeout handling.
+20. Pre-aborted `AbortSignal` handling without network calls.
+21. Mid-flight `AbortSignal` cancellation handling.
+22. Single text generation with normalized usage and finish reason.
+23. System prompt separation into top-level system parameter.
+24. Multi-turn conversational history preservation.
+25. Finish reason normalization (`end_turn` -> `stop`, `max_tokens` -> `length`).
+26. Text streaming with deltas, finish event, and token usage.
+27. Streaming error chunk propagation with sanitization.
+28. Mid-stream abort cancellation handling.
+29. Rejects unsupported tool calling with `UNSUPPORTED_CAPABILITY`.
+30. Rejects unsupported structured output with `UNSUPPORTED_CAPABILITY`.
+31. Rejects multimodal image inputs with `UNSUPPORTED_CAPABILITY`.
+32. Fixed base URL enforcement (`ANTHROPIC_BASE_URL` ignored).
+33. Zero API key leakage in error objects and messages.
+
+### 19.10 Post-Step 3.5 Scope Boundaries
+- **Google Gemini Adapter:** Deferred to Step 3.6.
+- **Provider Manager Service & IPC:** Deferred to Step 3.7.
+- **Settings UI & Connection Testing UI:** Deferred to Step 3.8.
+- **Multimodal & Tool Orchestration:** Deferred to Step 3.9+.
+
 
 
 

@@ -114,6 +114,20 @@ export interface ProviderError {
 }
 
 /**
+ * Standard Error class wrapping a sanitized, typed ProviderError.
+ */
+export class ProviderAdapterError extends Error {
+  readonly error: ProviderError
+
+  constructor(error: ProviderError) {
+    super(error.message)
+    this.name = 'ProviderAdapterError'
+    this.error = error
+    Object.setPrototypeOf(this, ProviderAdapterError.prototype)
+  }
+}
+
+/**
  * Unified multimodal message content part.
  */
 export type MessageContentPart =

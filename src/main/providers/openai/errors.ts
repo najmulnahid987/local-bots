@@ -1,18 +1,6 @@
-import { type ProviderError, type ProviderErrorCode } from '../types'
+import { type ProviderError, type ProviderErrorCode, ProviderAdapterError } from '../types'
 
-/**
- * Custom error class wrapping a sanitized, typed ProviderError.
- */
-export class ProviderAdapterError extends Error {
-  readonly error: ProviderError
-
-  constructor(error: ProviderError) {
-    super(error.message)
-    this.name = 'ProviderAdapterError'
-    this.error = error
-    Object.setPrototypeOf(this, ProviderAdapterError.prototype)
-  }
-}
+export { ProviderAdapterError }
 
 /**
  * Sanitizes and normalizes an unknown error from OpenAI or the AI SDK into an application-safe ProviderError.

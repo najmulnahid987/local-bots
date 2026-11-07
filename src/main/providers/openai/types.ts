@@ -34,4 +34,3 @@ export interface OpenAIAdapterOptions {
    */
   readonly generationTimeoutMs?: number
 }
-
