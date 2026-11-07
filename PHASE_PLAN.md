@@ -408,8 +408,8 @@ src/
 - **Step 3.5: Anthropic Claude Provider Adapter (Completed)**
 - **Step 3.6: Google Gemini Provider Adapter (Completed)**
 - **Step 3.7A: Provider Manager Service and Credential Lifecycle Orchestration (Completed)**
-- **Step 3.7B: Secure IPC Bridge and Renderer Preload Integration (Pending)**
-- **Step 3.8: Provider Management UI in Settings (Pending)**
+- **Step 3.7B: Secure IPC Bridge and Renderer Preload Integration (Completed)**
+- **Step 3.8: Provider Management UI in Settings (Next)**
 - **Step 3.9: End-to-End Integration Testing & Phase 3 Verification Gate (Pending)**
 
 ### 9.8 Database Changes

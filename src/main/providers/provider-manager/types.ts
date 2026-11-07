@@ -25,6 +25,7 @@ export interface ProviderConnectionSummary {
   readonly providerId: ProviderId
   readonly label: string
   readonly status: ProviderConnectionStatus
+  readonly hasCredential: boolean
   readonly createdAt: number
   readonly updatedAt: number
 }

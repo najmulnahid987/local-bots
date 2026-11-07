@@ -675,6 +675,7 @@ export class ProviderManagerService {
       providerId: connection.providerId as ProviderId,
       label: connection.label,
       status: connection.status,
+      hasCredential: Boolean(connection.credentialRef && connection.credentialRef.length > 0),
       createdAt: connection.createdAt,
       updatedAt: connection.updatedAt
     }

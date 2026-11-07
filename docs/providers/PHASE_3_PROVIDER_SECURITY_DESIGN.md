@@ -1531,9 +1531,116 @@ The `ProviderManagerService` test suite verifies:
 30. Public DTOs and errors never contain keys or `credential_ref` strings.
 
 ### 21.7 Post-Step 3.7A Scope Boundaries
-- **IPC Handlers & Preload Bridge:** Reserved for Step 3.7B.
-- **Provider Manager UI (`SettingsPage`):** Reserved for Step 3.8.
-- **Multimodal & Tool Orchestration:** Reserved for Step 3.9+.
+- **IPC Handlers & Preload Bridge:** Implemented in Step 3.7B.
+- **Provider Manager UI (`SettingsPage`):** Deferred to Step 3.8.
+- **Multimodal & Tool Orchestration:** Deferred to Step 3.9+.
+
+---
+
+## 22. Step 3.7B: Secure IPC Bridge and Preload Integration
+
+### 22.1 Overview & Security Boundary Architecture
+Step 3.7B exposes `ProviderManagerService` to the Electron Renderer through a strictly typed, narrow Preload contract (`window.api.providers`).
+
+```mermaid
+sequenceDiagram
+    participant R as Renderer (React)
+    participant P as Preload Bridge (window.api.providers)
+    participant M as Main Process (provider-handlers.ts)
+    participant S as ProviderStreamManager
+    participant PMS as ProviderManagerService
+
+    Note over R,P: Renderer calls typed methods without Electron or IPC primitives
+    R->>P: window.api.providers.streamText(input, onEvent)
+    P->>P: Generate streamId UUID & register port listener
+    P->>M: ipcRenderer.invoke('provider:stream-start', { streamId, ...input })
+    M->>M: validateIpcSender(event) & Zod schema validation
+    M->>S: startStream(window, senderFrame, payload, PMS)
+    S->>S: Create MessageChannelMain (port1, port2)
+    S->>P: senderFrame.postMessage('provider:stream-port', { streamId }, [port2])
+    P->>P: Receive port2 & attach message/close listeners
+    S->>PMS: streamText(connectionId, modelId, options)
+    loop Ordered Streaming Chunks
+        PMS-->>S: yield StreamTextChunk
+        S->>P: port1.postMessage(chunk) -> port2.onmessage
+        P->>R: onEvent(chunk)
+    end
+    Note over R,P: User cancellation sends message through dedicated port
+    R->>P: handle.cancel()
+    P->>S: port2.postMessage({ type: 'cancel' })
+    S->>S: abortController.abort() & cleanup
+```
+
+### 22.2 IPC Channel Allowlist
+The application strictly permits only fixed channel names defined in `src/shared/ipc.ts`:
+- `provider:get-catalog`
+- `provider:list-connections`
+- `provider:test-draft-connection`
+- `provider:create-connection`
+- `provider:test-connection`
+- `provider:update-label`
+- `provider:replace-credential`
+- `provider:remove-connection`
+- `provider:generate-text`
+- `provider:stream-start`
+- `provider:stream-port` (port transfer via `senderFrame.postMessage`)
+
+Arbitrary channel names or generic `invoke(channel, payload)` calls are hard-blocked and not exposed to Renderer.
+
+### 22.3 Main-Process Sender Validation
+Every IPC handler enforces authoritative sender validation via `validateIpcSender(event, mainWindow)`:
+1. `event.sender` must strictly equal `mainWindow.webContents`.
+2. `event.senderFrame` must strictly equal `mainWindow.webContents.mainFrame`.
+3. Frame URL must match the trusted dev origin (`process.env.ELECTRON_RENDERER_URL`) or canonical local production file (`out/renderer/index.html`).
+4. Subframes, iframes, child popups, and destroyed windows are immediately rejected before executing any service method.
+
+### 22.4 Strict Zod Input Validation
+Every IPC payload is parsed using `.strict()` Zod schemas rejecting unexpected properties:
+- String lengths are hard-capped (labels: 100, keys: 500, models: 100, UUIDs: 36).
+- Messages array bounded: 1 to 100 messages.
+- Individual message content: max 200,000 characters.
+- Aggregate prompt size across all messages: max 1,000,000 characters.
+- Validation error messages are sanitized via `sanitizeErrorMessage` to guarantee no entered credentials ever echo into error strings.
+
+### 22.5 Safe Public DTO Contract & Secret Non-Leakage
+- `ProviderConnectionSummary` contains only `{ id, providerId, label, status, hasCredential, createdAt, updatedAt }`.
+- `hasCredential: boolean` replaces all legacy key-preview logic; partial key fragments and plaintext keys are never persisted or exposed.
+- Internal `credential_ref` strings are completely withheld from all public DTOs.
+- `ProviderCatalogDto` contains only model metadata and provider descriptions; no internal file paths or database names are exposed.
+
+### 22.6 Deliberate API-Key Ingestion Boundary
+Only three operations permit API keys crossing from Renderer to Main:
+- `testDraftConnection`
+- `createConnection`
+- `replaceCredential`
+
+API keys are never returned across IPC, never logged, and never kept in Renderer-accessible global state.
+
+### 22.7 Streaming Architecture & MessageChannelMain
+1. **Request Isolation:** Preload generates an unpredictable request UUID (`streamId`) and listens for the transferred port before initiating the stream.
+2. **Dedicated Channel:** Main creates a `MessageChannelMain`, transfers `port2` to the validated main frame, and retains `port1`.
+3. **Chunk Delivery:** Ordered events (`text-delta`, `finish`, `error`) flow across the dedicated port without polluting global IPC channels.
+4. **Immediate Cancellation:** Calling `handle.cancel()` posts `{ type: 'cancel' }` to `port2`, triggering `abortController.abort()` in Main and cleaning up port resources immediately.
+5. **Window Lifecycle Protection:** If the BrowserWindow is closed or navigates away, `ProviderStreamManager` automatically aborts all active streams for that window.
+6. **Concurrency Limit:** Each window is hard-capped at 5 concurrent active streams.
+
+### 22.8 Startup Registration Ordering
+In `src/main/index.ts`, IPC handlers register in a strictly verified sequence:
+1. Electron `app.whenReady()` triggers.
+2. SQLite database initializes with WAL mode and foreign key enforcement.
+3. Database migrations (001, 002) execute.
+4. `ProviderManagerService` initializes and completes startup credential reconciliation.
+5. If initialization succeeds: `registerProviderIpcHandlers` binds active handlers.
+6. If initialization fails: `registerFailingProviderIpcHandlers` registers fail-closed stubs returning `PROVIDER_SUBSYSTEM_UNAVAILABLE` with sanitized diagnostics.
+7. `BrowserWindow` is created only after persistence and IPC bridges are safely established.
+
+### 22.9 Error Normalization
+All IPC errors are sanitized via `formatIpcError` into structured JSON `{ code, message, retryable }`. The Preload bridge parses these into strongly typed `ProviderBridgeError` instances. Internal paths, stack traces, and SDK exceptions are never exposed to Renderer.
+
+### 22.10 Remaining Limitations & Deferred Scope
+- UI components for the Provider Manager are deferred to Step 3.8.
+- Multimodal image processing and function-calling tools are deferred to Phase 9.
+
 
 
 

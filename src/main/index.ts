@@ -2,9 +2,19 @@ import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { registerIpcHandlers, isTrustedRendererUrl } from './ipc'
+import {
+  registerIpcHandlers,
+  registerProviderIpcHandlers,
+  registerFailingProviderIpcHandlers,
+  isTrustedRendererUrl
+} from './ipc'
 import { databaseManager } from './database/connection'
 import { runMigrations, migrations } from './database/migrations'
+import { CredentialVault } from './security/credential-vault/credential-vault'
+import { ProviderConnectionRepository } from './database/repositories/provider-connection-repository'
+import { providerRegistry } from './providers/provider-registry'
+import { ProviderManagerService } from './providers/provider-manager/provider-manager-service'
+import { sanitizeErrorMessage } from './providers/provider-manager/errors'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -234,7 +244,7 @@ function createWindow(): void {
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -245,6 +255,7 @@ app.whenReady().then(() => {
   })
 
   // Initialize persistent SQLite database and execute migrations before window creation
+  let db
   try {
     const userDataPath = app.getPath('userData')
     const initResult = databaseManager.initialize(userDataPath)
@@ -260,8 +271,7 @@ app.whenReady().then(() => {
       })
     )
 
-    // Run versioned migrations against the open database
-    const db = databaseManager.getDatabase()
+    db = databaseManager.getDatabase()
     const migrationResult = runMigrations(db, migrations)
     console.log('[MIGRATIONS_COMPLETED]', JSON.stringify(migrationResult))
   } catch (dbError) {
@@ -270,8 +280,30 @@ app.whenReady().then(() => {
     return
   }
 
-  // Register secure Main process IPC handlers
+  // Register foundational IPC handlers
   registerIpcHandlers(() => mainWindow)
+
+  // Initialize ProviderManagerService and register provider IPC handlers
+  try {
+    const userDataPath = app.getPath('userData')
+    const vault = new CredentialVault({ vaultDir: join(userDataPath, 'credentials') })
+    const connectionRepo = new ProviderConnectionRepository(db)
+    const providerManager = new ProviderManagerService({
+      credentialVault: vault,
+      connectionRepo,
+      registry: providerRegistry
+    })
+
+    const recon = await providerManager.initialize()
+    console.log('[PROVIDER_SUBSYSTEM_INITIALIZED]', JSON.stringify(recon))
+    registerProviderIpcHandlers(() => mainWindow, providerManager)
+  } catch (providerError) {
+    console.error(
+      '[PROVIDER_SUBSYSTEM_INITIALIZATION_FAILED]',
+      sanitizeErrorMessage(String(providerError))
+    )
+    registerFailingProviderIpcHandlers(() => mainWindow, 'Provider subsystem failed to initialize.')
+  }
 
   createWindow()
 

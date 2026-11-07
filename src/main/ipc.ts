@@ -41,3 +41,5 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     }
   })
 }
+
+export * from './ipc/index'

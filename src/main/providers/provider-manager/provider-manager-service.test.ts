@@ -232,6 +232,7 @@ describe('ProviderManagerService (Phase 3 Step 3.7A)', () => {
     expect(summary.providerId).toBe('openai')
     expect(summary.label).toBe('Production OpenAI')
     expect(summary.status).toBe('active')
+    expect(summary.hasCredential).toBe(true)
     // Invariant: credentialRef is never exposed
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((summary as any).credentialRef).toBeUndefined()
