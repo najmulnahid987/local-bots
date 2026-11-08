@@ -411,6 +411,7 @@ describe('KnowledgeBaseRepository', () => {
           ready: 0,
           processing: 0,
           failed: 0,
+          needsReindex: 0,
           totalBytes: 0
         },
         indexing: {
@@ -491,7 +492,7 @@ describe('KnowledgeBaseRepository', () => {
         'application/pdf',
         1024,
         'a'.repeat(64),
-        'ready',
+        'completed',
         baseTime,
         baseTime + 500,
         baseTime + 1000
@@ -517,7 +518,7 @@ describe('KnowledgeBaseRepository', () => {
         null
       )
 
-      // Indexing doc (processing)
+      // Processing doc
       db.prepare(
         `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, created_at, updated_at, indexed_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -531,7 +532,7 @@ describe('KnowledgeBaseRepository', () => {
         'text/plain',
         512,
         'c'.repeat(64),
-        'indexing',
+        'processing',
         baseTime + 200,
         baseTime + 200,
         null
@@ -557,13 +558,34 @@ describe('KnowledgeBaseRepository', () => {
         null
       )
 
+      // Needs reindex doc
+      db.prepare(
+        `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, created_at, updated_at, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000015',
+        kb.id,
+        'doc5.txt',
+        'doc5.txt',
+        'doc5.txt',
+        'txt',
+        'text/plain',
+        256,
+        'e'.repeat(64),
+        'needs_reindex',
+        baseTime + 400,
+        baseTime + 400,
+        null
+      )
+
       const overview = repo.getOverview(kb.id)
       expect(overview.documents).toEqual({
-        total: 4,
+        total: 5,
         ready: 1,
         processing: 2,
         failed: 1,
-        totalBytes: 7680
+        needsReindex: 1,
+        totalBytes: 7936
       })
       expect(overview.indexing.lastIndexedAt).toBe(baseTime + 1000)
     })
@@ -585,7 +607,7 @@ describe('KnowledgeBaseRepository', () => {
         'text/plain',
         1000,
         'e'.repeat(64),
-        'ready',
+        'completed',
         now,
         now
       )
@@ -652,7 +674,7 @@ describe('KnowledgeBaseRepository', () => {
         'text/markdown',
         500,
         'f'.repeat(64),
-        'ready',
+        'completed',
         2000,
         2500,
         2500
@@ -752,7 +774,7 @@ describe('KnowledgeBaseRepository', () => {
         'text/plain',
         500,
         '2'.repeat(64),
-        'ready',
+        'completed',
         now,
         now
       )

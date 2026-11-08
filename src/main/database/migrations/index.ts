@@ -1,6 +1,7 @@
 import type { Migration } from './types'
 import initialSchemaSql from './001_initial_schema.sql?raw'
 import providerCredentialRefsSql from './002_provider_credential_refs.sql?raw'
+import knowledgeSourcesLifecycleAndFts5Sql from './003_knowledge_sources_lifecycle_and_fts5.sql?raw'
 
 export * from './types'
 export * from './runner'
@@ -10,6 +11,7 @@ export * from './runner'
  *
  * Migration 001 establishes the 11 core application relational tables and indexes.
  * Migration 002 evolves provider_connections to store opaque CredentialVault references.
+ * Migration 003 evolves knowledge_sources lifecycle statuses and establishes the knowledge_fts FTS5 foundation.
  */
 export const migrations: readonly Migration[] = [
   {
@@ -21,5 +23,11 @@ export const migrations: readonly Migration[] = [
     version: 2,
     name: 'provider_credential_refs',
     sql: providerCredentialRefsSql
+  },
+  {
+    version: 3,
+    name: 'knowledge_sources_lifecycle_and_fts5',
+    sql: knowledgeSourcesLifecycleAndFts5Sql,
+    disableForeignKeysForTableRebuild: true
   }
 ]

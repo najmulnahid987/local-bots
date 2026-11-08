@@ -211,19 +211,48 @@ export function runMigrations(
 
   // 5. Execute each pending migration inside an immediate transaction
   for (const migration of pendingMigrations) {
-    const executeTx = db.transaction(() => {
-      // Execute the migration DDL/DML
-      db.exec(migration.sql)
+    const disableFk = Boolean(migration.disableForeignKeysForTableRebuild)
+    if (disableFk) {
+      db.pragma('foreign_keys = OFF')
+    }
 
-      // Calculate checksum and record
-      const checksum = computeChecksum(migration.sql)
-      const appliedAt = Date.now()
-      insertStmt.run(migration.version, migration.name, checksum, appliedAt)
-    })
+    try {
+      const executeTx = db.transaction(() => {
+        // Execute the migration DDL/DML
+        db.exec(migration.sql)
 
-    // Execute with BEGIN IMMEDIATE
-    executeTx.immediate()
-    newlyAppliedVersions.push(migration.version)
+        // Verify foreign key integrity if foreign keys were disabled for table rebuild
+        if (disableFk) {
+          const violations = db.pragma('foreign_key_check') as Array<{
+            table: string
+            rowid: number
+            parent: string
+            fkid: number
+          }>
+          if (violations && violations.length > 0) {
+            throw new Error(
+              `Foreign key integrity check failed after migration ${migration.version} ('${migration.name}'): ${JSON.stringify(violations)}`
+            )
+          }
+        }
+
+        // Calculate checksum and record
+        const checksum = computeChecksum(migration.sql)
+        const appliedAt = Date.now()
+        insertStmt.run(migration.version, migration.name, checksum, appliedAt)
+      })
+
+      // Execute with BEGIN IMMEDIATE
+      executeTx.immediate()
+      newlyAppliedVersions.push(migration.version)
+    } finally {
+      if (disableFk) {
+        db.pragma('foreign_keys = ON')
+      }
+    }
+
+    // Always verify PRAGMA foreign_keys = 1 after migration (success or failure)
+    assertForeignKeysEnabled(db)
   }
 
   // Determine current active version

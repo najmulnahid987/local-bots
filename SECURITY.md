@@ -40,7 +40,7 @@ The threat model identifies ten primary assets requiring confidentiality, integr
 | Asset ID | Asset Name | Sensitivity | Primary Security Objective | Storage Location |
 |---|---|---|---|---|
 | **AST-01** | **API Keys & Credentials** | Critical | Confidentiality (Zero unauthorized exposure) | Encrypted binary BLOB via `safeStorage` in `provider_connections` |
-| **AST-02** | **Original Source Documents** | High | Confidentiality & Integrity (No cross-KB leakage) | Local filesystem: `<userData>/documents/<kb_id>/*` |
+| **AST-02** | **Original Source Documents** | High | Confidentiality & Integrity (No cross-KB leakage) | Local filesystem: `<userData>/documents/<kb_id>/originals/<source_id>.<ext>` |
 | **AST-03** | **Extracted Text Chunks** | High | Confidentiality & Integrity | Relational SQLite table `knowledge_chunks` |
 | **AST-04** | **FTS5 Search Indexes** | High | Confidentiality & Integrity | Virtual table `knowledge_fts` |
 | **AST-05** | **Conversation History & Chats** | High | Confidentiality & Privacy | Relational SQLite tables `conversations` & `messages` |

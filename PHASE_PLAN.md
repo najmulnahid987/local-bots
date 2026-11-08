@@ -105,16 +105,16 @@ Phase 2: Local Database & Persistence Foundation (SQLite + WAL)
 Phase 3: BYOK Provider Manager & Secure Credential Storage (COMPLETE)
    │
    ▼
-Phase 4: Knowledge Base Management & Workspaces (NEXT)
+Phase 4: Knowledge Base Management & Workspaces (COMPLETE)
    │
    ▼
-Phase 5: Bot Management & Bot Constellation Dynamic Canvas
+Phase 5: Document Ingestion, Text Extraction, Chunking & FTS5 Indexing (ACTIVE)
    │
    ▼
-Phase 6: Multi-Model Bot Chat & Streaming Conversations
+Phase 6: Bot Management & Bot Constellation Dynamic Canvas
    │
    ▼
-Phase 7: Document Ingestion & Background FTS5 Indexing
+Phase 7: Multi-Model Bot Chat & Streaming Conversations
    │
    ▼
 Phase 8: Scoped RAG Retrieval & Knowledge-Aware Responses
@@ -562,102 +562,111 @@ Complete Knowledge Base management UI and backend services, directory isolation 
 
 ---
 
-## 11. Detailed Phase 5: Bot Management and Bot Constellation
+## 11. Detailed Phase 5: Document Ingestion, Text Extraction, Chunking & FTS5 Indexing
 
 ### 11.1 Phase Goal
-Enable deployment of multiple persistent AI Bots inside selected Knowledge Bases, and implement the dynamic, mathematically driven **Bot Constellation** SVG canvas.
+Enable users to import `.txt`, `.md`, and text-based `.pdf` files into a selected Knowledge Base, extract text, normalize it, generate token-bounded searchable chunks, index content locally through SQLite FTS5 with BM25 ranking, and manage document sources with full Knowledge Base isolation.
 
 ### 11.2 Prerequisites
-- Phase 4 completed and verified (Tag: `phase-4-complete`).
+- Phase 4 completed and verified (Tag: `phase-4-complete`, Commit: `de0655cac1a2997982ab29be7cbca749a65feeba`).
 
 ### 11.3 Features Included
-- In-KB Bot creation: Bot binds permanently to active `knowledge_base_id`.
-- Bot configuration: Name, description, system prompt instructions, assigned provider/model ID, tool permission toggles.
-- Bot CRUD IPC handlers: `bot:create`, `bot:list-by-kb`, `bot:update`, `bot:delete`.
-- **Bot Constellation Engine:**
-  - Pure TypeScript polar geometry calculator ($\theta_i = \frac{2\pi i}{N} - \frac{\pi}{2}$).
-  - SVG rendering: $N=0$ (empty), $N=1$ (center node), $N=2$ (line), $N=3$ (triangle), $N=4$ (square), $N=5$ (pentagon), $N \ge 6$ (regular $N$-gon).
-  - CSS coordinate transitions for smooth morphing on Bot additions/deletions.
-  - Interactive clickable nodes: clicking a vertex navigates to that Bot's dedicated workspace.
-- Sibling Bots within the same Knowledge Base can use different providers and models.
+- Defensive file validation (extensions, MIME, magic bytes `%PDF-`, size limits, symlink rejection).
+- Managed storage in `<userData>/documents/<knowledge_base_id>/originals/<source_id>.<ext>`.
+- Plain text, Markdown (with heading extraction), and text-based PDF parsing (page-by-page).
+- Deterministic normalization (BOM, CRLF, null bytes, Unicode NFC).
+- Deterministic paragraph-aware chunker (~500 tokens, 50-token overlap, heading/page preservation).
+- SQLite FTS5 virtual table `knowledge_fts` with Porter stemming and BM25 ranking.
+- Automatic atomic synchronization triggers on `knowledge_chunks` (INSERT, UPDATE, DELETE).
+- Intra-KB duplicate detection with structured prompt and user override (`allowDuplicate`).
+- Safe re-indexing with atomic chunk replacement and zero search downtime.
+- Safe deletion with quarantine rollback and cascading FTS cleanup.
+- Secure IPC channels (`KB_DOCS_IPC_CHANNELS`) and Preload bridge (`window.api.knowledgeDocuments`).
+- Interactive Knowledge tab UI (upload dialog, document table, search bar, preview drawer, delete modal).
 
 ### 11.4 Features Excluded
-- Inter-bot messaging or delegation (deferred post-MVP).
-- Conversation execution (Phase 6).
+- Scanned PDF OCR (deferred post-MVP).
+- Remote cloud storage or external vector databases (local-first SQLite FTS5 only).
+- Unrestricted filesystem access from Renderer (Main process native dialogs only).
 
 ### 11.5 Dependencies
-- None additional (leverages React, TypeScript, Lucide Icons).
+- `unpdf` (candidate pure-JS PDF parser, evaluated at Step 5.5).
 
-### 11.6 Expected Files & Modules
+### 11.6 Approved Implementation Sequence
+- **Step 5.0:** Preflight and document ingestion architecture audit *(Complete)*.
+- **Step 5.1:** Final document ingestion architecture, ADRs and design specification *(Active)*.
+- **Step 5.2:** Database migration 003 (`knowledge_fts` virtual table, triggers, `indexing_status` CHECK evolution).
+- **Step 5.3:** Document storage manager and defensive file validation service.
+- **Step 5.4:** TXT and Markdown text extractors with heading extraction.
+- **Step 5.5:** PDF text extractor (`unpdf` integration, pending verification).
+- **Step 5.6:** Text normalization and deterministic chunking engine.
+- **Step 5.7:** Repositories (`KnowledgeSourceRepository`, `KnowledgeChunkRepository`) and Ingestion Pipeline Orchestrator.
+- **Step 5.8:** Source re-indexing and deletion lifecycle service.
+- **Step 5.9:** KB-scoped FTS5 search service and BM25 ranking.
+- **Step 5.10:** Secure IPC channels, Preload bridge, and validation schemas.
+- **Step 5.11:** Workspace Knowledge Tab UI (upload, document table, search, preview drawer, delete modal).
+- **Step 5.12:** End-to-end acceptance, regression verification, and phase gate sign-off.
+
+### 11.7 Expected Files & Modules
 ```
 src/
 ├── main/
-│   ├── ipc/bot-handlers.ts   # Bot CRUD IPC
-│   └── services/bot-manager.ts# Bot management business logic
-├── renderer/src/
-│   ├── components/constellation/
-│   │   ├── ConstellationCanvas.tsx # React SVG canvas
-│   │   ├── ConstellationNode.tsx   # Interactive vertex node
-│   │   ├── ConstellationEdge.tsx   # Connecting lines
-│   │   └── geometry-calculator.ts  # Pure polar math engine
-│   ├── components/bot/
-│   │   ├── BotCreateModal.tsx      # In-KB creation wizard
-│   │   └── BotSettingsModal.tsx    # Configuration editor
-│   └── stores/bot-store.ts         # Active Bot store
+│   ├── database/
+│   │   ├── migrations/003_knowledge_sources_lifecycle_and_fts5.sql
+│   │   └── repositories/
+│   │       ├── knowledge-source-repository.ts
+│   │       └── knowledge-chunk-repository.ts
+│   ├── services/
+│   │   ├── document-storage-manager.ts
+│   │   ├── file-validator.ts
+│   │   ├── text-normalizer.ts
+│   │   ├── text-chunker.ts
+│   │   ├── extractors/
+│   │   │   ├── text-extractor.ts
+│   │   │   ├── markdown-extractor.ts
+│   │   │   └── pdf-extractor.ts
+│   │   ├── document-ingestion-service.ts
+│   │   └── knowledge-search-service.ts
+│   └── ipc/
+│       ├── document-handlers.ts
+│       └── document-validation.ts
+├── preload/
+│   └── index.ts (exposing window.api.knowledgeDocuments)
+└── renderer/src/
+    └── pages/workspace/
+        └── WorkspaceKnowledgeTab.tsx (active document manager)
 ```
 
-### 11.7 Ordered Implementation Tasks
-1. Implement `BotManager` in Main process enforcing non-null `knowledge_base_id`.
-2. Implement Bot IPC handlers and Zod validation schemas.
-3. Implement `geometry-calculator.ts` with comprehensive unit tests for $N=0$ through $N=12$.
-4. Build `ConstellationCanvas` SVG component with coordinate transitions.
-5. Implement `BotCreateModal` allowing creation from within the active Knowledge Base.
-6. Wire node click events to navigate into that Bot's workspace.
-7. Author automated tests for Bot parent-binding and constellation geometry generation.
-
 ### 11.8 Database Changes
-- None (tables created in Phase 2).
+- Migration 003: Creates `knowledge_fts` virtual table, adds triggers `trg_knowledge_chunks_ai`, `trg_knowledge_chunks_ad`, `trg_knowledge_chunks_au`, and updates `indexing_status` CHECK constraint to include `queued`, `processing`, `completed`, `ready`, `failed`, `needs_reindex`.
 
 ### 11.9 Security Requirements
-- Bot creation requests **must** originate within a valid Knowledge Base scope.
-- Deleting a Bot cascades to its private threads but preserves Knowledge Base documents.
+- Untrusted document content is never executed or rendered as raw HTML.
+- Main process resolves authoritative `knowledge_base_id`; Renderer cannot supply arbitrary paths or target other KBs.
+- Search queries strictly enforce `f.knowledge_base_id = :authoritative_kb_id`.
 
-### 11.10 Automated Tests
-- Test: Bot creation fails if parent `knowledge_base_id` does not exist.
-- Test: Geometry engine returns exact coordinates for triangle ($N=3$), square ($N=4$), and pentagon ($N=5$).
-- Test: Deleting a Bot collapses an $N=4$ square into an $N=3$ triangle.
-
-### 11.11 Manual Tests
-- Deploy 1 Bot: verify single centered point appears.
-- Deploy 2nd Bot: verify smooth transition into horizontal line.
-- Deploy 3rd Bot: verify transition into equilateral triangle.
-- Click node: confirm UI routes into that Bot's workspace.
-
-### 11.12 Commands That Must Pass
+### 11.10 Commands That Must Pass
 ```bash
 npm run typecheck
+npm run lint
 npm run test
 npm run build
 ```
 
-### 11.13 Acceptance Criteria
-- [ ] Bots can only be created inside an active Knowledge Base.
-- [ ] Constellation geometry dynamically updates from $N=0$ to $N \ge 8$ without hardcoded polygon layouts.
-- [ ] Clicking any Constellation node opens that Bot's workspace.
-- [ ] Deleting a Bot preserves all parent documents and sibling Bots.
+### 11.11 Acceptance Criteria
+- [ ] Users can import `.txt`, `.md`, and `.pdf` files into any selected Knowledge Base.
+- [ ] Ingested text is normalized, split into ~500 token chunks, and indexed in FTS5.
+- [ ] BM25 search retrieves matching snippets scoped strictly to the selected Knowledge Base.
+- [ ] Ingestion failures roll back atomically without partial search index entries.
+- [ ] Deleting a document source cleans up chunks, FTS entries, and physical original files.
+- [ ] Zero regression across existing Phase 4 tests (641 passing tests).
 
-### 11.14 Phase Gate
-Bot CRUD, parent KB binding, and dynamic Constellation visualization pass all tests.
+### 11.12 Phase Gate
+Document ingestion, text extraction, deterministic chunking, and KB-scoped FTS5 search verified with automated test suites and production packaging.
 
-### 11.15 Rollback Procedure
-Revert to `phase-4-complete`.
-
-### 11.16 Git Checkpoint
-Commit: `feat(bot): implement bot management and dynamic constellation svg canvas`  
+### 11.13 Git Checkpoint
+Commit: `feat(docs): implement document ingestion, chunking, and fts5 search`  
 Tag: `phase-5-complete`
-
-### 11.17 Expected Deliverables
-Bot management services, dynamic Constellation SVG canvas, navigation routing.
 
 ---
 

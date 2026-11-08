@@ -193,6 +193,7 @@ export interface KnowledgeBaseOverviewDto {
     readonly ready: number
     readonly processing: number
     readonly failed: number
+    readonly needsReindex?: number
     readonly totalBytes: number
   }
   readonly indexing: {
@@ -248,6 +249,7 @@ export const knowledgeBaseOverviewDtoSchema = z
         ready: z.number().int().nonnegative(),
         processing: z.number().int().nonnegative(),
         failed: z.number().int().nonnegative(),
+        needsReindex: z.number().int().nonnegative().optional().default(0),
         totalBytes: z.number().int().nonnegative()
       })
       .strict(),

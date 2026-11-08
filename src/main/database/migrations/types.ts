@@ -20,6 +20,15 @@ export interface Migration {
    * Must not contain manual BEGIN, COMMIT, or ROLLBACK statements.
    */
   readonly sql: string
+
+  /**
+   * Optional flag for migrations requiring a SQLite 12-step table rebuild.
+   * When true, the migration runner temporarily disables PRAGMA foreign_keys
+   * outside the transaction, executes the migration transaction with BEGIN IMMEDIATE,
+   * validates PRAGMA foreign_key_check, and guarantees foreign_keys is restored to ON
+   * in a finally block.
+   */
+  readonly disableForeignKeysForTableRebuild?: boolean
 }
 
 export interface MigrationRecord {

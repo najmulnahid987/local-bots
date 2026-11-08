@@ -408,11 +408,11 @@ describe('Migration 002: Provider Credential References Schema (Phase 3 Step 3.2
     }
   })
 
-  it('1. applies migrations 001 and 002 successfully on a fresh database with zero FK violations', () => {
+  it('1. applies migrations 001, 002, and 003 successfully on a fresh database with zero FK violations', () => {
     const result = runMigrations(db, migrations)
-    expect(result.appliedCount).toBe(2)
-    expect(result.currentVersion).toBe(2)
-    expect(result.appliedVersions).toEqual([1, 2])
+    expect(result.appliedCount).toBe(3)
+    expect(result.currentVersion).toBe(3)
+    expect(result.appliedVersions).toEqual([1, 2, 3])
 
     const fkCheck = db.pragma('foreign_key_check') as unknown[]
     expect(fkCheck).toEqual([])
@@ -601,13 +601,13 @@ describe('Migration 002: Provider Credential References Schema (Phase 3 Step 3.2
     expect(del.changes).toBe(1)
   })
 
-  it('12. idempotently recognizes Migration 002 on subsequent startup', () => {
+  it('12. idempotently recognizes migrations on subsequent startup', () => {
     const firstRun = runMigrations(db, migrations)
-    expect(firstRun.appliedCount).toBe(2)
+    expect(firstRun.appliedCount).toBe(3)
 
     const secondRun = runMigrations(db, migrations)
     expect(secondRun.appliedCount).toBe(0)
-    expect(secondRun.currentVersion).toBe(2)
+    expect(secondRun.currentVersion).toBe(3)
   })
 
   it('13. confirms migration checksums are recorded accurately', () => {
@@ -617,13 +617,17 @@ describe('Migration 002: Provider Credential References Schema (Phase 3 Step 3.2
       .prepare('SELECT version, name, checksum FROM schema_migrations ORDER BY version ASC')
       .all() as Array<{ version: number; name: string; checksum: string }>
 
-    expect(history.length).toBe(2)
+    expect(history.length).toBe(3)
     expect(history[0].version).toBe(1)
     expect(history[0].checksum).toBe(computeChecksum(migrations[0].sql))
 
     expect(history[1].version).toBe(2)
     expect(history[1].name).toBe('provider_credential_refs')
     expect(history[1].checksum).toBe(computeChecksum(migrations[1].sql))
+
+    expect(history[2].version).toBe(3)
+    expect(history[2].name).toBe('knowledge_sources_lifecycle_and_fts5')
+    expect(history[2].checksum).toBe(computeChecksum(migrations[2].sql))
   })
 
   it('14. safely aborts and rolls back Migration 002 if legacy provider rows exist', () => {

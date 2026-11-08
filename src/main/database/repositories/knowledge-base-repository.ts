@@ -283,9 +283,10 @@ export class KnowledgeBaseRepository {
             `
             SELECT
               count(*) AS total,
-              coalesce(sum(CASE WHEN indexing_status = 'ready' THEN 1 ELSE 0 END), 0) AS ready,
-              coalesce(sum(CASE WHEN indexing_status IN ('queued', 'parsing', 'indexing') THEN 1 ELSE 0 END), 0) AS processing,
+              coalesce(sum(CASE WHEN indexing_status IN ('ready', 'completed') THEN 1 ELSE 0 END), 0) AS ready,
+              coalesce(sum(CASE WHEN indexing_status IN ('queued', 'parsing', 'indexing', 'processing') THEN 1 ELSE 0 END), 0) AS processing,
               coalesce(sum(CASE WHEN indexing_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+              coalesce(sum(CASE WHEN indexing_status = 'needs_reindex' THEN 1 ELSE 0 END), 0) AS needs_reindex,
               coalesce(sum(file_size), 0) AS total_bytes,
               max(indexed_at) AS last_indexed_at
             FROM knowledge_sources
@@ -297,6 +298,7 @@ export class KnowledgeBaseRepository {
           ready: number
           processing: number
           failed: number
+          needs_reindex: number
           total_bytes: number
           last_indexed_at: number | null
         }
@@ -361,9 +363,9 @@ export class KnowledgeBaseRepository {
                 original_file_name AS title,
                 file_type AS detail,
                 indexed_at AS timestamp,
-                'ready' AS status
+                indexing_status AS status
               FROM knowledge_sources
-              WHERE knowledge_base_id = :kbId AND indexed_at IS NOT NULL AND indexing_status = 'ready'
+              WHERE knowledge_base_id = :kbId AND indexed_at IS NOT NULL AND indexing_status IN ('ready', 'completed')
 
               UNION ALL
 
@@ -423,6 +425,7 @@ export class KnowledgeBaseRepository {
             ready: Number(docStats.ready),
             processing: Number(docStats.processing),
             failed: Number(docStats.failed),
+            needsReindex: Number(docStats.needs_reindex ?? 0),
             totalBytes: Number(docStats.total_bytes)
           },
           indexing: {

@@ -69,7 +69,7 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     const actualTables = (
       db
         .prepare(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations' ORDER BY name ASC"
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations' AND name NOT LIKE 'knowledge_fts%' ORDER BY name ASC"
         )
         .all() as { name: string }[]
     ).map((row) => row.name)
@@ -184,7 +184,7 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'application/pdf',
       1024,
       'a'.repeat(64),
-      'ready',
+      'completed',
       now,
       now
     )
@@ -942,7 +942,7 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       // Verify all 11 tables still exist
       const tableCount = db2
         .prepare(
-          "SELECT count(*) as c FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations'"
+          "SELECT count(*) as c FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations' AND name NOT LIKE 'knowledge_fts%'"
         )
         .get() as { c: number }
       expect(tableCount.c).toBe(11)

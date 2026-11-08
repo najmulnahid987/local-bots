@@ -48,6 +48,12 @@ Every ADR maintains an explicit status:
 | [**ADR-0007**](./ADR-0007-electron-security-boundaries.md) | **Electron Process Security Boundaries** | Accepted | 2026-11-05 | Main/Preload/Renderer isolation; Chromium sandbox; restrictive CSP; validated IPC. |
 | [**ADR-0008**](./ADR-0008-agent-permissions-and-execution.md) | **Agent Tool Execution and Permissions** | Accepted | 2026-11-05 | Bounded 5-turn reasoning loop; read-only tools; path traversal guards; human approvals. |
 | [**ADR-0009**](./ADR-0009-bot-constellation-geometry.md) | **Dynamic Bot Constellation Geometry** | Accepted | 2026-11-05 | Procedural regular $N$-gon polar layout; React SVG presentation; decoupled from DB. |
+| [**ADR-0010**](./ADR-0010-storage-root-compatibility.md) | **Storage Root Compatibility and Managed Originals Layout** | Accepted | 2026-11-08 | Preserves `<userData>/documents/<kb_id>/originals/` layout; decoupling physical and user filenames. |
+| [**ADR-0011**](./ADR-0011-source-lifecycle-and-status-migration.md) | **Knowledge Source Lifecycle State Machine and Status Migration** | Accepted | 2026-11-08 | Canonical statuses (`queued`, `processing`, `completed`, `failed`, `needs_reindex`) and Overview API compatibility. |
+| [**ADR-0012**](./ADR-0012-fts5-schema-and-trigger-synchronization.md) | **SQLite FTS5 Schema, Rowid Mapping, and Trigger Synchronization** | Accepted | 2026-11-08 | Virtual table `knowledge_fts`, rowid mapping, atomic triggers, and KB-isolated queries. |
+| [**ADR-0013**](./ADR-0013-duplicate-detection-and-checksum-scoping.md) | **Knowledge Base-Scoped Duplicate Detection and Checksum Invariants** | Accepted | 2026-11-08 | Scoped to `(kb_id, content_hash)`, streaming SHA-256, structured rejection with user override. |
+| [**ADR-0014**](./ADR-0014-deterministic-chunking-and-versioning.md) | **Deterministic Paragraph-Aware Chunking and Semantic Versioning** | Accepted | 2026-11-08 | 500-token chunks with 50-token overlap, paragraph/heading/page boundaries, algorithm versioning. |
+| [**ADR-0015**](./ADR-0015-document-parser-dependency-strategy.md) | **Pure-JavaScript Document Parser Dependency Strategy** | Accepted | 2026-11-08 | Native Node.js for TXT/MD, `unpdf` candidate evaluation gate for PDF text extraction. |
 
 ---
 

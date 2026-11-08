@@ -195,7 +195,7 @@ CREATE TABLE knowledge_sources (
     mime_type TEXT NOT NULL,
     file_size INTEGER NOT NULL CHECK (file_size >= 0),
     content_hash TEXT NOT NULL,
-    indexing_status TEXT NOT NULL DEFAULT 'queued' CHECK (indexing_status IN ('queued', 'parsing', 'indexing', 'ready', 'failed')),
+    indexing_status TEXT NOT NULL DEFAULT 'queued' CHECK (indexing_status IN ('queued', 'processing', 'completed', 'ready', 'failed', 'needs_reindex')),
     error_message TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -254,14 +254,12 @@ END;
 
 -- 2. Delete Trigger: Remove deleted chunks from FTS index
 CREATE TRIGGER trg_knowledge_chunks_ad AFTER DELETE ON knowledge_chunks BEGIN
-    INSERT INTO knowledge_fts (knowledge_fts, rowid, content, chunk_id, knowledge_base_id, source_id)
-    VALUES ('delete', old.rowid, old.content, old.id, old.knowledge_base_id, old.source_id);
+    DELETE FROM knowledge_fts WHERE rowid = old.rowid;
 END;
 
 -- 3. Update Trigger: Re-index updated chunks
 CREATE TRIGGER trg_knowledge_chunks_au AFTER UPDATE ON knowledge_chunks BEGIN
-    INSERT INTO knowledge_fts (knowledge_fts, rowid, content, chunk_id, knowledge_base_id, source_id)
-    VALUES ('delete', old.rowid, old.content, old.id, old.knowledge_base_id, old.source_id);
+    DELETE FROM knowledge_fts WHERE rowid = old.rowid;
     INSERT INTO knowledge_fts (rowid, content, chunk_id, knowledge_base_id, source_id)
     VALUES (new.rowid, new.content, new.id, new.knowledge_base_id, new.source_id);
 END;

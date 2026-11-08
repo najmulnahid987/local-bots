@@ -613,6 +613,7 @@ describe('Phase 4 Step 4.2: Secure Knowledge Base IPC Bridge & Preload Integrati
         ready: 0,
         processing: 0,
         failed: 0,
+        needsReindex: 0,
         totalBytes: 0
       })
       expect(overview.indexing).toEqual({ totalChunks: 0, totalTokens: 0, lastIndexedAt: null })
