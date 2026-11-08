@@ -1638,8 +1638,52 @@ In `src/main/index.ts`, IPC handlers register in a strictly verified sequence:
 All IPC errors are sanitized via `formatIpcError` into structured JSON `{ code, message, retryable }`. The Preload bridge parses these into strongly typed `ProviderBridgeError` instances. Internal paths, stack traces, and SDK exceptions are never exposed to Renderer.
 
 ### 22.10 Remaining Limitations & Deferred Scope
-- UI components for the Provider Manager are deferred to Step 3.8.
-- Multimodal image processing and function-calling tools are deferred to Phase 9.
+- Multimodal image processing and function-calling tools are deferred to Step 3.9 and Phase 9.
+
+---
+
+## 23. Provider Management Settings UI (Phase 3 Step 3.8)
+
+### 23.1 Architecture Overview
+The Provider Management UI is embedded directly inside `SettingsPage` via the `ProviderConnectionsSection` component and its focused subcomponents:
+- `ProviderConnectionsSection`: Coordinates catalog and connection state, handles loading/errors, and triggers modals.
+- `ProviderConnectionCard`: Renders individual connection summaries with readable provider names, user labels, backend status badges, vault storage indicators, and action triggers.
+- `AddProviderConnectionDialog`: Modal facilitating provider selection, model selection, label definition, and secure API key entry.
+- `TestProviderConnectionDialog`: Verification modal supporting model selection and live latency inspection.
+- `ReplaceProviderCredentialDialog`: Modal for replacing and re-encrypting API keys while guaranteeing old key preservation on verification failure.
+- `EditProviderLabelDialog`: Lightweight modal for renaming connections with whitespace trimming and non-empty validation.
+- `RemoveProviderConnectionDialog`: Confirmation dialog warning of permanent deletion and handling Bot constraint rejections.
+- `ProviderPrivacyInformation`: Transparent disclosure explaining OS-level vault encryption, direct outbound HTTPS traffic, and provider-specific data retention terms.
+
+### 23.2 Safe API-Key Input Lifecycle
+To guarantee credential confidentiality within the React Renderer:
+1. **Password Masks:** All credential entry fields use `<input type="password" />` with `autoComplete="new-password"`.
+2. **Zero Prefill:** Fields are never prefilled from existing connections or stored state.
+3. **Mandatory `finally` Clearing:** Component state holding API keys is wiped immediately via `setApiKey('')` in a `finally` block on both successful submission and caught rejection.
+4. **No Browser Storage:** Plaintext API keys and tokens are strictly prohibited from `localStorage`, `sessionStorage`, cookies, and React context trees.
+5. **No Telemetry or Logging:** API key values are never passed to logging primitives, console outputs, or error objects.
+6. **Ephemeral Existence:** Keys exist only in local component state during user typing and are discarded as soon as the IPC bridge call returns.
+
+### 23.3 Connection Status and Metadata Display
+The UI strictly reflects authoritative backend state without client-side speculation:
+- **Status Badges:** Directly maps `status` (`active`, `error`, `revoked`) to semantic badges.
+- **Credential Indicator:** Uses `hasCredential: boolean` exclusively to render "Key Stored (OS Vault)" or "Missing Key".
+- **Zero Leakage:** No `credential_ref` pointers, ciphertext digests, or partial key fragments (`sk-...`) are ever rendered into the DOM.
+
+### 23.4 Error Resilience & UX Integrity
+- **Duplicate Prevention:** All submission buttons and inputs are disabled while IPC requests are in flight (`isSubmitting` / `isTesting`).
+- **Preservation on Failure:** When testing a candidate key during replacement, failed verification keeps the existing working credential intact and clearly informs the user.
+- **Transient Network Distinctions:** Test failure dialogues explicitly remind users that temporary network timeouts or offline conditions do not imply that an API key is revoked.
+- **Database Constraints:** When attempting to remove a connection assigned to an active Bot, foreign key rejection from SQLite is caught and presented with actionable explanations.
+- **Pending Cleanup:** If connection metadata is deleted but operating system vault file removal is deferred, the UI informs the user with an informational notice.
+- **Fail-Closed Disconnection:** If `window.api.providers` is unreachable or rejects, the section displays a resilient error alert with a retry mechanism without crashing the page.
+
+### 23.5 Security and Privacy Disclosures
+The Settings UI explicitly clarifies the local-first security boundaries:
+- **Local-First Encryption:** Keys reside solely in operating system safeStorage (DPAPI, Keychain, or Secret Service).
+- **Direct Outbound Transmission:** Outbound inference requests travel directly from the user's desktop to official vendor endpoints over TLS 1.3 without intermediary servers.
+- **Vendor Policy Differences:** Clarifies that cloud providers process prompts according to their published terms (e.g. OpenAI commercial privacy, Anthropic zero-data-retention options, Google Gemini Free vs. Paid API tier logging differences).
+
 
 
 

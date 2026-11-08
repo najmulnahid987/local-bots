@@ -1,4 +1,5 @@
 import { ReactElement } from 'react'
+import { ProviderConnectionsSection } from '../components/settings/ProviderConnectionsSection'
 
 export function SettingsPage(): ReactElement {
   return (
@@ -8,14 +9,7 @@ export function SettingsPage(): ReactElement {
         <p className="page-description">Manage your application preferences.</p>
       </header>
 
-      <section className="empty-state-section" aria-label="Settings Status">
-        <div className="empty-state-card">
-          <h2 className="empty-state-heading">Settings are not available yet</h2>
-          <p className="empty-state-text">
-            Application preferences will be introduced in a later development phase.
-          </p>
-        </div>
-      </section>
+      <ProviderConnectionsSection />
     </div>
   )
 }
