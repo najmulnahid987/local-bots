@@ -53,6 +53,12 @@ export const knowledgeBaseDeleteIpcSchema = z
   })
   .strict()
 
+export const knowledgeBaseOverviewIpcSchema = z
+  .object({
+    id: knowledgeBaseIdSchema
+  })
+  .strict()
+
 export const knowledgeBaseListIpcSchema = knowledgeBaseListRequestSchema
 
 /**

@@ -393,4 +393,422 @@ describe('KnowledgeBaseRepository', () => {
     // @ts-expect-error - testing constructor runtime check
     expect(() => new KnowledgeBaseRepository(null)).toThrow(RepositoryError)
   })
+
+  describe('getOverview', () => {
+    it('24. returns default zeroed statistics and empty activity for an empty Knowledge Base', () => {
+      const kb = repo.create({ name: 'Empty KB' })
+      const overview = repo.getOverview(kb.id)
+
+      expect(overview).toEqual({
+        knowledgeBaseId: kb.id,
+        bots: {
+          total: 0,
+          active: 0,
+          archived: 0
+        },
+        documents: {
+          total: 0,
+          ready: 0,
+          processing: 0,
+          failed: 0,
+          totalBytes: 0
+        },
+        indexing: {
+          totalChunks: 0,
+          totalTokens: 0,
+          lastIndexedAt: null
+        },
+        recentActivity: []
+      })
+    })
+
+    it('25. correctly aggregates bot counts for active and archived bots', () => {
+      const kb = repo.create({ name: 'Bot KB' })
+      const now = Date.now()
+
+      db.prepare(
+        `INSERT INTO bots (id, knowledge_base_id, name, model_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000001',
+        kb.id,
+        'Active Bot 1',
+        'gpt-4o',
+        'active',
+        now,
+        now
+      )
+
+      db.prepare(
+        `INSERT INTO bots (id, knowledge_base_id, name, model_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000002',
+        kb.id,
+        'Active Bot 2',
+        'claude-3-5',
+        'active',
+        now,
+        now
+      )
+
+      db.prepare(
+        `INSERT INTO bots (id, knowledge_base_id, name, model_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000003',
+        kb.id,
+        'Archived Bot',
+        'gemini-1.5',
+        'archived',
+        now,
+        now
+      )
+
+      const overview = repo.getOverview(kb.id)
+      expect(overview.bots).toEqual({
+        total: 3,
+        active: 2,
+        archived: 1
+      })
+    })
+
+    it('26. correctly aggregates document statuses, total bytes, and latest indexed_at timestamp', () => {
+      const kb = repo.create({ name: 'Docs KB' })
+      const baseTime = 1700000000000
+
+      // Ready doc
+      db.prepare(
+        `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, created_at, updated_at, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000011',
+        kb.id,
+        'doc1.pdf',
+        'doc1.pdf',
+        'doc1.pdf',
+        'pdf',
+        'application/pdf',
+        1024,
+        'a'.repeat(64),
+        'ready',
+        baseTime,
+        baseTime + 500,
+        baseTime + 1000
+      )
+
+      // Queued doc (processing)
+      db.prepare(
+        `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, created_at, updated_at, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000012',
+        kb.id,
+        'doc2.md',
+        'doc2.md',
+        'doc2.md',
+        'md',
+        'text/markdown',
+        2048,
+        'b'.repeat(64),
+        'queued',
+        baseTime + 100,
+        baseTime + 100,
+        null
+      )
+
+      // Indexing doc (processing)
+      db.prepare(
+        `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, created_at, updated_at, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000013',
+        kb.id,
+        'doc3.txt',
+        'doc3.txt',
+        'doc3.txt',
+        'txt',
+        'text/plain',
+        512,
+        'c'.repeat(64),
+        'indexing',
+        baseTime + 200,
+        baseTime + 200,
+        null
+      )
+
+      // Failed doc
+      db.prepare(
+        `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, created_at, updated_at, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000014',
+        kb.id,
+        'doc4.pdf',
+        'doc4.pdf',
+        'doc4.pdf',
+        'pdf',
+        'application/pdf',
+        4096,
+        'd'.repeat(64),
+        'failed',
+        baseTime + 300,
+        baseTime + 300,
+        null
+      )
+
+      const overview = repo.getOverview(kb.id)
+      expect(overview.documents).toEqual({
+        total: 4,
+        ready: 1,
+        processing: 2,
+        failed: 1,
+        totalBytes: 7680
+      })
+      expect(overview.indexing.lastIndexedAt).toBe(baseTime + 1000)
+    })
+
+    it('27. correctly aggregates chunks and token counts from knowledge_chunks', () => {
+      const kb = repo.create({ name: 'Chunks KB' })
+      const now = Date.now()
+
+      db.prepare(
+        `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000021',
+        kb.id,
+        'doc.txt',
+        'doc.txt',
+        'doc.txt',
+        'txt',
+        'text/plain',
+        1000,
+        'e'.repeat(64),
+        'ready',
+        now,
+        now
+      )
+
+      db.prepare(
+        `INSERT INTO knowledge_chunks (id, knowledge_base_id, source_id, chunk_index, content, token_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000031',
+        kb.id,
+        '00000000-0000-4000-8000-000000000021',
+        0,
+        'Chunk 1',
+        120,
+        now
+      )
+
+      db.prepare(
+        `INSERT INTO knowledge_chunks (id, knowledge_base_id, source_id, chunk_index, content, token_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000032',
+        kb.id,
+        '00000000-0000-4000-8000-000000000021',
+        1,
+        'Chunk 2',
+        350,
+        now
+      )
+
+      const overview = repo.getOverview(kb.id)
+      expect(overview.indexing.totalChunks).toBe(2)
+      expect(overview.indexing.totalTokens).toBe(470)
+    })
+
+    it('28. correctly aggregates recent activity across bots, sources, and agent runs, capped at 10 and ordered by timestamp DESC', () => {
+      const kb = repo.create({ name: 'Activity KB' })
+
+      // Create a bot at t=1000, updated at t=1050
+      db.prepare(
+        `INSERT INTO bots (id, knowledge_base_id, name, model_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000041',
+        kb.id,
+        'Alpha Bot',
+        'gpt-4o',
+        'active',
+        1000,
+        1050
+      )
+
+      // Create source 1 registered at t=2000, indexed at t=2500
+      db.prepare(
+        `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, created_at, updated_at, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000051',
+        kb.id,
+        'guide.md',
+        'guide.md',
+        'guide.md',
+        'md',
+        'text/markdown',
+        500,
+        'f'.repeat(64),
+        'ready',
+        2000,
+        2500,
+        2500
+      )
+
+      // Create source 2 failed at t=3000
+      db.prepare(
+        `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, error_message, created_at, updated_at, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000052',
+        kb.id,
+        'corrupt.pdf',
+        'corrupt.pdf',
+        'corrupt.pdf',
+        'pdf',
+        'application/pdf',
+        500,
+        '1'.repeat(64),
+        'failed',
+        'Parse error: corrupted trailer',
+        3000,
+        3100,
+        null
+      )
+
+      // Create agent run at t=4000
+      db.prepare(
+        `INSERT INTO agent_runs (id, bot_id, knowledge_base_id, status, selected_model, iteration_count, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-000000000061',
+        '00000000-0000-4000-8000-000000000041',
+        kb.id,
+        'completed',
+        'gpt-4o',
+        1,
+        4000
+      )
+
+      const overview = repo.getOverview(kb.id)
+      expect(overview.recentActivity.length).toBeGreaterThanOrEqual(4)
+
+      // Verify descending timestamp order
+      for (let i = 0; i < overview.recentActivity.length - 1; i++) {
+        expect(overview.recentActivity[i].timestamp).toBeGreaterThanOrEqual(
+          overview.recentActivity[i + 1].timestamp
+        )
+      }
+
+      // First activity should be the newest: agent_run at t=4000
+      expect(overview.recentActivity[0].type).toBe('agent_run')
+      expect(overview.recentActivity[0].timestamp).toBe(4000)
+
+      // Second activity should be document_failed at t=3100
+      expect(overview.recentActivity[1].type).toBe('document_failed')
+      expect(overview.recentActivity[1].timestamp).toBe(3100)
+
+      // Third activity should be document_registered for corrupt.pdf at t=3000
+      expect(overview.recentActivity[2].type).toBe('document_registered')
+      expect(overview.recentActivity[2].timestamp).toBe(3000)
+
+      // Fourth activity should be document_indexed for guide.md at t=2500
+      expect(overview.recentActivity[3].type).toBe('document_indexed')
+      expect(overview.recentActivity[3].timestamp).toBe(2500)
+    })
+
+    it('29. enforces strict multi-KB isolation across all aggregates and activity', () => {
+      const kbA = repo.create({ name: 'KB A' })
+      const kbB = repo.create({ name: 'KB B' })
+      const now = Date.now()
+
+      // Insert data into KB A
+      db.prepare(
+        `INSERT INTO bots (id, knowledge_base_id, name, model_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-0000000000a1',
+        kbA.id,
+        'Bot in A',
+        'gpt-4o',
+        'active',
+        now,
+        now
+      )
+
+      db.prepare(
+        `INSERT INTO knowledge_sources (id, knowledge_base_id, file_name, original_file_name, relative_file_path, file_type, mime_type, file_size, content_hash, indexing_status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-0000000000a2',
+        kbA.id,
+        'docA.txt',
+        'docA.txt',
+        'docA.txt',
+        'txt',
+        'text/plain',
+        500,
+        '2'.repeat(64),
+        'ready',
+        now,
+        now
+      )
+
+      // Insert data into KB B
+      db.prepare(
+        `INSERT INTO bots (id, knowledge_base_id, name, model_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-0000000000b1',
+        kbB.id,
+        'Bot in B1',
+        'gpt-4o',
+        'active',
+        now,
+        now
+      )
+
+      db.prepare(
+        `INSERT INTO bots (id, knowledge_base_id, name, model_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        '00000000-0000-4000-8000-0000000000b2',
+        kbB.id,
+        'Bot in B2',
+        'gpt-4o',
+        'archived',
+        now,
+        now
+      )
+
+      const overviewA = repo.getOverview(kbA.id)
+      const overviewB = repo.getOverview(kbB.id)
+
+      // Verify KB A has exactly 1 bot and 1 doc
+      expect(overviewA.bots.total).toBe(1)
+      expect(overviewA.bots.active).toBe(1)
+      expect(overviewA.bots.archived).toBe(0)
+      expect(overviewA.documents.total).toBe(1)
+      expect(overviewA.recentActivity.every((act) => !act.title.includes('Bot in B'))).toBe(true)
+
+      // Verify KB B has exactly 2 bots and 0 docs
+      expect(overviewB.bots.total).toBe(2)
+      expect(overviewB.bots.active).toBe(1)
+      expect(overviewB.bots.archived).toBe(1)
+      expect(overviewB.documents.total).toBe(0)
+      expect(overviewB.recentActivity.every((act) => !act.title.includes('Bot in A'))).toBe(true)
+    })
+
+    it('30. throws RepositoryError when Knowledge Base ID does not exist', () => {
+      const nonExistent = '00000000-0000-4000-8000-000000000099'
+      expect(() => repo.getOverview(nonExistent)).toThrow(RepositoryError)
+    })
+
+    it('31. throws ValidationError when Knowledge Base ID is invalid', () => {
+      expect(() => repo.getOverview('not-a-valid-uuid')).toThrow(ValidationError)
+    })
+  })
 })

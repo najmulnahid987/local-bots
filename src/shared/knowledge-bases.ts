@@ -152,4 +152,112 @@ export interface KnowledgeBaseApi {
   archive(id: string): Promise<KnowledgeBaseDto | null>
   unarchive(id: string): Promise<KnowledgeBaseDto | null>
   delete(id: string): Promise<DeleteKnowledgeBaseResult>
+  getOverview(id: string): Promise<KnowledgeBaseOverviewDto>
 }
+
+/**
+ * Supported types of historical activity events scoped to a Knowledge Base.
+ */
+export type KnowledgeBaseActivityType =
+  | 'bot_created'
+  | 'bot_updated'
+  | 'document_registered'
+  | 'document_indexed'
+  | 'document_failed'
+  | 'agent_run'
+
+/**
+ * Public, renderer-safe Data Transfer Object representing a single scoped activity item.
+ */
+export interface KnowledgeBaseActivityItemDto {
+  readonly id: string
+  readonly type: KnowledgeBaseActivityType
+  readonly title: string
+  readonly detail?: string
+  readonly timestamp: number
+  readonly status?: string
+}
+
+/**
+ * Public, renderer-safe Data Transfer Object representing aggregated Knowledge Base Overview statistics.
+ */
+export interface KnowledgeBaseOverviewDto {
+  readonly knowledgeBaseId: string
+  readonly bots: {
+    readonly total: number
+    readonly active: number
+    readonly archived: number
+  }
+  readonly documents: {
+    readonly total: number
+    readonly ready: number
+    readonly processing: number
+    readonly failed: number
+    readonly totalBytes: number
+  }
+  readonly indexing: {
+    readonly totalChunks: number
+    readonly totalTokens: number
+    readonly lastIndexedAt: number | null
+  }
+  readonly recentActivity: readonly KnowledgeBaseActivityItemDto[]
+}
+
+/**
+ * Zod schema validating a KnowledgeBaseActivityType enum.
+ */
+export const knowledgeBaseActivityTypeSchema = z.enum([
+  'bot_created',
+  'bot_updated',
+  'document_registered',
+  'document_indexed',
+  'document_failed',
+  'agent_run'
+])
+
+/**
+ * Zod schema validating a KnowledgeBaseActivityItemDto.
+ */
+export const knowledgeBaseActivityItemDtoSchema = z
+  .object({
+    id: z.string().min(1),
+    type: knowledgeBaseActivityTypeSchema,
+    title: z.string().min(1),
+    detail: z.string().optional(),
+    timestamp: z.number().int().positive(),
+    status: z.string().optional()
+  })
+  .strict()
+
+/**
+ * Zod schema validating an aggregated KnowledgeBaseOverviewDto.
+ */
+export const knowledgeBaseOverviewDtoSchema = z
+  .object({
+    knowledgeBaseId: z.string().uuid(),
+    bots: z
+      .object({
+        total: z.number().int().nonnegative(),
+        active: z.number().int().nonnegative(),
+        archived: z.number().int().nonnegative()
+      })
+      .strict(),
+    documents: z
+      .object({
+        total: z.number().int().nonnegative(),
+        ready: z.number().int().nonnegative(),
+        processing: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        totalBytes: z.number().int().nonnegative()
+      })
+      .strict(),
+    indexing: z
+      .object({
+        totalChunks: z.number().int().nonnegative(),
+        totalTokens: z.number().int().nonnegative(),
+        lastIndexedAt: z.number().int().positive().nullable()
+      })
+      .strict(),
+    recentActivity: z.array(knowledgeBaseActivityItemDtoSchema)
+  })
+  .strict()

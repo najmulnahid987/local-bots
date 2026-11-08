@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import type { KnowledgeBaseRepository } from '../database/repositories/knowledge-base-repository'
 import {
   type KnowledgeBaseDto,
+  type KnowledgeBaseOverviewDto,
   type CreateKnowledgeBaseRequest,
   type UpdateKnowledgeBaseRequest,
   type KnowledgeBaseListRequest,
@@ -316,6 +317,30 @@ export class KnowledgeBaseManager {
 
     const row = this.repository.getById(id)
     return row ? toKnowledgeBaseDto(row) : null
+  }
+
+  /**
+   * Retrieves aggregated Overview statistics and recent activity for a Knowledge Base.
+   * Scoped strictly to the target Knowledge Base UUID.
+   * Throws NOT_FOUND if the Knowledge Base does not exist.
+   */
+  public async getOverview(id: string): Promise<KnowledgeBaseOverviewDto> {
+    const parseResult = knowledgeBaseIdSchema.safeParse(id)
+    if (!parseResult.success) {
+      throw new KnowledgeBaseValidationError(
+        `Invalid Knowledge Base identifier: '${id}'. Must be a valid RFC 4122 UUIDv4.`
+      )
+    }
+
+    const existing = this.repository.getById(id)
+    if (!existing) {
+      throw new KnowledgeBaseManagerError(
+        `Knowledge Base with ID '${id}' does not exist.`,
+        'NOT_FOUND'
+      )
+    }
+
+    return this.repository.getOverview(id)
   }
 
   /**

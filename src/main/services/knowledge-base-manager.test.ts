@@ -8,6 +8,7 @@ import {
 import { createBotFixture, createProviderConnectionFixture } from '../database/testing/fixtures'
 import {
   KnowledgeBaseManager,
+  KnowledgeBaseManagerError,
   KnowledgeBaseValidationError,
   KnowledgeBaseSecurityError,
   KnowledgeBaseCreationError,
@@ -588,6 +589,67 @@ describe('KnowledgeBaseManager (Phase 4 Step 4.1)', () => {
 
     it('8.3 getDocumentsDirectory returns canonical documents root path', () => {
       expect(manager.getDocumentsDirectory()).toBe(path.resolve(documentsDir))
+    })
+  })
+
+  // =========================================================================
+  // 9. Overview Aggregation Lifecycle (Step 4.6B)
+  // =========================================================================
+  describe('9. Overview Aggregation Lifecycle', () => {
+    it('9.1 retrieves aggregated overview for an existing Knowledge Base', async () => {
+      const created = await manager.create({ name: 'Overview Target' })
+      createBotFixture(testCtx.botRepo, created.id, { name: 'Active Bot' })
+
+      const overview = await manager.getOverview(created.id)
+
+      expect(overview).toBeDefined()
+      expect(overview.knowledgeBaseId).toBe(created.id)
+      expect(overview.bots.total).toBe(1)
+      expect(overview.bots.active).toBe(1)
+      expect(overview.bots.archived).toBe(0)
+      expect(overview.documents.total).toBe(0)
+      expect(overview.indexing.totalChunks).toBe(0)
+      expect(overview.recentActivity.length).toBeGreaterThanOrEqual(1)
+      expect(overview.recentActivity[0].type).toBe('bot_created')
+    })
+
+    it('9.2 throws KnowledgeBaseValidationError for malformed Knowledge Base ID', async () => {
+      await expect(manager.getOverview('invalid-uuid')).rejects.toThrow(
+        KnowledgeBaseValidationError
+      )
+      await expect(manager.getOverview('')).rejects.toThrow(KnowledgeBaseValidationError)
+    })
+
+    it('9.3 throws KnowledgeBaseManagerError with code NOT_FOUND for nonexistent Knowledge Base', async () => {
+      const nonExistent = '00000000-0000-4000-8000-000000000000'
+      await expect(manager.getOverview(nonExistent)).rejects.toThrow(KnowledgeBaseManagerError)
+
+      try {
+        await manager.getOverview(nonExistent)
+        expect.fail('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(KnowledgeBaseManagerError)
+        expect((err as KnowledgeBaseManagerError).code).toBe('NOT_FOUND')
+      }
+    })
+
+    it('9.4 retrieves overview for an archived Knowledge Base', async () => {
+      const created = await manager.create({ name: 'Archived KB' })
+      await manager.archive(created.id)
+
+      const overview = await manager.getOverview(created.id)
+      expect(overview).toBeDefined()
+      expect(overview.knowledgeBaseId).toBe(created.id)
+    })
+
+    it('9.5 verifies no physical storage paths or internal SQLite keys leak into KnowledgeBaseOverviewDto', async () => {
+      const created = await manager.create({ name: 'Security Check KB' })
+      const overview = await manager.getOverview(created.id)
+
+      const serialized = JSON.stringify(overview)
+      expect(serialized.includes(documentsDir)).toBe(false)
+      expect(serialized.includes('storage_path')).toBe(false)
+      expect(serialized.includes('encrypted_credentials')).toBe(false)
     })
   })
 })

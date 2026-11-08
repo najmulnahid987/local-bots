@@ -5,6 +5,7 @@ import App from '../App'
 import { ACTIVE_KB_STORAGE_KEY } from '../contexts/KnowledgeBaseContext'
 import type {
   KnowledgeBaseDto,
+  KnowledgeBaseOverviewDto,
   CreateKnowledgeBaseRequest,
   UpdateKnowledgeBaseRequest,
   DeleteKnowledgeBaseResult,
@@ -121,6 +122,33 @@ describe('Renderer: Knowledge Base Workspace Shell & Navigation (Phase 4 Step 4.
         cleanupPending: false
       }
     })
+    const getOverviewMock = vi.fn(async (id: string): Promise<KnowledgeBaseOverviewDto> => {
+      const kb = currentKbs.find((item) => item.id === id)
+      if (!kb) {
+        throw new Error(`Knowledge base not found: ${id}`)
+      }
+      return {
+        knowledgeBaseId: kb.id,
+        bots: {
+          total: 0,
+          active: 0,
+          archived: 0
+        },
+        documents: {
+          total: 0,
+          ready: 0,
+          processing: 0,
+          failed: 0,
+          totalBytes: 0
+        },
+        indexing: {
+          totalChunks: 0,
+          totalTokens: 0,
+          lastIndexedAt: null
+        },
+        recentActivity: []
+      }
+    })
 
     const api: KnowledgeBaseApi = {
       list: listMock,
@@ -129,7 +157,8 @@ describe('Renderer: Knowledge Base Workspace Shell & Navigation (Phase 4 Step 4.
       update: updateMock,
       archive: archiveMock,
       unarchive: unarchiveMock,
-      delete: deleteMock
+      delete: deleteMock,
+      getOverview: getOverviewMock
     }
 
     return {

@@ -30,7 +30,8 @@ export const KB_IPC_CHANNELS = {
   UPDATE: 'kb:update',
   ARCHIVE: 'kb:archive',
   UNARCHIVE: 'kb:unarchive',
-  DELETE: 'kb:delete'
+  DELETE: 'kb:delete',
+  GET_OVERVIEW: 'kb:get-overview'
 } as const
 
 export type KbIpcChannel = (typeof KB_IPC_CHANNELS)[keyof typeof KB_IPC_CHANNELS]

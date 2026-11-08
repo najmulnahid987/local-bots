@@ -12,6 +12,7 @@ import {
 } from './KnowledgeBaseContext'
 import type {
   KnowledgeBaseDto,
+  KnowledgeBaseOverviewDto,
   CreateKnowledgeBaseRequest,
   UpdateKnowledgeBaseRequest,
   DeleteKnowledgeBaseResult,
@@ -85,6 +86,7 @@ describe('Renderer: KnowledgeBaseContext & State Management (Phase 4 Step 4.3)',
     archiveMock: ReturnType<typeof vi.fn>
     unarchiveMock: ReturnType<typeof vi.fn>
     deleteMock: ReturnType<typeof vi.fn>
+    getOverviewMock: ReturnType<typeof vi.fn>
   }
 
   let memoryStorage: MemoryStorage
@@ -159,6 +161,33 @@ describe('Renderer: KnowledgeBaseContext & State Management (Phase 4 Step 4.3)',
         cleanupPending: false
       }
     })
+    const getOverviewMock = vi.fn(async (id: string): Promise<KnowledgeBaseOverviewDto> => {
+      const kb = currentKbs.find((item) => item.id === id)
+      if (!kb) {
+        throw new Error(`Knowledge base not found: ${id}`)
+      }
+      return {
+        knowledgeBaseId: kb.id,
+        bots: {
+          total: 0,
+          active: 0,
+          archived: 0
+        },
+        documents: {
+          total: 0,
+          ready: 0,
+          processing: 0,
+          failed: 0,
+          totalBytes: 0
+        },
+        indexing: {
+          totalChunks: 0,
+          totalTokens: 0,
+          lastIndexedAt: null
+        },
+        recentActivity: []
+      }
+    })
 
     const api: KnowledgeBaseApi = {
       list: listMock,
@@ -167,7 +196,8 @@ describe('Renderer: KnowledgeBaseContext & State Management (Phase 4 Step 4.3)',
       update: updateMock,
       archive: archiveMock,
       unarchive: unarchiveMock,
-      delete: deleteMock
+      delete: deleteMock,
+      getOverview: getOverviewMock
     }
 
     return {
@@ -178,7 +208,8 @@ describe('Renderer: KnowledgeBaseContext & State Management (Phase 4 Step 4.3)',
       updateMock,
       archiveMock,
       unarchiveMock,
-      deleteMock
+      deleteMock,
+      getOverviewMock
     }
   }
 

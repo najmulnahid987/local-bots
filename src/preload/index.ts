@@ -24,6 +24,7 @@ import {
   ProviderBridgeError,
   type KnowledgeBaseApi,
   type KnowledgeBaseDto,
+  type KnowledgeBaseOverviewDto,
   type CreateKnowledgeBaseRequest,
   type UpdateKnowledgeBaseRequest,
   type KnowledgeBaseListRequest,
@@ -313,6 +314,14 @@ export function createKnowledgeBasesApi(ipc: typeof ipcRenderer): KnowledgeBaseA
     delete: async (id: string): Promise<DeleteKnowledgeBaseResult> => {
       try {
         return await ipc.invoke(KB_IPC_CHANNELS.DELETE, { id })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    getOverview: async (id: string): Promise<KnowledgeBaseOverviewDto> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.GET_OVERVIEW, { id })
       } catch (err) {
         throw normalizeKnowledgeBaseBridgeError(err)
       }

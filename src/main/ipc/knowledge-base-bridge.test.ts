@@ -6,6 +6,7 @@ import crypto from 'crypto'
 import {
   KB_IPC_CHANNELS,
   type KnowledgeBaseDto,
+  type KnowledgeBaseOverviewDto,
   type CreateKnowledgeBaseRequest,
   type UpdateKnowledgeBaseRequest,
   type KnowledgeBaseListRequest,
@@ -139,7 +140,7 @@ describe('Phase 4 Step 4.2: Secure Knowledge Base IPC Bridge & Preload Integrati
   // 1. Channel Registration
   // ---------------------------------------------------------------------------
   describe('1. Channel Registration & Fallback', () => {
-    it('registers all 7 Knowledge Base IPC channels', () => {
+    it('registers all 8 Knowledge Base IPC channels', () => {
       expect(mockIpcHandlers.has(KB_IPC_CHANNELS.LIST)).toBe(true)
       expect(mockIpcHandlers.has(KB_IPC_CHANNELS.GET_BY_ID)).toBe(true)
       expect(mockIpcHandlers.has(KB_IPC_CHANNELS.CREATE)).toBe(true)
@@ -147,6 +148,7 @@ describe('Phase 4 Step 4.2: Secure Knowledge Base IPC Bridge & Preload Integrati
       expect(mockIpcHandlers.has(KB_IPC_CHANNELS.ARCHIVE)).toBe(true)
       expect(mockIpcHandlers.has(KB_IPC_CHANNELS.UNARCHIVE)).toBe(true)
       expect(mockIpcHandlers.has(KB_IPC_CHANNELS.DELETE)).toBe(true)
+      expect(mockIpcHandlers.has(KB_IPC_CHANNELS.GET_OVERVIEW)).toBe(true)
     })
 
     it('registerFailingKnowledgeBaseIpcHandlers registers fallback handlers that reject safely', async () => {
@@ -365,6 +367,28 @@ describe('Phase 4 Step 4.2: Secure Knowledge Base IPC Bridge & Preload Integrati
         ).rejects.toThrow()
       })
     })
+
+    describe('GET_OVERVIEW channel validation', () => {
+      it('rejects missing or non-object payload', async () => {
+        await expect(invokeHandler(KB_IPC_CHANNELS.GET_OVERVIEW, null)).rejects.toThrow()
+        await expect(invokeHandler(KB_IPC_CHANNELS.GET_OVERVIEW, undefined)).rejects.toThrow()
+      })
+
+      it('rejects invalid UUID format', async () => {
+        await expect(
+          invokeHandler(KB_IPC_CHANNELS.GET_OVERVIEW, { id: 'invalid-uuid' })
+        ).rejects.toThrow()
+      })
+
+      it('rejects unexpected properties (.strict())', async () => {
+        await expect(
+          invokeHandler(KB_IPC_CHANNELS.GET_OVERVIEW, {
+            id: crypto.randomUUID(),
+            extra: 'forbidden'
+          })
+        ).rejects.toThrow()
+      })
+    })
   })
 
   // ---------------------------------------------------------------------------
@@ -571,6 +595,43 @@ describe('Phase 4 Step 4.2: Secure Knowledge Base IPC Bridge & Preload Integrati
       expect(result.directoryCleaned).toBe(false)
       expect(result.cleanupPending).toBe(true)
     })
+
+    it('retrieves knowledge base overview with aggregated statistics via GET_OVERVIEW channel', async () => {
+      const created = (await invokeHandler(KB_IPC_CHANNELS.CREATE, {
+        name: 'Overview KB'
+      })) as KnowledgeBaseDto
+
+      const overview = (await invokeHandler(KB_IPC_CHANNELS.GET_OVERVIEW, {
+        id: created.id
+      })) as KnowledgeBaseOverviewDto
+
+      expect(overview).toBeDefined()
+      expect(overview.knowledgeBaseId).toBe(created.id)
+      expect(overview.bots).toEqual({ total: 0, active: 0, archived: 0 })
+      expect(overview.documents).toEqual({
+        total: 0,
+        ready: 0,
+        processing: 0,
+        failed: 0,
+        totalBytes: 0
+      })
+      expect(overview.indexing).toEqual({ totalChunks: 0, totalTokens: 0, lastIndexedAt: null })
+      expect(overview.recentActivity).toEqual([])
+    })
+
+    it('rejects overview for nonexistent knowledge base with NOT_FOUND', async () => {
+      const nonExistentId = crypto.randomUUID()
+      await expect(
+        invokeHandler(KB_IPC_CHANNELS.GET_OVERVIEW, { id: nonExistentId })
+      ).rejects.toThrow()
+
+      try {
+        await invokeHandler(KB_IPC_CHANNELS.GET_OVERVIEW, { id: nonExistentId })
+      } catch (err) {
+        const parsed = JSON.parse((err as Error).message)
+        expect(parsed.code).toBe('NOT_FOUND')
+      }
+    })
   })
 
   // ---------------------------------------------------------------------------
@@ -722,6 +783,21 @@ describe('Phase 4 Step 4.2: Secure Knowledge Base IPC Bridge & Preload Integrati
       const deleted = await api.delete(testId)
       expect(deleted).toEqual(deleteResult)
       expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(KB_IPC_CHANNELS.DELETE, { id: testId })
+
+      // 8. getOverview
+      const mockOverview: KnowledgeBaseOverviewDto = {
+        knowledgeBaseId: testId,
+        bots: { total: 1, active: 1, archived: 0 },
+        documents: { total: 2, ready: 2, processing: 0, failed: 0, totalBytes: 2048 },
+        indexing: { totalChunks: 4, totalTokens: 500, lastIndexedAt: 1700000002000 },
+        recentActivity: []
+      }
+      ;(mockIpcRenderer.invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockOverview)
+      const overviewResult = await api.getOverview(testId)
+      expect(overviewResult).toEqual(mockOverview)
+      expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(KB_IPC_CHANNELS.GET_OVERVIEW, {
+        id: testId
+      })
     })
 
     it('createKnowledgeBasesApi normalizes rejection into KnowledgeBaseBridgeError', async () => {

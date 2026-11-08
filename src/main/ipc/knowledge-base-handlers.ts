@@ -2,6 +2,7 @@ import { ipcMain, BrowserWindow } from 'electron'
 import {
   KB_IPC_CHANNELS,
   type KnowledgeBaseDto,
+  type KnowledgeBaseOverviewDto,
   type DeleteKnowledgeBaseResult
 } from '../../shared/ipc'
 import { KnowledgeBaseManager } from '../services/knowledge-base-manager'
@@ -15,7 +16,8 @@ import {
   knowledgeBaseArchiveIpcSchema,
   knowledgeBaseUnarchiveIpcSchema,
   knowledgeBaseDeleteIpcSchema,
-  knowledgeBaseListIpcSchema
+  knowledgeBaseListIpcSchema,
+  knowledgeBaseOverviewIpcSchema
 } from './knowledge-base-validation'
 
 export interface KnowledgeBaseErrorDto {
@@ -190,6 +192,21 @@ export function registerKnowledgeBaseIpcHandlers(
       }
     }
   )
+
+  // 8. Get Overview
+  ipcMain.removeHandler(KB_IPC_CHANNELS.GET_OVERVIEW)
+  ipcMain.handle(
+    KB_IPC_CHANNELS.GET_OVERVIEW,
+    async (event, rawPayload: unknown): Promise<KnowledgeBaseOverviewDto> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateKnowledgeBaseIpcPayload(knowledgeBaseOverviewIpcSchema, rawPayload)
+        return await kbManager.getOverview(payload.id)
+      } catch (err) {
+        throw formatKnowledgeBaseIpcError(err)
+      }
+    }
+  )
 }
 
 /**
@@ -229,7 +246,8 @@ export function registerFailingKnowledgeBaseIpcHandlers(
     KB_IPC_CHANNELS.UPDATE,
     KB_IPC_CHANNELS.ARCHIVE,
     KB_IPC_CHANNELS.UNARCHIVE,
-    KB_IPC_CHANNELS.DELETE
+    KB_IPC_CHANNELS.DELETE,
+    KB_IPC_CHANNELS.GET_OVERVIEW
   ]
 
   for (const channel of allChannels) {
