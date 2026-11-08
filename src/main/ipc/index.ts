@@ -1,3 +1,5 @@
 export * from './provider-validation'
 export * from './provider-stream-manager'
 export * from './provider-handlers'
+export * from './knowledge-base-validation'
+export * from './knowledge-base-handlers'

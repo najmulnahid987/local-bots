@@ -6,12 +6,16 @@ import {
   registerIpcHandlers,
   registerProviderIpcHandlers,
   registerFailingProviderIpcHandlers,
+  registerKnowledgeBaseIpcHandlers,
+  registerFailingKnowledgeBaseIpcHandlers,
   isTrustedRendererUrl
 } from './ipc'
 import { databaseManager } from './database/connection'
 import { runMigrations, migrations } from './database/migrations'
 import { CredentialVault } from './security/credential-vault/credential-vault'
 import { ProviderConnectionRepository } from './database/repositories/provider-connection-repository'
+import { KnowledgeBaseRepository } from './database/repositories/knowledge-base-repository'
+import { KnowledgeBaseManager } from './services/knowledge-base-manager'
 import { providerRegistry } from './providers/provider-registry'
 import { ProviderManagerService } from './providers/provider-manager/provider-manager-service'
 import { sanitizeErrorMessage } from './providers/provider-manager/errors'
@@ -303,6 +307,28 @@ app.whenReady().then(async () => {
       sanitizeErrorMessage(String(providerError))
     )
     registerFailingProviderIpcHandlers(() => mainWindow, 'Provider subsystem failed to initialize.')
+  }
+
+  // Initialize KnowledgeBaseManager and register Knowledge Base IPC handlers
+  try {
+    const userDataPath = app.getPath('userData')
+    const kbRepo = new KnowledgeBaseRepository(db)
+    const kbManager = new KnowledgeBaseManager({
+      repository: kbRepo,
+      userDataPath
+    })
+
+    registerKnowledgeBaseIpcHandlers(() => mainWindow, kbManager)
+    console.log(
+      '[KNOWLEDGE_BASE_SUBSYSTEM_INITIALIZED]',
+      JSON.stringify({ documentsDir: kbManager.getDocumentsDirectory() })
+    )
+  } catch (kbError) {
+    console.error('[KNOWLEDGE_BASE_SUBSYSTEM_INITIALIZATION_FAILED]', kbError)
+    registerFailingKnowledgeBaseIpcHandlers(
+      () => mainWindow,
+      'Knowledge Base subsystem failed to initialize.'
+    )
   }
 
   createWindow()

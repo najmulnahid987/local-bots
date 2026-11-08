@@ -140,7 +140,8 @@ describe('Renderer: Provider Management Settings UI (Phase 3 Step 3.8)', () => {
 
     window.api = {
       ping: vi.fn(),
-      providers: mockProviderApi as unknown as ProviderApi
+      providers: mockProviderApi as unknown as ProviderApi,
+      knowledgeBases: {} as unknown as (typeof window.api)['knowledgeBases']
     }
   })
 

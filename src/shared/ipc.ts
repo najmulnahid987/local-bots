@@ -23,7 +23,20 @@ export const PROVIDER_IPC_CHANNELS = {
 
 export type ProviderIpcChannel = (typeof PROVIDER_IPC_CHANNELS)[keyof typeof PROVIDER_IPC_CHANNELS]
 
-export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS] | ProviderIpcChannel
+export const KB_IPC_CHANNELS = {
+  LIST: 'kb:list',
+  GET_BY_ID: 'kb:get-by-id',
+  CREATE: 'kb:create',
+  UPDATE: 'kb:update',
+  ARCHIVE: 'kb:archive',
+  UNARCHIVE: 'kb:unarchive',
+  DELETE: 'kb:delete'
+} as const
+
+export type KbIpcChannel = (typeof KB_IPC_CHANNELS)[keyof typeof KB_IPC_CHANNELS]
+
+export type IpcChannel =
+  (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS] | ProviderIpcChannel | KbIpcChannel
 
 export * from './providers'
 export * from './knowledge-bases'

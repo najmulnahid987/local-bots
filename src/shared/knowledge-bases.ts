@@ -126,3 +126,30 @@ export function toKnowledgeBaseDto(row: {
     archivedAt: row.archived_at
   }
 }
+
+/**
+ * Normalized error class instantiated in Renderer/Preload when Knowledge Base bridge calls reject.
+ */
+export class KnowledgeBaseBridgeError extends Error {
+  readonly code: string
+
+  constructor(message: string, code = 'KNOWLEDGE_BASE_ERROR') {
+    super(message)
+    this.name = 'KnowledgeBaseBridgeError'
+    this.code = code
+    Object.setPrototypeOf(this, KnowledgeBaseBridgeError.prototype)
+  }
+}
+
+/**
+ * Typed Preload bridge interface exposed at window.api.knowledgeBases.
+ */
+export interface KnowledgeBaseApi {
+  list(options?: KnowledgeBaseListRequest): Promise<readonly KnowledgeBaseDto[]>
+  getById(id: string): Promise<KnowledgeBaseDto | null>
+  create(input: CreateKnowledgeBaseRequest): Promise<KnowledgeBaseDto>
+  update(id: string, input: UpdateKnowledgeBaseRequest): Promise<KnowledgeBaseDto | null>
+  archive(id: string): Promise<KnowledgeBaseDto | null>
+  unarchive(id: string): Promise<KnowledgeBaseDto | null>
+  delete(id: string): Promise<DeleteKnowledgeBaseResult>
+}

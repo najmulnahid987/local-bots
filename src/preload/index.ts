@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import {
   IPC_CHANNELS,
   PROVIDER_IPC_CHANNELS,
+  KB_IPC_CHANNELS,
   PingRequest,
   PingResponse,
   type ProviderApi,
@@ -20,7 +21,14 @@ import {
   type StreamTextInput,
   type ProviderStreamEvent,
   type ProviderStreamHandle,
-  ProviderBridgeError
+  ProviderBridgeError,
+  type KnowledgeBaseApi,
+  type KnowledgeBaseDto,
+  type CreateKnowledgeBaseRequest,
+  type UpdateKnowledgeBaseRequest,
+  type KnowledgeBaseListRequest,
+  type DeleteKnowledgeBaseResult,
+  KnowledgeBaseBridgeError
 } from '../shared/ipc'
 
 /**
@@ -219,12 +227,106 @@ export function createProvidersApi(ipc: typeof ipcRenderer): ProviderApi {
   }
 }
 
+/**
+ * Parses and normalizes any Knowledge Base IPC error rejection into a structured KnowledgeBaseBridgeError.
+ */
+export function normalizeKnowledgeBaseBridgeError(error: unknown): KnowledgeBaseBridgeError {
+  if (error instanceof KnowledgeBaseBridgeError) {
+    return error
+  }
+  const rawMsg = error instanceof Error ? error.message : String(error)
+  const jsonMatch = rawMsg.match(/\{[\s\S]*"code"[\s\S]*"message"[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        code?: string
+        message?: string
+      }
+      if (parsed.code && parsed.message) {
+        return new KnowledgeBaseBridgeError(parsed.message, parsed.code)
+      }
+    } catch {
+      // Fall through to default sanitization
+    }
+  }
+
+  return new KnowledgeBaseBridgeError(rawMsg, 'KNOWLEDGE_BASE_ERROR')
+}
+
+/**
+ * Creates the typed KnowledgeBaseApi bridge wrapping ipcRenderer.
+ * Dependency injection allows deterministic unit testing without native Electron handles.
+ */
+export function createKnowledgeBasesApi(ipc: typeof ipcRenderer): KnowledgeBaseApi {
+  return {
+    list: async (options?: KnowledgeBaseListRequest): Promise<readonly KnowledgeBaseDto[]> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.LIST, options ?? {})
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    getById: async (id: string): Promise<KnowledgeBaseDto | null> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.GET_BY_ID, { id })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    create: async (input: CreateKnowledgeBaseRequest): Promise<KnowledgeBaseDto> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.CREATE, input)
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    update: async (
+      id: string,
+      input: UpdateKnowledgeBaseRequest
+    ): Promise<KnowledgeBaseDto | null> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.UPDATE, { id, input })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    archive: async (id: string): Promise<KnowledgeBaseDto | null> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.ARCHIVE, { id })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    unarchive: async (id: string): Promise<KnowledgeBaseDto | null> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.UNARCHIVE, { id })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    delete: async (id: string): Promise<DeleteKnowledgeBaseResult> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.DELETE, { id })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    }
+  }
+}
+
 // Bounded, typed APIs exposed to the Renderer
 export const api = {
   ping: (request: PingRequest): Promise<PingResponse> => {
     return ipcRenderer.invoke(IPC_CHANNELS.PING, request)
   },
-  providers: createProvidersApi(ipcRenderer)
+  providers: createProvidersApi(ipcRenderer),
+  knowledgeBases: createKnowledgeBasesApi(ipcRenderer)
 }
 
 // Expose safe, bounded APIs using contextBridge
