@@ -26,6 +26,7 @@ export type ProviderIpcChannel = (typeof PROVIDER_IPC_CHANNELS)[keyof typeof PRO
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS] | ProviderIpcChannel
 
 export * from './providers'
+export * from './knowledge-bases'
 
 export interface PingRequest {
   requestId: string
