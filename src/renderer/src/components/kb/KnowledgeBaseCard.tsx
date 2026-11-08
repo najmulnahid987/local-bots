@@ -1,11 +1,12 @@
 import { ReactElement } from 'react'
-import { Edit3, Archive, ArchiveRestore, Trash2, Check, Clock } from 'lucide-react'
+import { Edit3, Archive, ArchiveRestore, Trash2, Check, Clock, FolderOpen } from 'lucide-react'
 import type { KnowledgeBaseDto } from '../../../../shared/knowledge-bases'
 
 export interface KnowledgeBaseCardProps {
   readonly knowledgeBase: KnowledgeBaseDto
   readonly isActiveWorkspace: boolean
-  readonly onSelectWorkspace: (id: string) => void
+  readonly onOpenWorkspace: (id: string) => void
+  readonly onSelectWorkspace?: (id: string) => void
   readonly onEdit: (kb: KnowledgeBaseDto) => void
   readonly onArchive: (kb: KnowledgeBaseDto) => void
   readonly onUnarchive: (kb: KnowledgeBaseDto) => void
@@ -15,6 +16,7 @@ export interface KnowledgeBaseCardProps {
 export function KnowledgeBaseCard({
   knowledgeBase,
   isActiveWorkspace,
+  onOpenWorkspace,
   onSelectWorkspace,
   onEdit,
   onArchive,
@@ -94,16 +96,19 @@ export function KnowledgeBaseCard({
         </div>
 
         <div className="kb-card-actions">
-          <div>
-            {!isArchived && !isActiveWorkspace && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {!isArchived && (
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={() => onSelectWorkspace(knowledgeBase.id)}
-                aria-label={`Select ${knowledgeBase.name} as active workspace`}
-                data-testid={`btn-select-workspace-${knowledgeBase.id}`}
+                onClick={() => {
+                  onOpenWorkspace(knowledgeBase.id)
+                  onSelectWorkspace?.(knowledgeBase.id)
+                }}
+                aria-label={`Open ${knowledgeBase.name} workspace`}
+                data-testid={`btn-open-workspace-${knowledgeBase.id}`}
               >
-                Select Workspace
+                <FolderOpen size={14} className="inline-icon" aria-hidden="true" /> Open Workspace
               </button>
             )}
             {isActiveWorkspace && (

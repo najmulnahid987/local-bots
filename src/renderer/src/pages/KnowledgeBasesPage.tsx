@@ -1,4 +1,5 @@
-import { ReactElement, useState, useMemo } from 'react'
+import { ReactElement, useState, useMemo, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   FolderPlus,
   Search,
@@ -31,13 +32,32 @@ export function KnowledgeBasesPage(): ReactElement {
     clearError
   } = useKnowledgeBases()
 
+  const navigate = useNavigate()
+  const location = useLocation()
+
   // Local UI State
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [statusFilter, setStatusFilter] = useState<FilterStatus>('all')
   const [notification, setNotification] = useState<{
     type: 'success' | 'warning' | 'info'
     message: string
-  } | null>(null)
+  } | null>(() => {
+    const state = location.state as { archivedNotice?: string } | null
+    if (state?.archivedNotice) {
+      return {
+        type: 'warning',
+        message: state.archivedNotice
+      }
+    }
+    return null
+  })
+
+  // Clear navigation state from browser history once consumed
+  useEffect(() => {
+    if (location.state && (location.state as { archivedNotice?: string }).archivedNotice) {
+      window.history.replaceState({}, document.title)
+    }
+  }, [location.state])
 
   // Dialog State
   const [isCreateOpen, setIsCreateOpen] = useState<boolean>(false)
@@ -78,6 +98,12 @@ export function KnowledgeBasesPage(): ReactElement {
     } catch {
       // Error will be reflected in context error
     }
+  }
+
+  // Open Workspace action from card
+  const handleOpenWorkspace = (kbId: string): void => {
+    selectKnowledgeBase(kbId)
+    navigate(`/knowledge-bases/${kbId}`)
   }
 
   // Deletion completion handler
@@ -335,6 +361,7 @@ export function KnowledgeBasesPage(): ReactElement {
               key={kb.id}
               knowledgeBase={kb}
               isActiveWorkspace={activeKnowledgeBaseId === kb.id}
+              onOpenWorkspace={handleOpenWorkspace}
               onSelectWorkspace={selectKnowledgeBase}
               onEdit={(targetKb) => setEditingKb(targetKb)}
               onArchive={(targetKb) => setArchivingKb(targetKb)}

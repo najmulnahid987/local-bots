@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import type { ReactElement } from 'react'
+import { MemoryRouter } from 'react-router-dom'
 import { KnowledgeBasesPage } from './KnowledgeBasesPage'
 import { KnowledgeBaseProvider, ACTIVE_KB_STORAGE_KEY } from '../contexts/KnowledgeBaseContext'
 import type {
@@ -174,11 +175,13 @@ describe('Renderer: KnowledgeBasesPage & Dashboard UI (Phase 4 Step 4.4)', () =>
     }
   }
 
-  function renderPage(): ReactElement {
+  function renderPage(initialEntries = ['/knowledge-bases']): ReactElement {
     return (
-      <KnowledgeBaseProvider api={mockApi.api} storage={memoryStorage}>
-        <KnowledgeBasesPage />
-      </KnowledgeBaseProvider>
+      <MemoryRouter initialEntries={initialEntries}>
+        <KnowledgeBaseProvider api={mockApi.api} storage={memoryStorage}>
+          <KnowledgeBasesPage />
+        </KnowledgeBaseProvider>
+      </MemoryRouter>
     )
   }
 
@@ -326,8 +329,8 @@ describe('Renderer: KnowledgeBasesPage & Dashboard UI (Phase 4 Step 4.4)', () =>
       })
 
       expect(screen.getByTestId(`active-label-${activeKb1.id}`)).toBeTruthy()
-      // KB2 should have a select workspace button
-      expect(screen.getByTestId(`btn-select-workspace-${activeKb2.id}`)).toBeTruthy()
+      // KB2 should have an open workspace button
+      expect(screen.getByTestId(`btn-open-workspace-${activeKb2.id}`)).toBeTruthy()
     })
 
     it('renders neutral placeholder when a Knowledge Base description is empty', async () => {
@@ -347,14 +350,14 @@ describe('Renderer: KnowledgeBasesPage & Dashboard UI (Phase 4 Step 4.4)', () =>
       expect(screen.getByText('No description provided.')).toBeTruthy()
     })
 
-    it('selects a Knowledge Base as active workspace when clicking Select Workspace', async () => {
+    it('opens and selects a Knowledge Base as active workspace when clicking Open Workspace', async () => {
       render(renderPage())
 
       await waitFor(() => {
-        expect(screen.getByTestId(`btn-select-workspace-${activeKb1.id}`)).toBeTruthy()
+        expect(screen.getByTestId(`btn-open-workspace-${activeKb1.id}`)).toBeTruthy()
       })
 
-      fireEvent.click(screen.getByTestId(`btn-select-workspace-${activeKb1.id}`))
+      fireEvent.click(screen.getByTestId(`btn-open-workspace-${activeKb1.id}`))
 
       expect(screen.getByTestId(`badge-current-workspace-${activeKb1.id}`)).toBeTruthy()
       expect(memoryStorage.getItem(ACTIVE_KB_STORAGE_KEY)).toBe(activeKb1.id)
