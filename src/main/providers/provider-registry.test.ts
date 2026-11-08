@@ -363,7 +363,12 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     const providers = providerRegistry.getProviders()
     const allModels = providerRegistry.getModels()
     const defaultModel = providerRegistry.getDefaultModel('openai')
-    const capCheck = providerRegistry.supportsCapability('openai', 'gpt-6-luna', 'tools')
+    const capCheck = providerRegistry.supportsCapability('openai', 'gpt-6-luna', 'streaming')
+    const nativeCapCheck = providerRegistry.supportsNativeCapability(
+      'openai',
+      'gpt-6-luna',
+      'tools'
+    )
     const validation = providerRegistry.validateCapabilities(allModels[0], { streaming: true })
 
     const elapsed = performance.now() - start
@@ -372,6 +377,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     expect(Array.isArray(allModels)).toBe(true)
     expect(defaultModel).not.toBeNull()
     expect(capCheck).toBe(true)
+    expect(nativeCapCheck).toBe(true)
     expect(validation.valid).toBe(true)
     expect(elapsed).toBeLessThan(50) // Sub-millisecond purely synchronous in-memory operation
   })

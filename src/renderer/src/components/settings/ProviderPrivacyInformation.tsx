@@ -35,9 +35,11 @@ export function ProviderPrivacyInformation(): ReactElement {
             <span className="privacy-block-title">Direct Outbound Ingestion</span>
           </div>
           <p className="privacy-block-text">
-            All AI model inference traffic travels directly from this machine to official provider
-            endpoints over TLS 1.3. No intermediary proxies, third-party analytics, or external
-            middleware intercept your tokens.
+            The application sends model requests over HTTPS directly to fixed official provider
+            endpoints without an application-configured proxy or AI gateway. The negotiated TLS
+            version depends on the runtime and server. The selected AI provider receives submitted
+            prompts and content and handles them under its applicable account terms, retention
+            policy, and service tier.
           </p>
         </div>
       </div>

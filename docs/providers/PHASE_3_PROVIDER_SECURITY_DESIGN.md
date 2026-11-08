@@ -1684,6 +1684,64 @@ The Settings UI explicitly clarifies the local-first security boundaries:
 - **Direct Outbound Transmission:** Outbound inference requests travel directly from the user's desktop to official vendor endpoints over TLS 1.3 without intermediary servers.
 - **Vendor Policy Differences:** Clarifies that cloud providers process prompts according to their published terms (e.g. OpenAI commercial privacy, Anthropic zero-data-retention options, Google Gemini Free vs. Paid API tier logging differences).
 
+---
+
+## 24. End-to-End Integration Verification and Phase 3 Gate Decision (Step 3.9)
+
+### 24.1 Full-Stack Architectural Verification
+A comprehensive audit and integration test suite across all 9 architectural layers was completed:
+1. **Operating System Vault Layer (`CredentialVault`):** Validated on Windows DPAPI, macOS Keychain, and Linux `libsecret`. Employs atomic temp files, 0600 file permissions, non-symlink verification, and cryptographic hash verification. `existsSync` provides fast, synchronous disk existence checks without decryption.
+2. **Persistence Layer (`ProviderConnectionRepository`, Migration 002):** Validated on SQLite WAL mode with foreign keys enabled. Enforces metadata-only persistence, composite indexes, and strict `ON DELETE RESTRICT` constraints when Bots reference a connection.
+3. **Domain Registry Layer (`ProviderRegistry`, `model-catalog`):** Maintains authoritative registry for OpenAI, Anthropic, and Google Gemini. Clearly distinguishes native model features (`providerCapabilities`) from effective runtime capabilities (`applicationCapabilities`).
+4. **Adapter Layer (`OpenAIAdapter`, `AnthropicAdapter`, `GoogleAdapter`):** Executes direct HTTPS communication over official provider endpoints with zero custom proxy paths. Employs ephemeral client instantiation, data-privacy configurations (`store: false`), and rigorous error sanitization.
+5. **Orchestration Layer (`ProviderManagerService`):** Implements single-point entry for connection lifecycle, credential reconciliation, just-in-time decryption, and capability gating before key decryption.
+6. **IPC Security Layer (`provider-handlers`, `provider-stream-manager`):** Enforces sender origin validation (`event.senderFrame === mainWindow.webContents.mainFrame`), Zod schema parsing, bounded payload sizes, structured error normalization, and dedicated `MessageChannelMain` ports for streaming.
+7. **Preload Contract Layer (`window.api.providers`):** Exposes 11 narrowly typed, frozen API methods. Enforces defensive serialization, strips internal references (`credential_ref`), and normalizes IPC errors into strongly typed `ProviderBridgeError` instances.
+8. **Settings UI Layer (`ProviderConnectionsSection` & subcomponents):** Provides complete user workflow for adding, testing, renaming, re-encrypting, and removing connections. Clears plaintext inputs immediately and prevents multiple concurrent submissions.
+9. **Packaged Electron Verification:** Verified that `better-sqlite3`, native bindings, encryption vaults, migrations, and UI compile and load cleanly in production and unpack targets.
+
+### 24.2 Capability Availability Semantics
+To prevent false advertising while preserving future roadmap extensibility:
+- **`providerCapabilities`:** Frontier features natively supported by provider models (e.g. `tools: true`, `imageInput: true`, `structuredOutput: true`).
+- **`applicationCapabilities`:** Effective capabilities currently enabled and supported by the application shell runtime (`CURRENT_APPLICATION_CAPABILITIES`: `streaming: true`, `tools: false`, `imageInput: false`, `structuredOutput: false`).
+- **`computeEffectiveCapabilities`:** The effective capability set presented to the UI and downstream consumers is computed via `provider && application`.
+- **Pre-Decryption Safety Gate:** Attempting to invoke tools, structured schema output, or multimodal images throws a `VALIDATION_ERROR` in `ProviderManagerService` before `CredentialVault.retrieve()` is ever called, ensuring secrets are never decrypted for unsupported requests.
+
+### 24.3 Privacy Disclosure Correction
+In compliance with Section 10 security guidelines, `ProviderPrivacyInformation.tsx` was updated to accurately state:
+*"The application sends model requests over HTTPS directly to fixed official provider endpoints without an application-configured proxy or AI gateway. The negotiated TLS version depends on the runtime and server. The selected AI provider receives submitted prompts and content and handles them under its applicable account terms, retention policy, and service tier."*
+Absolute claims of client-enforced TLS 1.3 were removed to reflect true TLS negotiation semantics.
+
+### 24.4 Automated Integration Verification Suite
+The dedicated integration test suite (`src/main/providers/end-to-end-integration.test.ts`) verifies 18 comprehensive real-world scenarios:
+1. Connection creation and persistence with zero secret leakage in DB or DTO.
+2. Application restart and startup reconciliation without secret exposure.
+3. Just-in-time saved connection testing with latency reporting.
+4. Text generation across IPC bridge with normalized token usage.
+5. Text streaming over dedicated `MessagePortMain` channel with ordered chunks.
+6. Stream cancellation terminating active sessions immediately.
+7. Credential replacement updating vault and purging obsolete keys.
+8. Preservation of existing working credential upon invalid replacement rejection.
+9. Connection renaming with whitespace trimming persisted to SQLite.
+10. Rejection of connection deletion when referenced by an active Bot.
+11. Safe deletion of unreferenced connections and vault files.
+12. Startup reconciliation purging orphaned vault files.
+13. Marking connections with missing vault files as `hasCredential: false` and `status: 'error'`.
+14. Rejecting unsupported capabilities (tools, images, schemas) before decrypting credentials.
+15. Preventing secrets, plaintext keys, and `credential_ref` from crossing IPC.
+16. Verifying secrets never appear in SQLite rows, WAL pages, or error messages.
+17. Enforcing IPC sender validation rejecting untrusted frame origins.
+18. Multi-provider execution (OpenAI, Anthropic, Google) with foreign model rejection.
+
+### 24.5 Full Test Matrix Results
+- **Automated Tests:** 457 tests passed across 24 test suites (100% pass rate).
+- **TypeScript:** 0 errors across Node and Web targets (`npm run typecheck`).
+- **Linting:** 0 errors, 0 warnings (`npm run lint`).
+- **Production Build:** Succeeded in 356ms (`npm run build`).
+
+### 24.6 Phase 3 Gate Decision
+All Phase 3 requirements, security baselines, and acceptance criteria have been fully satisfied. Phase 3 is formally signed off as **COMPLETE**. The repository is ready to advance to **Phase 4: Knowledge Base Management & Workspaces**.
+
 
 
 

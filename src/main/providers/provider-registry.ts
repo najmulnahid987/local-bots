@@ -6,6 +6,7 @@ import {
   type ModelDescriptor,
   type ProviderDescriptor,
   type ProviderId,
+  type ProviderNativeCapabilities,
   type RequestedCapabilities,
   isValidProviderId
 } from './types'
@@ -46,6 +47,12 @@ function cloneModelDescriptor(model: ModelDescriptor): ModelDescriptor {
     description: model.description,
     availability: model.availability,
     contextWindow: model.contextWindow ? { ...model.contextWindow } : undefined,
+    providerCapabilities: model.providerCapabilities
+      ? { ...model.providerCapabilities }
+      : undefined,
+    applicationCapabilities: model.applicationCapabilities
+      ? { ...model.applicationCapabilities }
+      : undefined,
     capabilities: { ...model.capabilities },
     docUrl: model.docUrl
   })
@@ -203,6 +210,22 @@ export class ProviderRegistry {
       return false
     }
     return Boolean(model.capabilities[capability])
+  }
+
+  /**
+   * Checks whether the underlying provider model natively supports a capability,
+   * regardless of whether the application currently supports it in this phase.
+   */
+  supportsNativeCapability(
+    providerId: string,
+    modelId: string,
+    capability: keyof ProviderNativeCapabilities
+  ): boolean {
+    const model = this.getModel(providerId, modelId)
+    if (!model || !model.providerCapabilities) {
+      return false
+    }
+    return Boolean(model.providerCapabilities[capability])
   }
 
   /**

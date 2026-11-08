@@ -14,7 +14,58 @@ export const PROVIDER_CONNECTION_STATUSES = ['active', 'revoked', 'error'] as co
 export type ProviderConnectionStatus = (typeof PROVIDER_CONNECTION_STATUSES)[number]
 
 /**
+ * Model capabilities supported natively by the provider's underlying model.
+ */
+export interface ProviderNativeCapabilities {
+  readonly streaming: boolean
+  readonly tools: boolean
+  readonly imageInput: boolean
+  readonly structuredOutput: boolean
+}
+
+/**
+ * Capabilities supported by the local application implementation in the current development phase.
+ */
+export interface ApplicationCapabilities {
+  readonly streaming: boolean
+  readonly tools: boolean
+  readonly imageInput: boolean
+  readonly structuredOutput: boolean
+}
+
+/**
+ * Authoritative capability baseline supported by the current Phase 3 application runtime.
+ * Text generation and streaming are operational; tool calling, image input, and structured output
+ * schemas are deferred to later phases.
+ */
+export const CURRENT_APPLICATION_CAPABILITIES: Readonly<ApplicationCapabilities> = Object.freeze({
+  streaming: true,
+  tools: false,
+  imageInput: false,
+  structuredOutput: false
+})
+
+/**
+ * Computes effective capabilities by intersecting provider native capabilities
+ * with actual application runtime capabilities.
+ */
+export function computeEffectiveCapabilities(
+  providerNative: ProviderNativeCapabilities,
+  applicationSupported: ApplicationCapabilities = CURRENT_APPLICATION_CAPABILITIES
+): ModelCapabilityDto {
+  return {
+    streaming: Boolean(providerNative.streaming && applicationSupported.streaming),
+    tools: Boolean(providerNative.tools && applicationSupported.tools),
+    imageInput: Boolean(providerNative.imageInput && applicationSupported.imageInput),
+    structuredOutput: Boolean(
+      providerNative.structuredOutput && applicationSupported.structuredOutput
+    )
+  }
+}
+
+/**
  * Public, safe representation of model capabilities for UI and client inspection.
+ * Represents the effective capabilities currently executable by the application.
  */
 export interface ModelCapabilityDto {
   readonly streaming: boolean
@@ -36,6 +87,8 @@ export interface ModelDescriptorDto {
     readonly inputTokens: number
     readonly outputTokens: number
   }
+  readonly providerCapabilities?: ProviderNativeCapabilities
+  readonly applicationCapabilities?: ApplicationCapabilities
   readonly capabilities: ModelCapabilityDto
   readonly docUrl: string
 }

@@ -411,6 +411,23 @@ export class CredentialVault {
   }
 
   /**
+   * Synchronously checks whether a credential reference file currently exists on disk.
+   * Invariant: Never follows symbolic links; strictly verifies that target is a regular file.
+   */
+  public existsSync(credentialRef: string): boolean {
+    if (!isValidCredentialRef(credentialRef)) {
+      return false
+    }
+    try {
+      const finalPath = this.getCredentialFilePath(credentialRef)
+      const stat = fs.lstatSync(finalPath)
+      return stat.isFile() && !stat.isSymbolicLink()
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * Enumerates all valid encrypted credential references currently present in the vault directory.
    * Invariant: Never follows symbolic links; ignores unrecognized files and temp files.
    */

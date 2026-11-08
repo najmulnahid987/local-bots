@@ -16,9 +16,23 @@ export function isValidProviderId(value: unknown): value is ProviderId {
  */
 export type ModelAvailability = 'stable' | 'preview' | 'deprecated'
 
+import {
+  type ProviderNativeCapabilities,
+  type ApplicationCapabilities,
+  CURRENT_APPLICATION_CAPABILITIES,
+  computeEffectiveCapabilities
+} from '../../shared/providers'
+
+export {
+  type ProviderNativeCapabilities,
+  type ApplicationCapabilities,
+  CURRENT_APPLICATION_CAPABILITIES,
+  computeEffectiveCapabilities
+}
+
 /**
- * Model capability flags.
- * Each capability must be explicitly declared per model based on verified documentation.
+ * Model capability flags (effective capabilities executable by the application).
+ * Each capability must be explicitly evaluated based on model support and application readiness.
  * Unknown or unsupported capabilities must never silently default to true.
  */
 export interface ModelCapabilities {
@@ -46,6 +60,8 @@ export interface ModelDescriptor {
   readonly description: string
   readonly availability: ModelAvailability
   readonly contextWindow?: ContextWindowMetadata
+  readonly providerCapabilities?: ProviderNativeCapabilities
+  readonly applicationCapabilities?: ApplicationCapabilities
   readonly capabilities: ModelCapabilities
   readonly docUrl: string
 }

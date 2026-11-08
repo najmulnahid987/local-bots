@@ -26,7 +26,7 @@ import { ProviderRegistry, providerRegistry } from '../provider-registry'
 import { OpenAIAdapter } from '../openai'
 import { AnthropicAdapter } from '../anthropic'
 import { GoogleAdapter } from '../google'
-import { ProviderAdapterError } from '../types'
+import { ProviderAdapterError, type ModelDescriptor } from '../types'
 
 /**
  * Main-process centralized service for managing provider connections, credentials,
@@ -524,7 +524,7 @@ export class ProviderManagerService {
       )
     }
 
-    this.assertCapabilities(options)
+    this.assertCapabilities(options, model)
 
     // Decrypt credential just-in-time
     let apiKey: string
@@ -591,7 +591,7 @@ export class ProviderManagerService {
     }
 
     try {
-      this.assertCapabilities(options)
+      this.assertCapabilities(options, model)
     } catch (err) {
       yield {
         type: 'error',
@@ -627,7 +627,10 @@ export class ProviderManagerService {
   /**
    * Enforces that requested features do not exceed supported capabilities for Phase 3 Step 3.7A.
    */
-  private assertCapabilities(options: Omit<GenerateTextOptions, 'modelId'>): void {
+  private assertCapabilities(
+    options: Omit<GenerateTextOptions, 'modelId'>,
+    model?: ModelDescriptor | null
+  ): void {
     if (options.tools && options.tools.length > 0) {
       throw new ProviderAdapterError({
         code: 'UNSUPPORTED_CAPABILITY',
@@ -656,6 +659,24 @@ export class ProviderManagerService {
         }
       }
     }
+
+    if (model) {
+      const validation = this.registry.validateCapabilities(model, {
+        streaming: false,
+        tools: Boolean(options.tools && options.tools.length > 0),
+        imageInput: options.messages.some(
+          (m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image')
+        ),
+        structuredOutput: Boolean(options.jsonSchema)
+      })
+      if (!validation.valid) {
+        throw new ProviderAdapterError({
+          code: 'UNSUPPORTED_CAPABILITY',
+          message: validation.reason,
+          retryable: false
+        })
+      }
+    }
   }
 
   private getAdapter(providerId: ProviderId): ProviderAdapter {
@@ -670,12 +691,19 @@ export class ProviderManagerService {
   }
 
   private mapToSummary(connection: ProviderConnection): ProviderConnectionSummary {
+    const fileExists = Boolean(
+      connection.credentialRef &&
+      (typeof this.vault.existsSync === 'function'
+        ? this.vault.existsSync(connection.credentialRef)
+        : true)
+    )
+
     return {
       id: connection.id,
       providerId: connection.providerId as ProviderId,
       label: connection.label,
-      status: connection.status,
-      hasCredential: Boolean(connection.credentialRef && connection.credentialRef.length > 0),
+      status: !fileExists && connection.status === 'active' ? 'error' : connection.status,
+      hasCredential: fileExists,
       createdAt: connection.createdAt,
       updatedAt: connection.updatedAt
     }
