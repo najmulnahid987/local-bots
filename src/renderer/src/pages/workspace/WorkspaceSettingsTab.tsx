@@ -67,7 +67,7 @@ export function WorkspaceSettingsTab(): ReactElement {
               data-testid="settings-val-storage"
             >
               <HardDrive size={12} className="inline-icon text-secondary" aria-hidden="true" />{' '}
-              knowledge_bases/{knowledgeBase.id}
+              documents/{knowledgeBase.id}
             </dd>
           </div>
 

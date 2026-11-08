@@ -291,6 +291,12 @@ describe('Renderer: Knowledge Base Workspace Shell & Navigation (Phase 4 Step 4.
       })
       expect(screen.getByTestId('settings-val-name').textContent).toBe('Research Workspace')
       expect(screen.getByTestId('settings-val-id').textContent).toContain(activeKb1.id)
+      expect(screen.getByTestId('settings-val-storage').textContent).toContain(
+        `documents/${activeKb1.id}`
+      )
+      expect(screen.getByTestId('settings-val-storage').textContent).not.toContain(
+        'knowledge_bases/'
+      )
 
       // Switch to KB 2
       act(() => {
@@ -302,6 +308,12 @@ describe('Renderer: Knowledge Base Workspace Shell & Navigation (Phase 4 Step 4.
         expect(screen.getByTestId('settings-val-name').textContent).toBe('Engineering Specs')
       })
       expect(screen.getByTestId('settings-val-id').textContent).toContain(activeKb2.id)
+      expect(screen.getByTestId('settings-val-storage').textContent).toContain(
+        `documents/${activeKb2.id}`
+      )
+      expect(screen.getByTestId('settings-val-storage').textContent).not.toContain(
+        'knowledge_bases/'
+      )
     })
   })
 
