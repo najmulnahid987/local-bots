@@ -313,4 +313,82 @@ describe('KnowledgeSourceRepository', () => {
     expect(kb2Sources).toHaveLength(1)
     expect(kb2Sources[0].file_name).toBe('kb2.txt')
   })
+
+  it('8. lists sources with aggregated chunk counts without N+1 queries', () => {
+    const s1Id = randomUUID()
+    const s2Id = randomUUID()
+
+    sourceRepo.create({
+      id: s1Id,
+      knowledge_base_id: kbId,
+      file_name: 'multi_chunk.txt',
+      original_file_name: 'multi_chunk.txt',
+      relative_file_path: 'originals/multi_chunk.txt',
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: 500,
+      content_hash: '3'.repeat(64),
+      indexing_status: 'completed'
+    })
+
+    sourceRepo.create({
+      id: s2Id,
+      knowledge_base_id: kbId,
+      file_name: 'no_chunks.txt',
+      original_file_name: 'no_chunks.txt',
+      relative_file_path: 'originals/no_chunks.txt',
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: 100,
+      content_hash: '4'.repeat(64),
+      indexing_status: 'queued'
+    })
+
+    sourceRepo.insertChunks([
+      {
+        id: randomUUID(),
+        knowledge_base_id: kbId,
+        source_id: s1Id,
+        chunk_index: 0,
+        content: 'Chunk 1',
+        page_number: null,
+        token_count: 5,
+        metadata_json: '{}'
+      },
+      {
+        id: randomUUID(),
+        knowledge_base_id: kbId,
+        source_id: s1Id,
+        chunk_index: 1,
+        content: 'Chunk 2',
+        page_number: null,
+        token_count: 5,
+        metadata_json: '{}'
+      }
+    ])
+
+    const list = sourceRepo.listWithChunkCounts(kbId)
+    expect(list).toHaveLength(2)
+
+    const multi = list.find((s) => s.id === s1Id)
+    const zero = list.find((s) => s.id === s2Id)
+
+    expect(multi?.chunk_count).toBe(2)
+    expect(zero?.chunk_count).toBe(0)
+
+    // Test getByIdWithChunkCount
+    const single = sourceRepo.getByIdWithChunkCount(s1Id, kbId)
+    expect(single).not.toBeNull()
+    expect(single?.chunk_count).toBe(2)
+
+    // Cross KB check returns null
+    const otherKb = kbRepo.create({ name: 'Another KB' })
+    const cross = sourceRepo.getByIdWithChunkCount(s1Id, otherKb.id)
+    expect(cross).toBeNull()
+  })
+
+  it('9. verifies knowledgeBaseExists correctly reports existence', () => {
+    expect(sourceRepo.knowledgeBaseExists(kbId)).toBe(true)
+    expect(sourceRepo.knowledgeBaseExists(randomUUID())).toBe(false)
+  })
 })

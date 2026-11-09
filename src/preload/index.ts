@@ -3,6 +3,7 @@ import {
   IPC_CHANNELS,
   PROVIDER_IPC_CHANNELS,
   KB_IPC_CHANNELS,
+  KB_DOCS_IPC_CHANNELS,
   PingRequest,
   PingResponse,
   type ProviderApi,
@@ -29,7 +30,14 @@ import {
   type UpdateKnowledgeBaseRequest,
   type KnowledgeBaseListRequest,
   type DeleteKnowledgeBaseResult,
-  KnowledgeBaseBridgeError
+  KnowledgeBaseBridgeError,
+  type KnowledgeDocumentApi,
+  type KnowledgeSourceDto,
+  type SelectAndImportDocumentRequest,
+  type ListKnowledgeDocumentsRequest,
+  type GetKnowledgeDocumentRequest,
+  type DocumentImportResultDto,
+  KnowledgeDocumentBridgeError
 } from '../shared/ipc'
 
 /**
@@ -329,13 +337,95 @@ export function createKnowledgeBasesApi(ipc: typeof ipcRenderer): KnowledgeBaseA
   }
 }
 
+function sanitizePreloadDocumentErrorMessage(message: string): string {
+  if (!message || typeof message !== 'string') return message
+  return message
+    .replace(/[a-zA-Z]:\\[^;*?"<>|\r\n]+/g, '[REDACTED_PATH]')
+    .replace(/(?:\/|\.\.\/)[a-zA-Z0-9_./-]+/g, '[REDACTED_PATH]')
+}
+
+/**
+ * Parses and normalizes any document management IPC error rejection into a structured KnowledgeDocumentBridgeError.
+ */
+export function normalizeKnowledgeDocumentBridgeError(
+  error: unknown
+): KnowledgeDocumentBridgeError {
+  if (error instanceof KnowledgeDocumentBridgeError) {
+    return error
+  }
+  const rawMsg = error instanceof Error ? error.message : String(error)
+  const jsonMatch = rawMsg.match(/\{[\s\S]*"code"[\s\S]*"message"[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        code?: string
+        message?: string
+      }
+      if (parsed.code && parsed.message) {
+        return new KnowledgeDocumentBridgeError(
+          sanitizePreloadDocumentErrorMessage(parsed.message),
+          parsed.code
+        )
+      }
+    } catch {
+      // Fall through to default sanitization
+    }
+  }
+
+  return new KnowledgeDocumentBridgeError(
+    sanitizePreloadDocumentErrorMessage(rawMsg),
+    'DOCUMENT_ERROR'
+  )
+}
+
+/**
+ * Creates the typed KnowledgeDocumentApi bridge wrapping ipcRenderer.
+ * Dependency injection allows deterministic unit testing without native Electron handles.
+ */
+export function createKnowledgeDocumentsApi(ipc: typeof ipcRenderer): KnowledgeDocumentApi {
+  return {
+    selectAndImport: async (
+      request: SelectAndImportDocumentRequest
+    ): Promise<DocumentImportResultDto> => {
+      try {
+        return await ipc.invoke(KB_DOCS_IPC_CHANNELS.SELECT_AND_IMPORT, request)
+      } catch (err) {
+        throw normalizeKnowledgeDocumentBridgeError(err)
+      }
+    },
+
+    list: async (
+      knowledgeBaseIdOrRequest: string | ListKnowledgeDocumentsRequest
+    ): Promise<readonly KnowledgeSourceDto[]> => {
+      try {
+        const payload =
+          typeof knowledgeBaseIdOrRequest === 'string'
+            ? { knowledgeBaseId: knowledgeBaseIdOrRequest }
+            : knowledgeBaseIdOrRequest
+        return await ipc.invoke(KB_DOCS_IPC_CHANNELS.LIST, payload)
+      } catch (err) {
+        throw normalizeKnowledgeDocumentBridgeError(err)
+      }
+    },
+
+    get: async (request: GetKnowledgeDocumentRequest): Promise<KnowledgeSourceDto | null> => {
+      try {
+        return await ipc.invoke(KB_DOCS_IPC_CHANNELS.GET, request)
+      } catch (err) {
+        throw normalizeKnowledgeDocumentBridgeError(err)
+      }
+    }
+  }
+}
+
 // Bounded, typed APIs exposed to the Renderer
 export const api = {
   ping: (request: PingRequest): Promise<PingResponse> => {
     return ipcRenderer.invoke(IPC_CHANNELS.PING, request)
   },
   providers: createProvidersApi(ipcRenderer),
-  knowledgeBases: createKnowledgeBasesApi(ipcRenderer)
+  knowledgeBases: createKnowledgeBasesApi(ipcRenderer),
+  knowledgeDocuments: createKnowledgeDocumentsApi(ipcRenderer)
 }
 
 // Expose safe, bounded APIs using contextBridge

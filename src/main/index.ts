@@ -8,6 +8,8 @@ import {
   registerFailingProviderIpcHandlers,
   registerKnowledgeBaseIpcHandlers,
   registerFailingKnowledgeBaseIpcHandlers,
+  registerDocumentIpcHandlers,
+  registerFailingDocumentIpcHandlers,
   isTrustedRendererUrl
 } from './ipc'
 import { databaseManager } from './database/connection'
@@ -15,7 +17,9 @@ import { runMigrations, migrations } from './database/migrations'
 import { CredentialVault } from './security/credential-vault/credential-vault'
 import { ProviderConnectionRepository } from './database/repositories/provider-connection-repository'
 import { KnowledgeBaseRepository } from './database/repositories/knowledge-base-repository'
+import { KnowledgeSourceRepository } from './database/repositories/knowledge-source-repository'
 import { KnowledgeBaseManager } from './services/knowledge-base-manager'
+import { DocumentStorageManager, DocumentIngestionService } from './documents'
 import { providerRegistry } from './providers/provider-registry'
 import { ProviderManagerService } from './providers/provider-manager/provider-manager-service'
 import { sanitizeErrorMessage } from './providers/provider-manager/errors'
@@ -329,6 +333,28 @@ app.whenReady().then(async () => {
       () => mainWindow,
       'Knowledge Base subsystem failed to initialize.'
     )
+  }
+
+  // Initialize Document Ingestion and register Document IPC handlers
+  try {
+    const userDataPath = app.getPath('userData')
+    const sourceRepo = new KnowledgeSourceRepository(db)
+    const storageManager = new DocumentStorageManager({ userDataPath })
+    const ingestionService = new DocumentIngestionService({
+      db,
+      sourceRepository: sourceRepo,
+      storageManager
+    })
+
+    registerDocumentIpcHandlers({
+      getMainWindow: () => mainWindow,
+      ingestionService,
+      sourceRepository: sourceRepo
+    })
+    console.log('[DOCUMENT_SUBSYSTEM_INITIALIZED]')
+  } catch (docError) {
+    console.error('[DOCUMENT_SUBSYSTEM_INITIALIZATION_FAILED]', docError)
+    registerFailingDocumentIpcHandlers(() => mainWindow, 'Document subsystem failed to initialize.')
   }
 
   createWindow()

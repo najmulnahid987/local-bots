@@ -36,11 +36,23 @@ export const KB_IPC_CHANNELS = {
 
 export type KbIpcChannel = (typeof KB_IPC_CHANNELS)[keyof typeof KB_IPC_CHANNELS]
 
+export const KB_DOCS_IPC_CHANNELS = {
+  SELECT_AND_IMPORT: 'kb:docs:select-and-import',
+  LIST: 'kb:docs:list',
+  GET: 'kb:docs:get'
+} as const
+
+export type KbDocsIpcChannel = (typeof KB_DOCS_IPC_CHANNELS)[keyof typeof KB_DOCS_IPC_CHANNELS]
+
 export type IpcChannel =
-  (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS] | ProviderIpcChannel | KbIpcChannel
+  | (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]
+  | ProviderIpcChannel
+  | KbIpcChannel
+  | KbDocsIpcChannel
 
 export * from './providers'
 export * from './knowledge-bases'
+export * from './knowledge-documents'
 
 export interface PingRequest {
   requestId: string

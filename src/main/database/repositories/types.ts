@@ -373,6 +373,13 @@ export interface KnowledgeSource {
 }
 
 /**
+ * Knowledge source domain entity augmented with aggregated chunk count.
+ */
+export interface KnowledgeSourceWithChunkCount extends KnowledgeSource {
+  readonly chunk_count: number
+}
+
+/**
  * Input for creating a new knowledge_sources row.
  */
 export interface CreateKnowledgeSourceInput {

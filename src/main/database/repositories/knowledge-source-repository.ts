@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import {
   type KnowledgeSource,
+  type KnowledgeSourceWithChunkCount,
   type KnowledgeChunk,
   type CreateKnowledgeSourceInput,
   type CreateKnowledgeChunkInput,
@@ -386,6 +387,104 @@ export class KnowledgeSourceRepository {
       throw new RepositoryError(
         `Failed to list Knowledge Sources: ${err instanceof Error ? err.message : String(err)}`
       )
+    }
+  }
+
+  /**
+   * Lists all knowledge sources in a Knowledge Base ordered by created_at DESC,
+   * including aggregated chunk count in a single query (avoiding N+1 queries).
+   */
+  public listWithChunkCounts(knowledgeBaseId: string): KnowledgeSourceWithChunkCount[] {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT 
+          s.id,
+          s.knowledge_base_id,
+          s.file_name,
+          s.original_file_name,
+          s.relative_file_path,
+          s.file_type,
+          s.mime_type,
+          s.file_size,
+          s.content_hash,
+          s.indexing_status,
+          s.error_message,
+          s.created_at,
+          s.updated_at,
+          s.indexed_at,
+          coalesce(c.chunk_count, 0) AS chunk_count
+        FROM knowledge_sources s
+        LEFT JOIN (
+          SELECT source_id, count(*) AS chunk_count
+          FROM knowledge_chunks
+          WHERE knowledge_base_id = @knowledge_base_id
+          GROUP BY source_id
+        ) c ON c.source_id = s.id
+        WHERE s.knowledge_base_id = @knowledge_base_id
+        ORDER BY s.created_at DESC
+      `)
+      return stmt.all({ knowledge_base_id: knowledgeBaseId }) as KnowledgeSourceWithChunkCount[]
+    } catch (err) {
+      throw new RepositoryError(
+        `Failed to list Knowledge Sources with chunk counts: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  /**
+   * Retrieves a knowledge source record and its aggregated chunk count,
+   * strictly verifying ownership by knowledgeBaseId.
+   */
+  public getByIdWithChunkCount(
+    id: string,
+    knowledgeBaseId: string
+  ): KnowledgeSourceWithChunkCount | null {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT 
+          s.id,
+          s.knowledge_base_id,
+          s.file_name,
+          s.original_file_name,
+          s.relative_file_path,
+          s.file_type,
+          s.mime_type,
+          s.file_size,
+          s.content_hash,
+          s.indexing_status,
+          s.error_message,
+          s.created_at,
+          s.updated_at,
+          s.indexed_at,
+          coalesce(c.chunk_count, 0) AS chunk_count
+        FROM knowledge_sources s
+        LEFT JOIN (
+          SELECT source_id, count(*) AS chunk_count
+          FROM knowledge_chunks
+          WHERE source_id = @id AND knowledge_base_id = @knowledge_base_id
+        ) c ON c.source_id = s.id
+        WHERE s.id = @id AND s.knowledge_base_id = @knowledge_base_id
+      `)
+      const row = stmt.get({ id, knowledge_base_id: knowledgeBaseId }) as
+        KnowledgeSourceWithChunkCount | undefined
+      return row ?? null
+    } catch (err) {
+      throw new RepositoryError(
+        `Failed to retrieve Knowledge Source '${id}' with chunk count: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  /**
+   * Verifies whether a Knowledge Base exists in the database.
+   */
+  public knowledgeBaseExists(knowledgeBaseId: string): boolean {
+    try {
+      const stmt = this.db.prepare('SELECT 1 FROM knowledge_bases WHERE id = ?')
+      const row = stmt.get(knowledgeBaseId)
+      return Boolean(row)
+    } catch {
+      return false
     }
   }
 
