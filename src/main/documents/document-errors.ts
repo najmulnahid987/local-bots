@@ -28,6 +28,8 @@ export type DocumentErrorCode =
   | 'EXTRACTION_PDF_PAGE_LIMIT_EXCEEDED'
   | 'EXTRACTION_NO_TEXT_CONTENT'
   | 'EXTRACTION_PDF_PROCESSING_FAILED'
+  | 'CHUNKING_FAILED'
+  | 'CHUNKING_INVALID_INPUT'
 
 /**
  * Structured, renderer-safe application error representing document validation or storage failures.
@@ -80,6 +82,17 @@ export class DocumentExtractionError extends DocumentError {
     super(message, code, details)
     this.name = 'DocumentExtractionError'
     Object.setPrototypeOf(this, DocumentExtractionError.prototype)
+  }
+}
+
+/**
+ * Specialized error subclass for document chunking failures.
+ */
+export class DocumentChunkingError extends DocumentError {
+  constructor(message: string, code: DocumentErrorCode, details?: unknown) {
+    super(message, code, details)
+    this.name = 'DocumentChunkingError'
+    Object.setPrototypeOf(this, DocumentChunkingError.prototype)
   }
 }
 
@@ -276,6 +289,21 @@ export const DocumentErrors = {
       `PDF text extraction failed: ${message}`,
       'EXTRACTION_PDF_PROCESSING_FAILED',
       details
+    )
+  },
+
+  chunkingFailed(message: string, details?: unknown): DocumentChunkingError {
+    return new DocumentChunkingError(
+      `Document chunking failed: ${message}`,
+      'CHUNKING_FAILED',
+      details
+    )
+  },
+
+  chunkingInvalidInput(message: string): DocumentChunkingError {
+    return new DocumentChunkingError(
+      `Invalid extraction input for chunking: ${message}`,
+      'CHUNKING_INVALID_INPUT'
     )
   }
 }
