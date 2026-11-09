@@ -19,6 +19,10 @@ export type DocumentErrorCode =
   | 'SECURITY_ERROR'
   | 'CONFIGURATION_ERROR'
   | 'INTERNAL_STORAGE_ERROR'
+  | 'EXTRACTION_UNSUPPORTED_FORMAT'
+  | 'EXTRACTION_INVALID_UTF8'
+  | 'EXTRACTION_EMPTY_CONTENT'
+  | 'EXTRACTION_MALFORMED_INPUT'
 
 /**
  * Structured, renderer-safe application error representing document validation or storage failures.
@@ -60,6 +64,17 @@ export class DocumentStorageError extends DocumentError {
     super(message, code, details)
     this.name = 'DocumentStorageError'
     Object.setPrototypeOf(this, DocumentStorageError.prototype)
+  }
+}
+
+/**
+ * Specialized error subclass for document extraction failures.
+ */
+export class DocumentExtractionError extends DocumentError {
+  constructor(message: string, code: DocumentErrorCode, details?: unknown) {
+    super(message, code, details)
+    this.name = 'DocumentExtractionError'
+    Object.setPrototypeOf(this, DocumentExtractionError.prototype)
   }
 }
 
@@ -182,6 +197,36 @@ export const DocumentErrors = {
     return new DocumentStorageError(
       `Internal document storage error: ${message}`,
       'INTERNAL_STORAGE_ERROR'
+    )
+  },
+
+  extractionUnsupportedFormat(format: string, customMessage?: string): DocumentExtractionError {
+    return new DocumentExtractionError(
+      customMessage ??
+        `Document format '${format}' is not supported for text extraction. Only .txt and .md files are supported in this version.`,
+      'EXTRACTION_UNSUPPORTED_FORMAT'
+    )
+  },
+
+  extractionInvalidUtf8(customMessage?: string): DocumentExtractionError {
+    return new DocumentExtractionError(
+      customMessage ??
+        'The document contains invalid UTF-8 byte sequences and cannot be extracted as plain text.',
+      'EXTRACTION_INVALID_UTF8'
+    )
+  },
+
+  extractionEmptyContent(customMessage?: string): DocumentExtractionError {
+    return new DocumentExtractionError(
+      customMessage ?? 'The document content is empty and contains no text to extract.',
+      'EXTRACTION_EMPTY_CONTENT'
+    )
+  },
+
+  extractionMalformedInput(customMessage?: string): DocumentExtractionError {
+    return new DocumentExtractionError(
+      customMessage ?? 'Document extraction failed: malformed input bytes or structure.',
+      'EXTRACTION_MALFORMED_INPUT'
     )
   }
 }
