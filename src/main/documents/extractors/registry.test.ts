@@ -1,9 +1,49 @@
 import { describe, it, expect } from 'vitest'
 import { ExtractorRegistry, defaultExtractorRegistry, extractDocument } from './registry'
-import { DocumentExtractionError } from '../document-errors'
+import { StaticDocumentSettingsProvider } from '../document-settings'
 import type { DocumentExtractor, ExtractedDocument } from './types'
 
-describe('ExtractorRegistry (Phase 5 Step 5.4)', () => {
+/**
+ * Minimal valid single-page PDF generator for registry tests.
+ */
+function createMinimalPdf(text: string): Uint8Array {
+  const streamData = `BT\n/F1 18 Tf\n100 700 Td\n(${text}) Tj\nET`
+  const body = `%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length ${Buffer.byteLength(streamData)} >>
+stream
+${streamData}
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000244 00000 n 
+0000000350 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+429
+%%EOF`
+  return new Uint8Array(Buffer.from(body, 'latin1'))
+}
+
+describe('ExtractorRegistry (Phase 5 Step 5.5)', () => {
   const registry = new ExtractorRegistry()
 
   // 1. TXT dispatch
@@ -33,6 +73,7 @@ describe('ExtractorRegistry (Phase 5 Step 5.4)', () => {
     expect(registry.hasExtractor('.TXT')).toBe(true)
     expect(registry.hasExtractor('MD')).toBe(true)
     expect(registry.hasExtractor('.md')).toBe(true)
+    expect(registry.hasExtractor('.PDF')).toBe(true)
 
     const resultTxt = await registry.extract('.TXT', bytes)
     expect(resultTxt.format).toBe('txt')
@@ -41,27 +82,72 @@ describe('ExtractorRegistry (Phase 5 Step 5.4)', () => {
     expect(resultMd.format).toBe('md')
   })
 
-  // 4. PDF explicitly unsupported at this stage
-  it('4. rejects pdf format with EXTRACTION_UNSUPPORTED_FORMAT indicating Step 5.5 availability', async () => {
-    const dummyBytes = Buffer.from('%PDF-1.4\n...')
+  // 4. PDF dispatch to PdfExtractor
+  it('4. dispatches pdf format to PdfExtractor and returns valid ExtractedDocument', async () => {
+    const pdfBytes = createMinimalPdf('Registry PDF Dispatch')
+    const result = await registry.extract('pdf', pdfBytes)
 
-    await expect(registry.extract('pdf', dummyBytes)).rejects.toThrow(DocumentExtractionError)
-    await expect(registry.extract('pdf', dummyBytes)).rejects.toThrow(
-      expect.objectContaining({
-        code: 'EXTRACTION_UNSUPPORTED_FORMAT',
-        message: expect.stringContaining('PDF text extraction is not yet supported')
-      })
-    )
+    expect(result.format).toBe('pdf')
+    expect(result.sections).toHaveLength(1)
+    expect(result.sections[0].pageNumber).toBe(1)
+    expect(result.sections[0].text).toContain('Registry PDF Dispatch')
+    expect(result.metadata?.pageCount).toBe(1)
+  })
 
-    expect(() => registry.getExtractor('.pdf')).toThrow(
+  // 5. Custom settings provider injection
+  it('5. respects custom DocumentSettingsProvider injected into ExtractorRegistry', async () => {
+    const restrictedSettings = new StaticDocumentSettingsProvider({ maxPdfPages: 1 })
+    const restrictedRegistry = new ExtractorRegistry(restrictedSettings)
+
+    // Build 2-page PDF
+    const stream = 'BT\n/F1 18 Tf\n100 700 Td\n(Page) Tj\nET'
+    const twoPagePdf = `%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length ${stream.length} >>
+stream
+${stream}
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> >> >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000122 00000 n 
+0000000251 00000 n 
+0000000342 00000 n 
+0000000471 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+550
+%%EOF`
+    const bytes = new Uint8Array(Buffer.from(twoPagePdf, 'latin1'))
+
+    await expect(restrictedRegistry.extract('pdf', bytes)).rejects.toThrow(
       expect.objectContaining({
-        code: 'EXTRACTION_UNSUPPORTED_FORMAT'
+        code: 'EXTRACTION_PDF_PAGE_LIMIT_EXCEEDED'
       })
     )
   })
 
-  // 5. Unknown/unsupported formats
-  it('5. rejects unknown formats with EXTRACTION_UNSUPPORTED_FORMAT', async () => {
+  // 6. Unknown/unsupported formats
+  it('6. rejects unknown formats with EXTRACTION_UNSUPPORTED_FORMAT', async () => {
     const dummyBytes = Buffer.from('data')
     const unsupported = ['docx', 'doc', 'html', 'rtf', 'epub', '']
 
@@ -74,8 +160,8 @@ describe('ExtractorRegistry (Phase 5 Step 5.4)', () => {
     }
   })
 
-  // 6. Custom extractor registration
-  it('6. allows registering custom extractors for new formats', async () => {
+  // 7. Custom extractor registration
+  it('7. allows registering custom extractors for new formats', async () => {
     const customRegistry = new ExtractorRegistry()
 
     const mockCsvExtractor: DocumentExtractor = {
@@ -96,8 +182,8 @@ describe('ExtractorRegistry (Phase 5 Step 5.4)', () => {
     expect(result.text).toBe('a,b,c')
   })
 
-  // 7. Rejects invalid registration arguments
-  it('7. rejects malformed registration arguments with EXTRACTION_MALFORMED_INPUT', () => {
+  // 8. Rejects invalid registration arguments
+  it('8. rejects malformed registration arguments with EXTRACTION_MALFORMED_INPUT', () => {
     const customRegistry = new ExtractorRegistry()
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -108,13 +194,18 @@ describe('ExtractorRegistry (Phase 5 Step 5.4)', () => {
     )
   })
 
-  // 8. Global extractDocument helper & defaultExtractorRegistry
-  it('8. global extractDocument helper dispatches using defaultExtractorRegistry', async () => {
+  // 9. Global extractDocument helper & defaultExtractorRegistry
+  it('9. global extractDocument helper dispatches using defaultExtractorRegistry', async () => {
     expect(defaultExtractorRegistry.hasExtractor('txt')).toBe(true)
     expect(defaultExtractorRegistry.hasExtractor('md')).toBe(true)
+    expect(defaultExtractorRegistry.hasExtractor('pdf')).toBe(true)
 
     const result = await extractDocument('txt', Buffer.from('Global helper test.'))
     expect(result.format).toBe('txt')
     expect(result.text).toBe('Global helper test.')
+
+    const pdfResult = await extractDocument('pdf', createMinimalPdf('Global Helper PDF'))
+    expect(pdfResult.format).toBe('pdf')
+    expect(pdfResult.text).toContain('Global Helper PDF')
   })
 })

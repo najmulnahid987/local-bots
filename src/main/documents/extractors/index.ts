@@ -1,4 +1,5 @@
 export * from './types'
 export * from './txt-extractor'
 export * from './markdown-extractor'
+export * from './pdf-extractor'
 export * from './registry'

@@ -1,23 +1,26 @@
 import { DocumentErrors } from '../document-errors'
+import type { DocumentSettingsProvider } from '../document-settings'
 import type { DocumentExtractor, DocumentFormat, ExtractedDocument } from './types'
 import { TxtExtractor } from './txt-extractor'
 import { MarkdownExtractor } from './markdown-extractor'
+import { PdfExtractor } from './pdf-extractor'
 
 /**
  * Registry and dispatcher for document text extractors.
  *
  * Enforces:
  * 1. Formats 'txt' and 'md' are handled by pure-JS extractors.
- * 2. Format 'pdf' is explicitly rejected with EXTRACTION_UNSUPPORTED_FORMAT until Step 5.5.
+ * 2. Format 'pdf' is handled by PdfExtractor using unpdf with page-limit enforcement.
  * 3. Unknown formats return structured, sanitized extraction errors.
  * 4. Extensible for future extractors via register().
  */
 export class ExtractorRegistry {
   private readonly extractors = new Map<string, DocumentExtractor>()
 
-  constructor() {
+  constructor(settingsProvider?: DocumentSettingsProvider) {
     this.extractors.set('txt', new TxtExtractor())
     this.extractors.set('md', new MarkdownExtractor())
+    this.extractors.set('pdf', new PdfExtractor(settingsProvider))
   }
 
   /**
@@ -40,13 +43,6 @@ export class ExtractorRegistry {
     }
 
     const normalized = format.toLowerCase().replace(/^\./, '')
-
-    if (normalized === 'pdf' && !this.extractors.has('pdf')) {
-      throw DocumentErrors.extractionUnsupportedFormat(
-        'pdf',
-        'PDF text extraction is not yet supported (scheduled for Step 5.5).'
-      )
-    }
 
     const extractor = this.extractors.get(normalized)
     if (!extractor) {
@@ -77,7 +73,7 @@ export class ExtractorRegistry {
 }
 
 /**
- * Default global extractor registry pre-populated with TXT and Markdown extractors.
+ * Default global extractor registry pre-populated with TXT, Markdown, and PDF extractors.
  */
 export const defaultExtractorRegistry = new ExtractorRegistry()
 

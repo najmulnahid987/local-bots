@@ -63,7 +63,13 @@ function cspPlugin(): Plugin {
 }
 
 export default defineConfig({
-  main: {},
+  main: {
+    build: {
+      externalizeDeps: {
+        exclude: ['unpdf']
+      }
+    }
+  },
   preload: {},
   renderer: {
     resolve: {

@@ -23,6 +23,11 @@ export type DocumentErrorCode =
   | 'EXTRACTION_INVALID_UTF8'
   | 'EXTRACTION_EMPTY_CONTENT'
   | 'EXTRACTION_MALFORMED_INPUT'
+  | 'EXTRACTION_INVALID_PDF'
+  | 'EXTRACTION_PDF_PASSWORD_PROTECTED'
+  | 'EXTRACTION_PDF_PAGE_LIMIT_EXCEEDED'
+  | 'EXTRACTION_NO_TEXT_CONTENT'
+  | 'EXTRACTION_PDF_PROCESSING_FAILED'
 
 /**
  * Structured, renderer-safe application error representing document validation or storage failures.
@@ -227,6 +232,50 @@ export const DocumentErrors = {
     return new DocumentExtractionError(
       customMessage ?? 'Document extraction failed: malformed input bytes or structure.',
       'EXTRACTION_MALFORMED_INPUT'
+    )
+  },
+
+  extractionInvalidPdf(details?: unknown, customMessage?: string): DocumentExtractionError {
+    return new DocumentExtractionError(
+      customMessage ?? 'The PDF file structure is invalid or corrupt and could not be parsed.',
+      'EXTRACTION_INVALID_PDF',
+      details
+    )
+  },
+
+  extractionPdfPasswordProtected(
+    details?: unknown,
+    customMessage?: string
+  ): DocumentExtractionError {
+    return new DocumentExtractionError(
+      customMessage ??
+        'This PDF document is password-protected or encrypted. Password-protected PDFs are not supported.',
+      'EXTRACTION_PDF_PASSWORD_PROTECTED',
+      details
+    )
+  },
+
+  extractionPdfPageLimitExceeded(maxPages: number, actualPages: number): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `The PDF document exceeds the maximum allowed page count of ${maxPages} pages (contains ${actualPages} pages). Please import a smaller PDF or increase the limit in settings.`,
+      'EXTRACTION_PDF_PAGE_LIMIT_EXCEEDED',
+      { maxPages, actualPages }
+    )
+  },
+
+  extractionNoTextContent(customMessage?: string): DocumentExtractionError {
+    return new DocumentExtractionError(
+      customMessage ??
+        'No extractable text found. This PDF may be scanned or image-only. OCR is not supported in this version.',
+      'EXTRACTION_NO_TEXT_CONTENT'
+    )
+  },
+
+  extractionPdfProcessingFailed(message: string, details?: unknown): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `PDF text extraction failed: ${message}`,
+      'EXTRACTION_PDF_PROCESSING_FAILED',
+      details
     )
   }
 }
