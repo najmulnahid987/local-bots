@@ -178,6 +178,13 @@ export const DocumentErrors = {
     )
   },
 
+  knowledgeBaseNotFound(kbId: string): DocumentValidationError {
+    return new DocumentValidationError(
+      `Knowledge Base '${kbId}' could not be found.`,
+      'INVALID_KNOWLEDGE_BASE_ID'
+    )
+  },
+
   invalidSourceId(sourceId: string): DocumentValidationError {
     return new DocumentValidationError(
       `Invalid source document ID '${sourceId}'. Must be a valid RFC 4122 UUIDv4.`,

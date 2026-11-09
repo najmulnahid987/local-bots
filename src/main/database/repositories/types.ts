@@ -338,3 +338,152 @@ export const updateProviderConnectionStatusSchema = z
     })
   })
   .strict()
+
+/**
+ * Canonical indexing statuses for knowledge_sources enforced by SQLite CHECK constraint in Migration 003.
+ */
+export const KNOWLEDGE_SOURCE_STATUSES = [
+  'queued',
+  'processing',
+  'completed',
+  'failed',
+  'needs_reindex'
+] as const
+
+export type KnowledgeSourceStatus = (typeof KNOWLEDGE_SOURCE_STATUSES)[number]
+
+/**
+ * Domain entity representing a document source record in knowledge_sources.
+ */
+export interface KnowledgeSource {
+  readonly id: string
+  readonly knowledge_base_id: string
+  readonly file_name: string
+  readonly original_file_name: string
+  readonly relative_file_path: string
+  readonly file_type: 'txt' | 'md' | 'pdf'
+  readonly mime_type: string
+  readonly file_size: number
+  readonly content_hash: string
+  readonly indexing_status: KnowledgeSourceStatus
+  readonly error_message: string | null
+  readonly created_at: number
+  readonly updated_at: number
+  readonly indexed_at: number | null
+}
+
+/**
+ * Input for creating a new knowledge_sources row.
+ */
+export interface CreateKnowledgeSourceInput {
+  readonly id: string
+  readonly knowledge_base_id: string
+  readonly file_name: string
+  readonly original_file_name: string
+  readonly relative_file_path: string
+  readonly file_type: 'txt' | 'md' | 'pdf'
+  readonly mime_type: string
+  readonly file_size: number
+  readonly content_hash: string
+  readonly indexing_status?: KnowledgeSourceStatus
+  readonly error_message?: string | null
+  readonly created_at?: number
+  readonly updated_at?: number
+  readonly indexed_at?: number | null
+}
+
+/**
+ * Domain entity representing an indexed text chunk in knowledge_chunks.
+ */
+export interface KnowledgeChunk {
+  readonly id: string
+  readonly knowledge_base_id: string
+  readonly source_id: string
+  readonly chunk_index: number
+  readonly content: string
+  readonly page_number: number | null
+  readonly token_count: number
+  readonly metadata_json: string
+  readonly created_at: number
+}
+
+/**
+ * Input for inserting a knowledge chunk into knowledge_chunks.
+ */
+export interface CreateKnowledgeChunkInput {
+  readonly id: string
+  readonly knowledge_base_id: string
+  readonly source_id: string
+  readonly chunk_index: number
+  readonly content: string
+  readonly page_number: number | null
+  readonly token_count: number
+  readonly metadata_json: string
+  readonly created_at?: number
+}
+
+export const createKnowledgeSourceSchema = z
+  .object({
+    id: z.string().uuid({ message: 'Source id must be a valid RFC 4122 UUIDv4.' }),
+    knowledge_base_id: z
+      .string()
+      .uuid({ message: 'knowledge_base_id must be a valid RFC 4122 UUIDv4.' }),
+    file_name: z.string().trim().min(1, { message: 'file_name cannot be blank.' }),
+    original_file_name: z
+      .string()
+      .trim()
+      .min(1, { message: 'original_file_name cannot be blank.' }),
+    relative_file_path: z
+      .string()
+      .trim()
+      .min(1, { message: 'relative_file_path cannot be blank.' }),
+    file_type: z.enum(['txt', 'md', 'pdf'], {
+      message: "file_type must be 'txt', 'md', or 'pdf'."
+    }),
+    mime_type: z.string().trim().min(1, { message: 'mime_type cannot be blank.' }),
+    file_size: z
+      .number()
+      .int()
+      .nonnegative({ message: 'file_size must be a non-negative integer.' }),
+    content_hash: z
+      .string()
+      .length(64, { message: 'content_hash must be a 64-character SHA-256 hex string.' }),
+    indexing_status: z.enum(KNOWLEDGE_SOURCE_STATUSES).optional().default('queued'),
+    error_message: z.string().nullable().optional().default(null),
+    created_at: z.number().int().positive().optional(),
+    updated_at: z.number().int().positive().optional(),
+    indexed_at: z.number().int().positive().nullable().optional().default(null)
+  })
+  .strict()
+
+export const createKnowledgeChunkSchema = z
+  .object({
+    id: z.string().uuid({ message: 'Chunk id must be a valid RFC 4122 UUIDv4.' }),
+    knowledge_base_id: z
+      .string()
+      .uuid({ message: 'knowledge_base_id must be a valid RFC 4122 UUIDv4.' }),
+    source_id: z.string().uuid({ message: 'source_id must be a valid RFC 4122 UUIDv4.' }),
+    chunk_index: z
+      .number()
+      .int()
+      .nonnegative({ message: 'chunk_index must be a non-negative integer.' }),
+    content: z.string().trim().min(1, { message: 'content cannot be blank.' }),
+    page_number: z.number().int().positive().nullable().optional().default(null),
+    token_count: z
+      .number()
+      .int()
+      .nonnegative({ message: 'token_count must be a non-negative integer.' }),
+    metadata_json: z.string().refine(
+      (val) => {
+        try {
+          JSON.parse(val)
+          return true
+        } catch {
+          return false
+        }
+      },
+      { message: 'metadata_json must be valid JSON string.' }
+    ),
+    created_at: z.number().int().positive().optional()
+  })
+  .strict()
