@@ -23,7 +23,8 @@ import {
   DocumentStorageManager,
   DocumentIngestionService,
   DocumentSearchService,
-  DocumentLifecycleService
+  DocumentLifecycleService,
+  recoverQuarantinedDocuments
 } from './documents'
 import { providerRegistry } from './providers/provider-registry'
 import { ProviderManagerService } from './providers/provider-manager/provider-manager-service'
@@ -367,6 +368,24 @@ app.whenReady().then(async () => {
       lifecycleService
     })
     console.log('[DOCUMENT_SUBSYSTEM_INITIALIZED]')
+
+    // Startup Quarantine Recovery: Reconcile any orphaned or pending quarantined document files
+    try {
+      const recoveryReport = await recoverQuarantinedDocuments({
+        storageManager,
+        sourceRepository: sourceRepo
+      })
+      if (
+        recoveryReport.recoveredCount > 0 ||
+        recoveryReport.cleanedCount > 0 ||
+        recoveryReport.conflictCount > 0 ||
+        recoveryReport.errors.length > 0
+      ) {
+        console.log('[QUARANTINE_RECOVERY_COMPLETED]', JSON.stringify(recoveryReport))
+      }
+    } catch (recErr) {
+      console.warn('[QUARANTINE_RECOVERY_WARNING]', recErr)
+    }
   } catch (docError) {
     console.error('[DOCUMENT_SUBSYSTEM_INITIALIZATION_FAILED]', docError)
     registerFailingDocumentIpcHandlers(() => mainWindow, 'Document subsystem failed to initialize.')

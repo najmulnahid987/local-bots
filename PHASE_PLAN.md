@@ -594,18 +594,18 @@ Enable users to import `.txt`, `.md`, and text-based `.pdf` files into a selecte
 
 ### 11.6 Approved Implementation Sequence
 - **Step 5.0:** Preflight and document ingestion architecture audit *(Complete)*.
-- **Step 5.1:** Final document ingestion architecture, ADRs and design specification *(Active)*.
-- **Step 5.2:** Database migration 003 (`knowledge_fts` virtual table, triggers, `indexing_status` CHECK evolution).
-- **Step 5.3:** Document storage manager and defensive file validation service.
-- **Step 5.4:** TXT and Markdown text extractors with heading extraction.
-- **Step 5.5:** PDF text extractor (`unpdf` integration, pending verification).
-- **Step 5.6:** Text normalization and deterministic chunking engine.
-- **Step 5.7:** Repositories (`KnowledgeSourceRepository`, `KnowledgeChunkRepository`) and Ingestion Pipeline Orchestrator.
-- **Step 5.8:** Source re-indexing and deletion lifecycle service.
-- **Step 5.9:** KB-scoped FTS5 search service and BM25 ranking.
-- **Step 5.10:** Secure IPC channels, Preload bridge, and validation schemas.
-- **Step 5.11:** Workspace Knowledge Tab UI (upload, document table, search, preview drawer, delete modal).
-- **Step 5.12:** End-to-end acceptance, regression verification, and phase gate sign-off.
+- **Step 5.1:** Final document ingestion architecture, ADRs and design specification *(Complete)*.
+- **Step 5.2:** Database migration 003 (`knowledge_fts` virtual table, triggers, `indexing_status` CHECK evolution) *(Complete)*.
+- **Step 5.3:** Document storage manager and defensive file validation service *(Complete)*.
+- **Step 5.4:** TXT and Markdown text extractors with heading extraction *(Complete)*.
+- **Step 5.5:** PDF text extractor (`unpdf` integration verified) *(Complete)*.
+- **Step 5.6:** Text normalization and deterministic chunking engine *(Complete)*.
+- **Step 5.7:** Repositories (`KnowledgeSourceRepository`) and Ingestion Pipeline Orchestrator *(Complete)*.
+- **Step 5.8:** Secure Document Management API, IPC Channels, and Preload Integration *(Complete)*.
+- **Step 5.9:** KB-scoped FTS5 search service and BM25 ranking *(Complete)*.
+- **Step 5.10:** Source re-indexing and deletion lifecycle service *(Complete)*.
+- **Step 5.11:** Workspace Knowledge Tab UI (upload, document table, search, preview modal, delete modal) *(Complete)*.
+- **Step 5.12:** Complete integration audit, crash recovery, end-to-end acceptance verification, and phase sign-off *(Complete)*.
 
 ### 11.7 Expected Files & Modules
 ```
@@ -654,12 +654,12 @@ npm run build
 ```
 
 ### 11.11 Acceptance Criteria
-- [ ] Users can import `.txt`, `.md`, and `.pdf` files into any selected Knowledge Base.
-- [ ] Ingested text is normalized, split into ~500 token chunks, and indexed in FTS5.
-- [ ] BM25 search retrieves matching snippets scoped strictly to the selected Knowledge Base.
-- [ ] Ingestion failures roll back atomically without partial search index entries.
-- [ ] Deleting a document source cleans up chunks, FTS entries, and physical original files.
-- [ ] Zero regression across existing Phase 4 tests (641 passing tests).
+- [x] Users can import `.txt`, `.md`, and `.pdf` files into any selected Knowledge Base.
+- [x] Ingested text is normalized, split into ~500 token chunks, and indexed in FTS5.
+- [x] BM25 search retrieves matching snippets scoped strictly to the selected Knowledge Base.
+- [x] Ingestion failures roll back atomically without partial search index entries.
+- [x] Deleting a document source cleans up chunks, FTS entries, and physical original files.
+- [x] Zero regression across existing Phase 4 tests (all 950 passing tests across 53 test suites).
 
 ### 11.12 Phase Gate
 Document ingestion, text extraction, deterministic chunking, and KB-scoped FTS5 search verified with automated test suites and production packaging.
