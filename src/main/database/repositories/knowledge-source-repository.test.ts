@@ -676,4 +676,79 @@ describe('KnowledgeSourceRepository', () => {
     expect(chunks).toHaveLength(1)
     expect(chunks[0].id).toBe(initialChunkId)
   })
+
+  it('13. retrieves bounded document preview for completed documents and excludes uncompleted', () => {
+    const sourceId = randomUUID()
+    sourceRepo.create({
+      id: sourceId,
+      knowledge_base_id: kbId,
+      file_name: 'preview-test.md',
+      original_file_name: 'Preview Document.md',
+      relative_file_path: `originals/${sourceId}.md`,
+      file_type: 'md',
+      mime_type: 'text/markdown',
+      file_size: 2048,
+      content_hash: 'e'.repeat(64),
+      indexing_status: 'completed'
+    })
+
+    const chunkInputs = Array.from({ length: 5 }, (_, i) => ({
+      id: randomUUID(),
+      knowledge_base_id: kbId,
+      source_id: sourceId,
+      chunk_index: i,
+      content: `Section ${i + 1} content explaining distributed systems consensus.`,
+      page_number: null,
+      token_count: 12,
+      metadata_json: JSON.stringify({
+        heading: `Heading ${i + 1}`,
+        headingLevel: 2,
+        headingPath: ['Architecture', `Heading ${i + 1}`]
+      })
+    }))
+
+    sourceRepo.insertChunks(chunkInputs)
+
+    // Bounded preview requesting max 3 chunks
+    const preview = sourceRepo.getPreview(sourceId, kbId, 3)
+    expect(preview).not.toBeNull()
+    expect(preview!.sourceId).toBe(sourceId)
+    expect(preview!.knowledgeBaseId).toBe(kbId)
+    expect(preview!.originalFileName).toBe('Preview Document.md')
+    expect(preview!.fileType).toBe('md')
+    expect(preview!.totalChunks).toBe(5)
+    expect(preview!.chunks).toHaveLength(3)
+    expect(preview!.chunks[0].chunkIndex).toBe(0)
+    expect(preview!.chunks[0].heading).toBe('Heading 1')
+    expect(preview!.chunks[0].headingPath).toEqual(['Architecture', 'Heading 1'])
+    expect(preview!.chunks[1].chunkIndex).toBe(1)
+    expect(preview!.chunks[2].chunkIndex).toBe(2)
+
+    // Default maxChunks is 3
+    const defaultPreview = sourceRepo.getPreview(sourceId, kbId)
+    expect(defaultPreview!.chunks).toHaveLength(3)
+
+    // Non-completed documents return null
+    const failedSourceId = randomUUID()
+    sourceRepo.create({
+      id: failedSourceId,
+      knowledge_base_id: kbId,
+      file_name: 'failed.txt',
+      original_file_name: 'failed.txt',
+      relative_file_path: `originals/${failedSourceId}.txt`,
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: 100,
+      content_hash: 'f'.repeat(64),
+      indexing_status: 'failed'
+    })
+    expect(sourceRepo.getPreview(failedSourceId, kbId)).toBeNull()
+
+    // Cross-KB preview returns null
+    const otherKb = kbRepo.create({ name: 'Other KB' })
+    expect(sourceRepo.getPreview(sourceId, otherKb.id)).toBeNull()
+
+    // Invalid UUID throws ValidationError
+    expect(() => sourceRepo.getPreview('not-uuid', kbId)).toThrow(ValidationError)
+  })
 })

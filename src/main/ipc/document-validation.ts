@@ -4,6 +4,7 @@ import {
   selectAndImportDocumentRequestSchema,
   listKnowledgeDocumentsRequestSchema,
   getKnowledgeDocumentRequestSchema,
+  getDocumentPreviewRequestSchema,
   searchKnowledgeDocumentsRequestSchema,
   reindexDocumentRequestSchema,
   deleteDocumentRequestSchema
@@ -29,6 +30,8 @@ export const documentSelectAndImportIpcSchema = selectAndImportDocumentRequestSc
 export const documentListIpcSchema = listKnowledgeDocumentsRequestSchema
 
 export const documentGetIpcSchema = getKnowledgeDocumentRequestSchema
+
+export const documentPreviewIpcSchema = getDocumentPreviewRequestSchema
 
 export const documentSearchIpcSchema = searchKnowledgeDocumentsRequestSchema
 

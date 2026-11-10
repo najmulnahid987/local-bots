@@ -562,6 +562,103 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
   })
 
   // ---------------------------------------------------------------------------
+  // 5b. Document Preview IPC Operations
+  // ---------------------------------------------------------------------------
+  describe('5b. Document Preview IPC Operations', () => {
+    it('returns bounded DocumentPreviewDto for completed document', async () => {
+      const sourceId = randomUUID()
+      sourceRepo.create({
+        id: sourceId,
+        knowledge_base_id: defaultKbId,
+        file_name: 'preview.txt',
+        original_file_name: 'Preview Document.txt',
+        relative_file_path: `originals/${sourceId}.txt`,
+        file_type: 'txt',
+        mime_type: 'text/plain',
+        file_size: 1024,
+        content_hash: '1'.repeat(64),
+        indexing_status: 'completed'
+      })
+
+      sourceRepo.insertChunks([
+        {
+          id: randomUUID(),
+          knowledge_base_id: defaultKbId,
+          source_id: sourceId,
+          chunk_index: 0,
+          content: 'First chunk preview content.',
+          page_number: null,
+          token_count: 10,
+          metadata_json: '{}'
+        },
+        {
+          id: randomUUID(),
+          knowledge_base_id: defaultKbId,
+          source_id: sourceId,
+          chunk_index: 1,
+          content: 'Second chunk preview content.',
+          page_number: null,
+          token_count: 10,
+          metadata_json: '{}'
+        }
+      ])
+
+      const preview = (await invokeHandler(KB_DOCS_IPC_CHANNELS.PREVIEW, {
+        knowledgeBaseId: defaultKbId,
+        sourceId,
+        maxChunks: 1
+      })) as { sourceId: string; chunks: unknown[]; totalChunks: number } | null
+
+      expect(preview).not.toBeNull()
+      expect(preview!.sourceId).toBe(sourceId)
+      expect(preview!.totalChunks).toBe(2)
+      expect(preview!.chunks).toHaveLength(1)
+    })
+
+    it('returns null when document does not exist or belongs to another Knowledge Base', async () => {
+      const secondKb = kbRepo.create({ name: 'Other KB' })
+      const sourceId = randomUUID()
+      sourceRepo.create({
+        id: sourceId,
+        knowledge_base_id: secondKb.id,
+        file_name: 'other.txt',
+        original_file_name: 'other.txt',
+        relative_file_path: `originals/${sourceId}.txt`,
+        file_type: 'txt',
+        mime_type: 'text/plain',
+        file_size: 500,
+        content_hash: '2'.repeat(64),
+        indexing_status: 'completed'
+      })
+
+      const crossPreview = await invokeHandler(KB_DOCS_IPC_CHANNELS.PREVIEW, {
+        knowledgeBaseId: defaultKbId,
+        sourceId
+      })
+      expect(crossPreview).toBeNull()
+    })
+
+    it('rejects preview requests from untrusted sender frame', async () => {
+      const untrustedFrame = {
+        url: `${devOrigin}/malicious.html`
+      } as unknown as WebFrameMainLike
+
+      const untrustedEvent: IpcSenderEventLike = {
+        sender: mockWebContents,
+        senderFrame: untrustedFrame
+      }
+
+      const handler = mockIpcHandlers.get(KB_DOCS_IPC_CHANNELS.PREVIEW)!
+      await expect(
+        handler(untrustedEvent, {
+          knowledgeBaseId: defaultKbId,
+          sourceId: randomUUID()
+        })
+      ).rejects.toThrow(/UNAUTHORIZED_SENDER/)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
   // 6. Document Search IPC Operations
   // ---------------------------------------------------------------------------
   describe('6. Document Search Operations', () => {
@@ -913,6 +1010,29 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
           if (channel === KB_DOCS_IPC_CHANNELS.GET) {
             return { id: 'test-src-id' }
           }
+          if (channel === KB_DOCS_IPC_CHANNELS.PREVIEW) {
+            return {
+              sourceId: 'src-id',
+              knowledgeBaseId: defaultKbId,
+              originalFileName: 'test.txt',
+              fileType: 'txt',
+              fileSize: 100,
+              status: 'completed',
+              totalChunks: 1,
+              chunks: [
+                {
+                  chunkId: 'c1',
+                  chunkIndex: 0,
+                  content: 'preview chunk',
+                  tokenCount: 2,
+                  pageNumber: null,
+                  heading: null,
+                  headingLevel: null,
+                  headingPath: null
+                }
+              ]
+            }
+          }
           if (channel === KB_DOCS_IPC_CHANNELS.SEARCH) {
             return [{ chunkId: 'c1', content: 'test content' }]
           }
@@ -972,6 +1092,15 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
         sourceId: 'src-id'
       })
       expect(getRes?.id).toBe('test-src-id')
+
+      // Test preview
+      const previewRes = await bridge.preview({ knowledgeBaseId: defaultKbId, sourceId: 'src-id' })
+      expect(mockIpc.invoke).toHaveBeenCalledWith(KB_DOCS_IPC_CHANNELS.PREVIEW, {
+        knowledgeBaseId: defaultKbId,
+        sourceId: 'src-id'
+      })
+      expect(previewRes?.sourceId).toBe('src-id')
+      expect(previewRes?.chunks).toHaveLength(1)
 
       // Test search
       const searchRes = await bridge.search({ knowledgeBaseId: defaultKbId, query: 'test' })

@@ -40,6 +40,7 @@ export const KB_DOCS_IPC_CHANNELS = {
   SELECT_AND_IMPORT: 'kb:docs:select-and-import',
   LIST: 'kb:docs:list',
   GET: 'kb:docs:get',
+  PREVIEW: 'kb:docs:preview',
   SEARCH: 'kb:docs:search',
   REINDEX: 'kb:docs:reindex',
   DELETE: 'kb:docs:delete'

@@ -5,7 +5,8 @@ import {
   type DocumentImportResultDto,
   type DocumentSearchResultDto,
   type ReindexDocumentResultDto,
-  type DeleteDocumentResultDto
+  type DeleteDocumentResultDto,
+  type DocumentPreviewDto
 } from '../../shared/ipc'
 import { DocumentIngestionService } from '../documents/ingestion/document-ingestion-service'
 import { DocumentSearchService } from '../documents/search'
@@ -19,6 +20,7 @@ import {
   documentSelectAndImportIpcSchema,
   documentListIpcSchema,
   documentGetIpcSchema,
+  documentPreviewIpcSchema,
   documentSearchIpcSchema,
   documentReindexIpcSchema,
   documentDeleteIpcSchema
@@ -243,6 +245,27 @@ export function registerDocumentIpcHandlers(options: DocumentIpcHandlerOptions):
           return null
         }
         return toKnowledgeSourceDto(row)
+      } catch (err) {
+        throw formatDocumentIpcError(err)
+      }
+    }
+  )
+
+  // 3b. Get Document Bounded Preview
+  ipcMain.removeHandler(KB_DOCS_IPC_CHANNELS.PREVIEW)
+  ipcMain.handle(
+    KB_DOCS_IPC_CHANNELS.PREVIEW,
+    async (event, rawPayload: unknown): Promise<DocumentPreviewDto | null> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateDocumentIpcPayload(documentPreviewIpcSchema, rawPayload)
+
+        const preview = sourceRepository.getPreview(
+          payload.sourceId,
+          payload.knowledgeBaseId,
+          payload.maxChunks
+        )
+        return preview
       } catch (err) {
         throw formatDocumentIpcError(err)
       }

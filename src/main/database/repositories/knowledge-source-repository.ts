@@ -1,4 +1,10 @@
 import type Database from 'better-sqlite3'
+import type {
+  DocumentPreviewDto,
+  DocumentPreviewChunkDto,
+  SupportedDocumentFormat,
+  KnowledgeDocumentStatus
+} from '../../../shared/knowledge-documents'
 import {
   type KnowledgeSource,
   type KnowledgeSourceWithChunkCount,
@@ -329,6 +335,103 @@ export class KnowledgeSourceRepository {
     } catch (err) {
       throw new RepositoryError(
         `Failed to retrieve chunks for source '${sourceId}': ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  /**
+   * Retrieves a bounded preview of a completed document's initial chunks with metadata.
+   * Scoped strictly to (sourceId, knowledgeBaseId) and indexing_status = 'completed'.
+   * Never exposes raw paths or unindexed/failed content.
+   */
+  public getPreview(
+    sourceId: string,
+    knowledgeBaseId: string,
+    maxChunks = 3
+  ): DocumentPreviewDto | null {
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!UUID_REGEX.test(sourceId) || !UUID_REGEX.test(knowledgeBaseId)) {
+      throw new ValidationError('sourceId and knowledgeBaseId must be valid UUID strings')
+    }
+
+    const boundedMax = Math.min(Math.max(1, maxChunks), 10)
+
+    try {
+      const sourceStmt = this.db.prepare(`
+        SELECT s.id, s.knowledge_base_id, s.original_file_name, s.file_type, s.file_size, s.indexing_status,
+               (SELECT COUNT(*) FROM knowledge_chunks c WHERE c.source_id = s.id AND c.knowledge_base_id = s.knowledge_base_id) AS chunk_count
+        FROM knowledge_sources s
+        WHERE s.id = ? AND s.knowledge_base_id = ?
+      `)
+      const sourceRow = sourceStmt.get(sourceId, knowledgeBaseId) as
+        | {
+            id: string
+            knowledge_base_id: string
+            original_file_name: string
+            file_type: SupportedDocumentFormat
+            file_size: number
+            indexing_status: KnowledgeDocumentStatus
+            chunk_count: number
+          }
+        | undefined
+
+      if (!sourceRow || sourceRow.indexing_status !== 'completed') {
+        return null
+      }
+
+      const chunksStmt = this.db.prepare(`
+        SELECT id, chunk_index, content, token_count, page_number, metadata_json
+        FROM knowledge_chunks
+        WHERE source_id = ? AND knowledge_base_id = ?
+        ORDER BY chunk_index ASC
+        LIMIT ?
+      `)
+      const chunkRows = chunksStmt.all(sourceId, knowledgeBaseId, boundedMax) as Array<{
+        id: string
+        chunk_index: number
+        content: string
+        token_count: number
+        page_number: number | null
+        metadata_json: string
+      }>
+
+      const previewChunks: DocumentPreviewChunkDto[] = chunkRows.map((row) => {
+        let parsedMeta: Record<string, unknown>
+        try {
+          parsedMeta = JSON.parse(row.metadata_json)
+        } catch {
+          parsedMeta = {}
+        }
+
+        return {
+          chunkId: row.id,
+          chunkIndex: row.chunk_index,
+          content: row.content,
+          tokenCount: row.token_count,
+          pageNumber: row.page_number,
+          heading: typeof parsedMeta.heading === 'string' ? parsedMeta.heading : null,
+          headingLevel:
+            typeof parsedMeta.headingLevel === 'number' ? parsedMeta.headingLevel : null,
+          headingPath: Array.isArray(parsedMeta.headingPath)
+            ? (parsedMeta.headingPath as string[])
+            : null
+        }
+      })
+
+      return {
+        sourceId: sourceRow.id,
+        knowledgeBaseId: sourceRow.knowledge_base_id,
+        originalFileName: sourceRow.original_file_name,
+        fileType: sourceRow.file_type,
+        fileSize: sourceRow.file_size,
+        status: sourceRow.indexing_status,
+        totalChunks: sourceRow.chunk_count,
+        chunks: previewChunks
+      }
+    } catch (err) {
+      if (err instanceof ValidationError) throw err
+      throw new RepositoryError(
+        `Failed to retrieve document preview: ${err instanceof Error ? err.message : String(err)}`
       )
     }
   }

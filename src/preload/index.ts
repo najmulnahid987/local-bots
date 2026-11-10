@@ -36,11 +36,13 @@ import {
   type SelectAndImportDocumentRequest,
   type ListKnowledgeDocumentsRequest,
   type GetKnowledgeDocumentRequest,
+  type GetDocumentPreviewRequest,
   type SearchKnowledgeDocumentsRequest,
   type ReindexDocumentRequest,
   type DeleteDocumentRequest,
   type DocumentImportResultDto,
   type DocumentSearchResultDto,
+  type DocumentPreviewDto,
   type ReindexDocumentResultDto,
   type DeleteDocumentResultDto,
   KnowledgeDocumentBridgeError
@@ -417,6 +419,14 @@ export function createKnowledgeDocumentsApi(ipc: typeof ipcRenderer): KnowledgeD
     get: async (request: GetKnowledgeDocumentRequest): Promise<KnowledgeSourceDto | null> => {
       try {
         return await ipc.invoke(KB_DOCS_IPC_CHANNELS.GET, request)
+      } catch (err) {
+        throw normalizeKnowledgeDocumentBridgeError(err)
+      }
+    },
+
+    preview: async (request: GetDocumentPreviewRequest): Promise<DocumentPreviewDto | null> => {
+      try {
+        return await ipc.invoke(KB_DOCS_IPC_CHANNELS.PREVIEW, request)
       } catch (err) {
         throw normalizeKnowledgeDocumentBridgeError(err)
       }

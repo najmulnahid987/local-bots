@@ -130,6 +130,7 @@ export interface KnowledgeDocumentApi {
     knowledgeBaseIdOrRequest: string | ListKnowledgeDocumentsRequest
   ): Promise<readonly KnowledgeSourceDto[]>
   get(request: GetKnowledgeDocumentRequest): Promise<KnowledgeSourceDto | null>
+  preview(request: GetDocumentPreviewRequest): Promise<DocumentPreviewDto | null>
   search(request: SearchKnowledgeDocumentsRequest): Promise<readonly DocumentSearchResultDto[]>
   reindex(request: ReindexDocumentRequest): Promise<ReindexDocumentResultDto>
   delete(request: DeleteDocumentRequest): Promise<DeleteDocumentResultDto>
@@ -267,3 +268,49 @@ export interface DeleteDocumentResultDto {
   readonly code?: string
   readonly error?: string
 }
+
+/**
+ * Bounded document chunk preview item.
+ */
+export interface DocumentPreviewChunkDto {
+  readonly chunkId: string
+  readonly chunkIndex: number
+  readonly content: string
+  readonly tokenCount: number
+  readonly pageNumber: number | null
+  readonly heading: string | null
+  readonly headingLevel: number | null
+  readonly headingPath: readonly string[] | null
+}
+
+/**
+ * Public, renderer-safe Data Transfer Object representing a bounded document preview.
+ * Excludes internal storage paths, raw database handles, and provider secrets.
+ */
+export interface DocumentPreviewDto {
+  readonly sourceId: string
+  readonly knowledgeBaseId: string
+  readonly originalFileName: string
+  readonly fileType: SupportedDocumentFormat
+  readonly fileSize: number
+  readonly status: KnowledgeDocumentStatus
+  readonly totalChunks: number
+  readonly chunks: readonly DocumentPreviewChunkDto[]
+}
+
+/**
+ * Caller input for retrieving a bounded preview of a document.
+ */
+export interface GetDocumentPreviewRequest {
+  readonly knowledgeBaseId: string
+  readonly sourceId: string
+  readonly maxChunks?: number
+}
+
+export const getDocumentPreviewRequestSchema = z
+  .object({
+    knowledgeBaseId: knowledgeBaseIdSchema,
+    sourceId: sourceIdSchema,
+    maxChunks: z.number().int().min(1).max(10).optional().default(3)
+  })
+  .strict()
