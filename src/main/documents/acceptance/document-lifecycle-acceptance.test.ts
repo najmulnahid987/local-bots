@@ -208,6 +208,147 @@ describe('Document Lifecycle End-to-End Acceptance (Step 5.12)', () => {
   })
 
   // --------------------------------------------------------------------------
+  // Acceptance Test A2: Complete TXT Document Lifecycle
+  // --------------------------------------------------------------------------
+  it('Acceptance Test A2: full TXT document lifecycle (import, storage, chunking, FTS search, preview, reindex, delete, and cleanup)', async () => {
+    const kb = kbRepo.create({ name: 'Acceptance KB A2' })
+    const kbId = kb.id
+
+    const txtContent =
+      'Stellar nucleosynthesis and thermonuclear fusion processes inside massive stars synthesize heavy elements.'
+    const txtPath = createTestFile('astrophysics.txt', txtContent)
+
+    // 1. Ingest plain text document
+    const ingestRes = await ingestionService.ingest({
+      knowledgeBaseId: kbId,
+      filePath: txtPath
+    })
+    assertCompleted(ingestRes)
+
+    const sourceId = ingestRes.source.id
+    expect(ingestRes.source.file_type).toBe('txt')
+    expect(ingestRes.totalChunks).toBeGreaterThan(0)
+
+    // 2. Verify managed original file storage layout
+    const managedPath = storageManager.resolveOriginalPath(kbId, sourceId, 'txt')
+    expect(fs.existsSync(managedPath)).toBe(true)
+    expect(fs.readFileSync(managedPath, 'utf-8')).toBe(txtContent)
+
+    // 3. Verify SQLite relational persistence and FTS5 search
+    const sourceRow = sourceRepo.getByIdWithChunkCount(sourceId, kbId)
+    expect(sourceRow).not.toBeNull()
+    expect(sourceRow?.indexing_status).toBe('completed')
+
+    const searchMatches = await searchService.search({
+      knowledgeBaseId: kbId,
+      query: 'nucleosynthesis fusion'
+    })
+    expect(searchMatches).toHaveLength(1)
+    expect(searchMatches[0].sourceId).toBe(sourceId)
+    expect(searchMatches[0].snippet).toContain('[[HL]]')
+
+    // 4. Bounded Preview
+    const preview = sourceRepo.getPreview(sourceId, kbId, 3)
+    expect(preview).not.toBeNull()
+    expect(preview?.fileType).toBe('txt')
+    expect(preview?.chunks.length).toBeGreaterThan(0)
+    expect(preview?.chunks[0].content).toContain('thermonuclear fusion')
+
+    // 5. Reindex Workflow
+    const reindexRes = await lifecycleService.reindex({
+      knowledgeBaseId: kbId,
+      sourceId
+    })
+    expect(reindexRes.status).toBe('completed')
+    expect(reindexRes.source.id).toBe(sourceId)
+
+    // 6. Delete Workflow
+    const deleteRes = await lifecycleService.delete({
+      knowledgeBaseId: kbId,
+      sourceId
+    })
+    expect(deleteRes.success).toBe(true)
+    expect(deleteRes.fileCleaned).toBe(true)
+
+    // Verify storage and DB removal
+    expect(fs.existsSync(managedPath)).toBe(false)
+    expect(sourceRepo.getById(sourceId, kbId)).toBeNull()
+    expect(
+      await searchService.search({ knowledgeBaseId: kbId, query: 'nucleosynthesis' })
+    ).toHaveLength(0)
+  })
+
+  // --------------------------------------------------------------------------
+  // Acceptance Test A3: Complete PDF Document Lifecycle
+  // --------------------------------------------------------------------------
+  it('Acceptance Test A3: full PDF document lifecycle (import, page-aware chunking, FTS search, preview, reindex, delete, and cleanup)', async () => {
+    const kb = kbRepo.create({ name: 'Acceptance KB A3' })
+    const kbId = kb.id
+
+    const pdfBytes = createTestPdf('Bose Einstein condensates in optical lattices')
+    const pdfPath = createTestFile('condensed_matter.pdf', pdfBytes)
+
+    // 1. Ingest PDF document
+    const ingestRes = await ingestionService.ingest({
+      knowledgeBaseId: kbId,
+      filePath: pdfPath
+    })
+    assertCompleted(ingestRes)
+
+    const sourceId = ingestRes.source.id
+    expect(ingestRes.source.file_type).toBe('pdf')
+    expect(ingestRes.totalChunks).toBeGreaterThan(0)
+
+    // 2. Verify managed original file storage layout
+    const managedPath = storageManager.resolveOriginalPath(kbId, sourceId, 'pdf')
+    expect(fs.existsSync(managedPath)).toBe(true)
+
+    // 3. Verify SQLite relational persistence, page number, and FTS5 search
+    const sourceRow = sourceRepo.getByIdWithChunkCount(sourceId, kbId)
+    expect(sourceRow).not.toBeNull()
+    expect(sourceRow?.indexing_status).toBe('completed')
+
+    const searchMatches = await searchService.search({
+      knowledgeBaseId: kbId,
+      query: 'condensates optical'
+    })
+    expect(searchMatches).toHaveLength(1)
+    expect(searchMatches[0].sourceId).toBe(sourceId)
+    expect(searchMatches[0].pageNumber).toBe(1)
+    expect(searchMatches[0].snippet).toContain('[[HL]]')
+
+    // 4. Bounded Preview
+    const preview = sourceRepo.getPreview(sourceId, kbId, 3)
+    expect(preview).not.toBeNull()
+    expect(preview?.fileType).toBe('pdf')
+    expect(preview?.chunks[0].pageNumber).toBe(1)
+    expect(preview?.chunks[0].content).toContain('condensates')
+
+    // 5. Reindex Workflow
+    const reindexRes = await lifecycleService.reindex({
+      knowledgeBaseId: kbId,
+      sourceId
+    })
+    expect(reindexRes.status).toBe('completed')
+    expect(reindexRes.source.id).toBe(sourceId)
+
+    // 6. Delete Workflow
+    const deleteRes = await lifecycleService.delete({
+      knowledgeBaseId: kbId,
+      sourceId
+    })
+    expect(deleteRes.success).toBe(true)
+    expect(deleteRes.fileCleaned).toBe(true)
+
+    // Verify storage and DB removal
+    expect(fs.existsSync(managedPath)).toBe(false)
+    expect(sourceRepo.getById(sourceId, kbId)).toBeNull()
+    expect(
+      await searchService.search({ knowledgeBaseId: kbId, query: 'condensates' })
+    ).toHaveLength(0)
+  })
+
+  // --------------------------------------------------------------------------
   // Acceptance Test B: Knowledge Base Isolation
   // --------------------------------------------------------------------------
   it('Acceptance Test B: enforces strict Knowledge Base isolation across multiple KBs with identical content', async () => {

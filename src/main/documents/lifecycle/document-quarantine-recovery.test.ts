@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { randomUUID } from 'node:crypto'
+import crypto, { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { runMigrations, migrations } from '../../database/migrations'
 import { KnowledgeSourceRepository } from '../../database/repositories/knowledge-source-repository'
@@ -123,6 +123,8 @@ describe('DocumentQuarantineRecoveryService (Step 5.12)', () => {
     const sourceId = randomUUID()
     const qUuid = randomUUID()
     const now = Date.now()
+    const content = 'restored content'
+    const contentHash = crypto.createHash('sha256').update(content).digest('hex')
 
     // 1. Insert KB and Source in SQLite
     db.prepare(
@@ -136,8 +138,8 @@ describe('DocumentQuarantineRecoveryService (Step 5.12)', () => {
       relative_file_path: `originals/${sourceId}.txt`,
       file_type: 'txt',
       mime_type: 'text/plain',
-      file_size: 12,
-      content_hash: DUMMY_HASH,
+      file_size: Buffer.byteLength(content),
+      content_hash: contentHash,
       indexing_status: 'completed',
       created_at: now
     })
@@ -147,7 +149,7 @@ describe('DocumentQuarantineRecoveryService (Step 5.12)', () => {
     fs.mkdirSync(originalsDir, { recursive: true })
     const quarantineFileName = `.quarantine_${sourceId}_${qUuid}.txt`
     const quarantineFilePath = path.join(originalsDir, quarantineFileName)
-    fs.writeFileSync(quarantineFilePath, 'restored content')
+    fs.writeFileSync(quarantineFilePath, content)
 
     const report = await recoverQuarantinedDocuments({
       documentsDir,
@@ -258,6 +260,8 @@ describe('DocumentQuarantineRecoveryService (Step 5.12)', () => {
 
     // KB 1 has a Scenario A (Restore) item
     const s1 = randomUUID()
+    const content1 = 'content 1'
+    const hash1 = crypto.createHash('sha256').update(content1).digest('hex')
     sourceRepo.create({
       id: s1,
       knowledge_base_id: kb1,
@@ -266,14 +270,14 @@ describe('DocumentQuarantineRecoveryService (Step 5.12)', () => {
       relative_file_path: `originals/${s1}.txt`,
       file_type: 'txt',
       mime_type: 'text/plain',
-      file_size: 10,
-      content_hash: DUMMY_HASH,
+      file_size: Buffer.byteLength(content1),
+      content_hash: hash1,
       indexing_status: 'completed',
       created_at: now
     })
     const kb1Dir = path.join(documentsDir, kb1, 'originals')
     fs.mkdirSync(kb1Dir, { recursive: true })
-    fs.writeFileSync(path.join(kb1Dir, `.quarantine_${s1}_${randomUUID()}.txt`), 'content 1')
+    fs.writeFileSync(path.join(kb1Dir, `.quarantine_${s1}_${randomUUID()}.txt`), content1)
 
     // KB 2 has a Scenario B (Cleanup) item
     const s2 = randomUUID()
@@ -360,5 +364,163 @@ describe('DocumentQuarantineRecoveryService (Step 5.12)', () => {
     expect(report.errors).toHaveLength(1)
     expect(report.errors[0].error).toContain('Database lookup failed')
     expect(fs.existsSync(quarantineFilePath)).toBe(true)
+  })
+
+  it('11. security: rejects and skips quarantine entries that are not regular files (e.g. directories)', async () => {
+    const kbId = randomUUID()
+    const sourceId = randomUUID()
+    const qUuid = randomUUID()
+    const originalsDir = path.join(documentsDir, kbId, 'originals')
+    const quarantineDirPath = path.join(originalsDir, `.quarantine_${sourceId}_${qUuid}.txt`)
+    fs.mkdirSync(quarantineDirPath, { recursive: true })
+
+    const service = new DocumentQuarantineRecoveryService({
+      documentsDir,
+      sourceRepository: sourceRepo
+    })
+
+    const report = await service.recover()
+    expect(report.recoveredCount).toBe(0)
+    expect(report.cleanedCount).toBe(0)
+    expect(report.conflictCount).toBe(0)
+    expect(report.errors).toHaveLength(1)
+    expect(report.errors[0].error).toContain('is not a regular file')
+  })
+
+  it('12. metadata integrity: skips restoration when quarantine file extension does not match registered source file_type', async () => {
+    const kbId = randomUUID()
+    const sourceId = randomUUID()
+    const qUuid = randomUUID()
+    const now = Date.now()
+
+    db.prepare(
+      'INSERT INTO knowledge_bases (id, name, storage_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(kbId, 'Test KB', `documents/${kbId}`, now, now)
+
+    // Registered source is 'txt'
+    sourceRepo.create({
+      id: sourceId,
+      knowledge_base_id: kbId,
+      file_name: `${sourceId}.txt`,
+      original_file_name: 'sample.txt',
+      relative_file_path: `originals/${sourceId}.txt`,
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: 10,
+      content_hash: DUMMY_HASH,
+      indexing_status: 'completed',
+      created_at: now
+    })
+
+    // Quarantine file is named with '.md' extension
+    const originalsDir = path.join(documentsDir, kbId, 'originals')
+    fs.mkdirSync(originalsDir, { recursive: true })
+    const quarantineFilePath = path.join(originalsDir, `.quarantine_${sourceId}_${qUuid}.md`)
+    fs.writeFileSync(quarantineFilePath, 'mismatched content')
+
+    const report = await recoverQuarantinedDocuments({
+      documentsDir,
+      sourceRepository: sourceRepo
+    })
+
+    expect(report.recoveredCount).toBe(0)
+    expect(report.cleanedCount).toBe(0)
+    expect(report.conflictCount).toBe(0)
+    expect(report.errors).toHaveLength(1)
+    expect(report.errors[0].error).toContain('does not match registered source file type')
+    expect(fs.existsSync(quarantineFilePath)).toBe(true)
+  })
+
+  it('13. checksum verification: updates source status to failed when restored file hash does not match registered content_hash', async () => {
+    const kbId = randomUUID()
+    const sourceId = randomUUID()
+    const qUuid = randomUUID()
+    const now = Date.now()
+
+    db.prepare(
+      'INSERT INTO knowledge_bases (id, name, storage_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(kbId, 'Test KB', `documents/${kbId}`, now, now)
+
+    sourceRepo.create({
+      id: sourceId,
+      knowledge_base_id: kbId,
+      file_name: `${sourceId}.txt`,
+      original_file_name: 'sample.txt',
+      relative_file_path: `originals/${sourceId}.txt`,
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: 15,
+      content_hash: DUMMY_HASH,
+      indexing_status: 'completed',
+      created_at: now
+    })
+
+    const originalsDir = path.join(documentsDir, kbId, 'originals')
+    fs.mkdirSync(originalsDir, { recursive: true })
+    const quarantineFilePath = path.join(originalsDir, `.quarantine_${sourceId}_${qUuid}.txt`)
+    // Write content whose hash does NOT match DUMMY_HASH
+    fs.writeFileSync(quarantineFilePath, 'tampered bytes!')
+
+    const report = await recoverQuarantinedDocuments({
+      documentsDir,
+      sourceRepository: sourceRepo
+    })
+
+    expect(report.recoveredCount).toBe(1)
+    expect(report.errors).toHaveLength(1)
+    expect(report.errors[0].error).toContain('Checksum mismatch for restored document')
+
+    // Source status in SQLite was transitioned to failed
+    const updatedSource = sourceRepo.getById(sourceId, kbId)
+    expect(updatedSource?.indexing_status).toBe('failed')
+    expect(updatedSource?.error_message).toContain('Restored file checksum does not match')
+  })
+
+  it('14. idempotency: repeated recovery runs produce zero secondary actions and leave files intact', async () => {
+    const kbId = randomUUID()
+    const sourceId = randomUUID()
+    const qUuid = randomUUID()
+    const now = Date.now()
+    const content = 'idempotent content'
+    const hash = crypto.createHash('sha256').update(content).digest('hex')
+
+    db.prepare(
+      'INSERT INTO knowledge_bases (id, name, storage_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(kbId, 'Test KB', `documents/${kbId}`, now, now)
+
+    sourceRepo.create({
+      id: sourceId,
+      knowledge_base_id: kbId,
+      file_name: `${sourceId}.txt`,
+      original_file_name: 'sample.txt',
+      relative_file_path: `originals/${sourceId}.txt`,
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: Buffer.byteLength(content),
+      content_hash: hash,
+      indexing_status: 'completed',
+      created_at: now
+    })
+
+    const originalsDir = path.join(documentsDir, kbId, 'originals')
+    fs.mkdirSync(originalsDir, { recursive: true })
+    fs.writeFileSync(path.join(originalsDir, `.quarantine_${sourceId}_${qUuid}.txt`), content)
+
+    // Run 1: Restores the file
+    const report1 = await recoverQuarantinedDocuments({
+      documentsDir,
+      sourceRepository: sourceRepo
+    })
+    expect(report1.recoveredCount).toBe(1)
+
+    // Run 2: Nothing left to recover
+    const report2 = await recoverQuarantinedDocuments({
+      documentsDir,
+      sourceRepository: sourceRepo
+    })
+    expect(report2.recoveredCount).toBe(0)
+    expect(report2.cleanedCount).toBe(0)
+    expect(report2.conflictCount).toBe(0)
+    expect(report2.errors).toHaveLength(0)
   })
 })

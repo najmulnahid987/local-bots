@@ -29,6 +29,7 @@ import {
 import { providerRegistry } from './providers/provider-registry'
 import { ProviderManagerService } from './providers/provider-manager/provider-manager-service'
 import { sanitizeErrorMessage } from './providers/provider-manager/errors'
+import { sanitizeDocumentErrorMessage } from './ipc/document-validation'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -384,7 +385,10 @@ app.whenReady().then(async () => {
         console.log('[QUARANTINE_RECOVERY_COMPLETED]', JSON.stringify(recoveryReport))
       }
     } catch (recErr) {
-      console.warn('[QUARANTINE_RECOVERY_WARNING]', recErr)
+      console.warn(
+        '[QUARANTINE_RECOVERY_WARNING]',
+        sanitizeDocumentErrorMessage(recErr instanceof Error ? recErr.message : String(recErr))
+      )
     }
   } catch (docError) {
     console.error('[DOCUMENT_SUBSYSTEM_INITIALIZATION_FAILED]', docError)

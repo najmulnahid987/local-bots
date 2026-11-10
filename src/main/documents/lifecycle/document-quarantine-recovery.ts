@@ -1,8 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import type { KnowledgeSourceRepository } from '../../database/repositories/knowledge-source-repository'
 import type { DocumentStorageManager } from '../document-storage-manager'
 import { SUPPORTED_EXTENSIONS, type SupportedExtension } from '../document-file-validator'
+import { sanitizeDocumentErrorMessage } from '../../ipc/document-validation'
 
 /**
  * Regex validating standard UUID format (8-4-4-4-12 hex).
@@ -236,14 +238,16 @@ export class DocumentQuarantineRecoveryService {
           continue
         }
 
-        // Check quarantine file symlink status
+        // Check quarantine file regular file and symlink status
         try {
           const qStat = await this.fsOps.lstat(quarantinePath)
-          if (qStat.isSymbolicLink()) {
+          if (qStat.isSymbolicLink() || !qStat.isFile()) {
             errors.push({
               knowledgeBaseId: kbId,
               quarantineFile,
-              error: `Quarantine file '${quarantineFile}' is a symbolic link. Skipping for security.`
+              error: sanitizeDocumentErrorMessage(
+                `Quarantine entry '${quarantineFile}' is not a regular file or is a symbolic link. Skipping for security.`
+              )
             })
             continue
           }
@@ -251,29 +255,46 @@ export class DocumentQuarantineRecoveryService {
           errors.push({
             knowledgeBaseId: kbId,
             quarantineFile,
-            error: `Failed to stat quarantine file '${quarantineFile}': ${err instanceof Error ? err.message : String(err)}`
+            error: sanitizeDocumentErrorMessage(
+              `Failed to stat quarantine file '${quarantineFile}': ${err instanceof Error ? err.message : String(err)}`
+            )
           })
           continue
         }
 
         // 5. Query authoritative KnowledgeSource record
-        let sourceExists: boolean
+        let source: ReturnType<KnowledgeSourceRepository['getById']>
         try {
-          const source = this.sourceRepository.getById(sourceId, kbId)
-          sourceExists = source !== null
+          source = this.sourceRepository.getById(sourceId, kbId)
         } catch (dbErr: unknown) {
           errors.push({
             knowledgeBaseId: kbId,
             quarantineFile,
-            error: `Database lookup failed for source '${sourceId}': ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`
+            error: sanitizeDocumentErrorMessage(
+              `Database lookup failed for source '${sourceId}': ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`
+            )
           })
           continue
         }
 
-        const originalFileName = `${sourceId}.${rawExt}`
-        const originalPath = path.resolve(originalsDir, originalFileName)
+        const sourceExists = source !== null
 
-        if (sourceExists) {
+        if (sourceExists && source) {
+          // Compare expected original extension against trusted source metadata
+          if (source.file_type !== rawExt) {
+            errors.push({
+              knowledgeBaseId: kbId,
+              quarantineFile,
+              error: sanitizeDocumentErrorMessage(
+                `Quarantine file extension '.${rawExt}' does not match registered source file type '.${source.file_type}'. Preserving without restoration.`
+              )
+            })
+            continue
+          }
+
+          const originalFileName = `${sourceId}.${rawExt}`
+          const originalPath = path.resolve(originalsDir, originalFileName)
+
           // Check if original file currently exists
           let originalExists = false
           try {
@@ -287,7 +308,9 @@ export class DocumentQuarantineRecoveryService {
               errors.push({
                 knowledgeBaseId: kbId,
                 quarantineFile,
-                error: `Failed to stat original file target '${originalFileName}': ${err instanceof Error ? err.message : String(err)}`
+                error: sanitizeDocumentErrorMessage(
+                  `Failed to stat original file target '${originalFileName}': ${err instanceof Error ? err.message : String(err)}`
+                )
               })
               continue
             }
@@ -299,18 +322,45 @@ export class DocumentQuarantineRecoveryService {
             errors.push({
               knowledgeBaseId: kbId,
               quarantineFile,
-              error: `Conflict detected: Original file '${originalFileName}' already exists. Preserving quarantine file.`
+              error: sanitizeDocumentErrorMessage(
+                `Conflict detected: Original file '${originalFileName}' already exists. Preserving quarantine file.`
+              )
             })
           } else {
             // Scenario A: Restore - DB record exists and original is missing
             try {
               await this.fsOps.rename(quarantinePath, originalPath)
               recoveredCount++
+
+              // Checksum integrity handling during restoration
+              try {
+                const fileBytes = await fs.promises.readFile(originalPath)
+                const computedHash = crypto.createHash('sha256').update(fileBytes).digest('hex')
+                if (computedHash !== source.content_hash) {
+                  this.sourceRepository.updateStatus(
+                    sourceId,
+                    kbId,
+                    'failed',
+                    'Restored file checksum does not match registered content hash.'
+                  )
+                  errors.push({
+                    knowledgeBaseId: kbId,
+                    quarantineFile,
+                    error: sanitizeDocumentErrorMessage(
+                      `Checksum mismatch for restored document '${sourceId}': expected ${source.content_hash}, got ${computedHash}. Source marked as failed.`
+                    )
+                  })
+                }
+              } catch {
+                // Secondary check non-fatal
+              }
             } catch (renameErr: unknown) {
               errors.push({
                 knowledgeBaseId: kbId,
                 quarantineFile,
-                error: `Failed to restore quarantine file '${quarantineFile}' to '${originalFileName}': ${renameErr instanceof Error ? renameErr.message : String(renameErr)}`
+                error: sanitizeDocumentErrorMessage(
+                  `Failed to restore quarantine file '${quarantineFile}' to '${originalFileName}': ${renameErr instanceof Error ? renameErr.message : String(renameErr)}`
+                )
               })
             }
           }
@@ -323,7 +373,9 @@ export class DocumentQuarantineRecoveryService {
             errors.push({
               knowledgeBaseId: kbId,
               quarantineFile,
-              error: `Failed to unlink orphaned quarantine file '${quarantineFile}': ${unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr)}`
+              error: sanitizeDocumentErrorMessage(
+                `Failed to unlink orphaned quarantine file '${quarantineFile}': ${unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr)}`
+              )
             })
           }
         }
