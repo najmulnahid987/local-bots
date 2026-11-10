@@ -21,6 +21,7 @@ import { KnowledgeBaseRepository } from '../database/repositories/knowledge-base
 import { KnowledgeSourceRepository } from '../database/repositories/knowledge-source-repository'
 import { DocumentStorageManager } from '../documents/document-storage-manager'
 import { DocumentIngestionService } from '../documents/ingestion/document-ingestion-service'
+import { DocumentLifecycleService } from '../documents/lifecycle/document-lifecycle-service'
 import {
   createMigratedTestDatabase,
   type MigratedTestDatabaseContext
@@ -76,6 +77,7 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
   let sourceRepo: KnowledgeSourceRepository
   let storageManager: DocumentStorageManager
   let ingestionService: DocumentIngestionService
+  let lifecycleService: DocumentLifecycleService
   let defaultKbId: string
 
   // Mock BrowserWindow & frames
@@ -98,6 +100,11 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
     sourceRepo = new KnowledgeSourceRepository(dbContext.db)
     storageManager = new DocumentStorageManager({ documentsDir })
     ingestionService = new DocumentIngestionService({
+      db: dbContext.db,
+      sourceRepository: sourceRepo,
+      storageManager
+    })
+    lifecycleService = new DocumentLifecycleService({
       db: dbContext.db,
       sourceRepository: sourceRepo,
       storageManager
@@ -132,6 +139,7 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
       getMainWindow: () => mockWindow,
       ingestionService,
       sourceRepository: sourceRepo,
+      lifecycleService,
       dialogOps: mockDialogOps
     })
   })
@@ -704,9 +712,188 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
   })
 
   // ---------------------------------------------------------------------------
-  // 7. Preload Bridge API Contract & Sanitization
+  // 7. Document Reindexing IPC Operations
   // ---------------------------------------------------------------------------
-  describe('7. Preload Bridge API Contract', () => {
+  describe('7. Document Reindexing IPC Operations', () => {
+    it('successfully reindexes an existing document and returns ReindexDocumentResultDto', async () => {
+      const filePath = createTestFile(
+        'reindex_doc.txt',
+        'Initial content about robotics and automation.'
+      )
+      const ingestResult = await ingestionService.ingest({
+        knowledgeBaseId: defaultKbId,
+        filePath
+      })
+      expect(ingestResult.status).toBe('completed')
+      if (ingestResult.status !== 'completed') throw new Error('Expected completed')
+      const sourceId = ingestResult.source.id
+
+      const result = (await invokeHandler(KB_DOCS_IPC_CHANNELS.REINDEX, {
+        knowledgeBaseId: defaultKbId,
+        sourceId
+      })) as {
+        status: string
+        source: { id: string; indexingStatus: string }
+        totalChunks: number
+        totalTokens: number
+      }
+
+      expect(result.status).toBe('completed')
+      expect(result.source.id).toBe(sourceId)
+      expect(result.source.indexingStatus).toBe('completed')
+      expect(result.totalChunks).toBeGreaterThan(0)
+      expect(result.totalTokens).toBeGreaterThan(0)
+    })
+
+    it('rejects reindex requests from untrusted sender frame', async () => {
+      const untrustedFrame = {
+        url: `${devOrigin}/malicious.html`
+      } as unknown as WebFrameMainLike
+
+      const untrustedEvent: IpcSenderEventLike = {
+        sender: mockWebContents,
+        senderFrame: untrustedFrame
+      }
+
+      const handler = mockIpcHandlers.get(KB_DOCS_IPC_CHANNELS.REINDEX)!
+      await expect(
+        handler(untrustedEvent, {
+          knowledgeBaseId: defaultKbId,
+          sourceId: randomUUID()
+        })
+      ).rejects.toThrow(/UNAUTHORIZED_SENDER/)
+    })
+
+    it('rejects reindex requests with invalid UUID formats', async () => {
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.REINDEX, {
+          knowledgeBaseId: defaultKbId,
+          sourceId: 'invalid-uuid'
+        })
+      ).rejects.toThrow(/VALIDATION_ERROR/)
+
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.REINDEX, {
+          knowledgeBaseId: 'invalid-kb-uuid',
+          sourceId: randomUUID()
+        })
+      ).rejects.toThrow(/VALIDATION_ERROR/)
+    })
+
+    it('rejects reindex for non-existent document with DOCUMENT_NOT_FOUND', async () => {
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.REINDEX, {
+          knowledgeBaseId: defaultKbId,
+          sourceId: randomUUID()
+        })
+      ).rejects.toThrow(/DOCUMENT_NOT_FOUND/)
+    })
+
+    it('rejects reindex for non-existent Knowledge Base with KNOWLEDGE_BASE_NOT_FOUND', async () => {
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.REINDEX, {
+          knowledgeBaseId: randomUUID(),
+          sourceId: randomUUID()
+        })
+      ).rejects.toThrow(/KNOWLEDGE_BASE_NOT_FOUND/)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // 8. Document Deletion IPC Operations
+  // ---------------------------------------------------------------------------
+  describe('8. Document Deletion IPC Operations', () => {
+    it('safely deletes an existing document and returns DeleteDocumentResultDto', async () => {
+      const filePath = createTestFile('delete_doc.txt', 'Temporary content to be deleted.')
+      const ingestResult = await ingestionService.ingest({
+        knowledgeBaseId: defaultKbId,
+        filePath
+      })
+      expect(ingestResult.status).toBe('completed')
+      if (ingestResult.status !== 'completed') throw new Error('Expected completed')
+      const sourceId = ingestResult.source.id
+
+      // Document should exist in storage and repository
+      const docBefore = sourceRepo.getById(sourceId, defaultKbId)
+      expect(docBefore).not.toBeNull()
+
+      const result = (await invokeHandler(KB_DOCS_IPC_CHANNELS.DELETE, {
+        knowledgeBaseId: defaultKbId,
+        sourceId
+      })) as {
+        success: boolean
+        sourceId: string
+        knowledgeBaseId: string
+        fileCleaned: boolean
+        cleanupPending: boolean
+      }
+
+      expect(result.success).toBe(true)
+      expect(result.sourceId).toBe(sourceId)
+      expect(result.knowledgeBaseId).toBe(defaultKbId)
+      expect(result.fileCleaned).toBe(true)
+      expect(result.cleanupPending).toBe(false)
+
+      // Document should no longer exist in repository
+      const docAfter = sourceRepo.getById(sourceId, defaultKbId)
+      expect(docAfter).toBeNull()
+
+      // Associated chunks must also be deleted
+      const chunksAfter = sourceRepo.getChunksBySourceId(sourceId, defaultKbId)
+      expect(chunksAfter).toHaveLength(0)
+    })
+
+    it('rejects delete requests from untrusted sender frame', async () => {
+      const untrustedFrame = {
+        url: `${devOrigin}/malicious.html`
+      } as unknown as WebFrameMainLike
+
+      const untrustedEvent: IpcSenderEventLike = {
+        sender: mockWebContents,
+        senderFrame: untrustedFrame
+      }
+
+      const handler = mockIpcHandlers.get(KB_DOCS_IPC_CHANNELS.DELETE)!
+      await expect(
+        handler(untrustedEvent, {
+          knowledgeBaseId: defaultKbId,
+          sourceId: randomUUID()
+        })
+      ).rejects.toThrow(/UNAUTHORIZED_SENDER/)
+    })
+
+    it('rejects delete requests with invalid UUID formats', async () => {
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.DELETE, {
+          knowledgeBaseId: defaultKbId,
+          sourceId: 'bad-source-id'
+        })
+      ).rejects.toThrow(/VALIDATION_ERROR/)
+    })
+
+    it('rejects delete for non-existent document with DOCUMENT_NOT_FOUND', async () => {
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.DELETE, {
+          knowledgeBaseId: defaultKbId,
+          sourceId: randomUUID()
+        })
+      ).rejects.toThrow(/DOCUMENT_NOT_FOUND/)
+    })
+
+    it('rejects delete for non-existent Knowledge Base with KNOWLEDGE_BASE_NOT_FOUND', async () => {
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.DELETE, {
+          knowledgeBaseId: randomUUID(),
+          sourceId: randomUUID()
+        })
+      ).rejects.toThrow(/KNOWLEDGE_BASE_NOT_FOUND/)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // 9. Preload Bridge API Contract & Sanitization
+  // ---------------------------------------------------------------------------
+  describe('9. Preload Bridge API Contract', () => {
     it('creates typed window.api.knowledgeDocuments bridge that invokes ipcRenderer correctly', async () => {
       const mockIpc = {
         invoke: vi.fn(async (channel: string) => {
@@ -728,6 +915,24 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
           }
           if (channel === KB_DOCS_IPC_CHANNELS.SEARCH) {
             return [{ chunkId: 'c1', content: 'test content' }]
+          }
+          if (channel === KB_DOCS_IPC_CHANNELS.REINDEX) {
+            return {
+              status: 'completed',
+              source: { id: 'test-src-id' },
+              totalChunks: 3,
+              totalTokens: 150,
+              chunkerVersion: '1.0.0'
+            }
+          }
+          if (channel === KB_DOCS_IPC_CHANNELS.DELETE) {
+            return {
+              success: true,
+              sourceId: 'test-src-id',
+              knowledgeBaseId: defaultKbId,
+              fileCleaned: true,
+              cleanupPending: false
+            }
           }
           throw new Error('Unknown channel')
         })
@@ -776,6 +981,30 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
       })
       expect(searchRes).toHaveLength(1)
       expect(searchRes[0].chunkId).toBe('c1')
+
+      // Test reindex
+      const reindexRes = await bridge.reindex({
+        knowledgeBaseId: defaultKbId,
+        sourceId: 'test-src-id'
+      })
+      expect(mockIpc.invoke).toHaveBeenCalledWith(KB_DOCS_IPC_CHANNELS.REINDEX, {
+        knowledgeBaseId: defaultKbId,
+        sourceId: 'test-src-id'
+      })
+      expect(reindexRes.status).toBe('completed')
+      expect(reindexRes.totalChunks).toBe(3)
+
+      // Test delete
+      const deleteRes = await bridge.delete({
+        knowledgeBaseId: defaultKbId,
+        sourceId: 'test-src-id'
+      })
+      expect(mockIpc.invoke).toHaveBeenCalledWith(KB_DOCS_IPC_CHANNELS.DELETE, {
+        knowledgeBaseId: defaultKbId,
+        sourceId: 'test-src-id'
+      })
+      expect(deleteRes.success).toBe(true)
+      expect(deleteRes.fileCleaned).toBe(true)
     })
 
     it('normalizes IPC error rejections into KnowledgeDocumentBridgeError with sanitized messages', () => {

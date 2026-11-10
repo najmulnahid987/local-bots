@@ -3,10 +3,13 @@ import {
   KB_DOCS_IPC_CHANNELS,
   type KnowledgeSourceDto,
   type DocumentImportResultDto,
-  type DocumentSearchResultDto
+  type DocumentSearchResultDto,
+  type ReindexDocumentResultDto,
+  type DeleteDocumentResultDto
 } from '../../shared/ipc'
 import { DocumentIngestionService } from '../documents/ingestion/document-ingestion-service'
 import { DocumentSearchService } from '../documents/search'
+import { DocumentLifecycleService } from '../documents/lifecycle'
 import { KnowledgeSourceRepository } from '../database/repositories/knowledge-source-repository'
 import { validateIpcSender, type BrowserWindowLike, type IpcSenderEventLike } from '../security'
 import {
@@ -16,7 +19,9 @@ import {
   documentSelectAndImportIpcSchema,
   documentListIpcSchema,
   documentGetIpcSchema,
-  documentSearchIpcSchema
+  documentSearchIpcSchema,
+  documentReindexIpcSchema,
+  documentDeleteIpcSchema
 } from './document-validation'
 
 export interface DocumentErrorDto {
@@ -82,6 +87,7 @@ export interface DocumentIpcHandlerOptions {
   ingestionService: DocumentIngestionService
   sourceRepository: KnowledgeSourceRepository
   searchService?: DocumentSearchService
+  lifecycleService?: DocumentLifecycleService
   dialogOps?: DocumentDialogOperations
 }
 
@@ -92,6 +98,7 @@ export interface DocumentIpcHandlerOptions {
 export function registerDocumentIpcHandlers(options: DocumentIpcHandlerOptions): void {
   const { getMainWindow, ingestionService, sourceRepository, dialogOps } = options
   const searchService = options.searchService ?? new DocumentSearchService({ sourceRepository })
+  const lifecycleService = options.lifecycleService
 
   const assertAuthorizedSender = (event: IpcSenderEventLike): BrowserWindowLike => {
     const mainWindow = getMainWindow()
@@ -251,6 +258,42 @@ export function registerDocumentIpcHandlers(options: DocumentIpcHandlerOptions):
         assertAuthorizedSender(event)
         const payload = validateDocumentIpcPayload(documentSearchIpcSchema, rawPayload)
         return await searchService.search(payload)
+      } catch (err) {
+        throw formatDocumentIpcError(err)
+      }
+    }
+  )
+
+  // 5. Reindex Document
+  ipcMain.removeHandler(KB_DOCS_IPC_CHANNELS.REINDEX)
+  ipcMain.handle(
+    KB_DOCS_IPC_CHANNELS.REINDEX,
+    async (event, rawPayload: unknown): Promise<ReindexDocumentResultDto> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateDocumentIpcPayload(documentReindexIpcSchema, rawPayload)
+        if (!lifecycleService) {
+          throw new Error('Document lifecycle service is not initialized.')
+        }
+        return await lifecycleService.reindex(payload)
+      } catch (err) {
+        throw formatDocumentIpcError(err)
+      }
+    }
+  )
+
+  // 6. Delete Document
+  ipcMain.removeHandler(KB_DOCS_IPC_CHANNELS.DELETE)
+  ipcMain.handle(
+    KB_DOCS_IPC_CHANNELS.DELETE,
+    async (event, rawPayload: unknown): Promise<DeleteDocumentResultDto> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateDocumentIpcPayload(documentDeleteIpcSchema, rawPayload)
+        if (!lifecycleService) {
+          throw new Error('Document lifecycle service is not initialized.')
+        }
+        return await lifecycleService.delete(payload)
       } catch (err) {
         throw formatDocumentIpcError(err)
       }

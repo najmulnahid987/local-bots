@@ -22,7 +22,8 @@ import { KnowledgeBaseManager } from './services/knowledge-base-manager'
 import {
   DocumentStorageManager,
   DocumentIngestionService,
-  DocumentSearchService
+  DocumentSearchService,
+  DocumentLifecycleService
 } from './documents'
 import { providerRegistry } from './providers/provider-registry'
 import { ProviderManagerService } from './providers/provider-manager/provider-manager-service'
@@ -352,12 +353,18 @@ app.whenReady().then(async () => {
     const searchService = new DocumentSearchService({
       sourceRepository: sourceRepo
     })
+    const lifecycleService = new DocumentLifecycleService({
+      db,
+      sourceRepository: sourceRepo,
+      storageManager
+    })
 
     registerDocumentIpcHandlers({
       getMainWindow: () => mainWindow,
       ingestionService,
       sourceRepository: sourceRepo,
-      searchService
+      searchService,
+      lifecycleService
     })
     console.log('[DOCUMENT_SUBSYSTEM_INITIALIZED]')
   } catch (docError) {

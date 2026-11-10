@@ -37,8 +37,12 @@ import {
   type ListKnowledgeDocumentsRequest,
   type GetKnowledgeDocumentRequest,
   type SearchKnowledgeDocumentsRequest,
+  type ReindexDocumentRequest,
+  type DeleteDocumentRequest,
   type DocumentImportResultDto,
   type DocumentSearchResultDto,
+  type ReindexDocumentResultDto,
+  type DeleteDocumentResultDto,
   KnowledgeDocumentBridgeError
 } from '../shared/ipc'
 
@@ -423,6 +427,22 @@ export function createKnowledgeDocumentsApi(ipc: typeof ipcRenderer): KnowledgeD
     ): Promise<readonly DocumentSearchResultDto[]> => {
       try {
         return await ipc.invoke(KB_DOCS_IPC_CHANNELS.SEARCH, request)
+      } catch (err) {
+        throw normalizeKnowledgeDocumentBridgeError(err)
+      }
+    },
+
+    reindex: async (request: ReindexDocumentRequest): Promise<ReindexDocumentResultDto> => {
+      try {
+        return await ipc.invoke(KB_DOCS_IPC_CHANNELS.REINDEX, request)
+      } catch (err) {
+        throw normalizeKnowledgeDocumentBridgeError(err)
+      }
+    },
+
+    delete: async (request: DeleteDocumentRequest): Promise<DeleteDocumentResultDto> => {
+      try {
+        return await ipc.invoke(KB_DOCS_IPC_CHANNELS.DELETE, request)
       } catch (err) {
         throw normalizeKnowledgeDocumentBridgeError(err)
       }

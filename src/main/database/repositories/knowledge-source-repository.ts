@@ -352,6 +352,101 @@ export class KnowledgeSourceRepository {
   }
 
   /**
+   * Atomically replaces all chunks for an existing document source in a single SQLite transaction.
+   * 1. Deletes old chunks (SQLite triggers automatically remove corresponding knowledge_fts rows).
+   * 2. Inserts new chunks (SQLite triggers automatically add new knowledge_fts rows).
+   * 3. Marks the source completed and updates indexed_at / updated_at timestamps.
+   * If any step fails, the entire transaction rolls back, preserving previous chunks and FTS rows.
+   */
+  public replaceChunks(
+    sourceId: string,
+    knowledgeBaseId: string,
+    newChunks: readonly CreateKnowledgeChunkInput[],
+    indexedAt?: number
+  ): void {
+    const now = indexedAt ?? Date.now()
+    const deleteStmt = this.db.prepare(`
+      DELETE FROM knowledge_chunks
+      WHERE source_id = ? AND knowledge_base_id = ?
+    `)
+
+    const insertStmt = this.db.prepare(`
+      INSERT INTO knowledge_chunks (
+        id,
+        knowledge_base_id,
+        source_id,
+        chunk_index,
+        content,
+        page_number,
+        token_count,
+        metadata_json,
+        created_at
+      ) VALUES (
+        @id,
+        @knowledge_base_id,
+        @source_id,
+        @chunk_index,
+        @content,
+        @page_number,
+        @token_count,
+        @metadata_json,
+        @created_at
+      )
+    `)
+
+    const updateStmt = this.db.prepare(`
+      UPDATE knowledge_sources
+      SET indexing_status = 'completed', error_message = NULL, indexed_at = ?, updated_at = ?
+      WHERE id = ? AND knowledge_base_id = ?
+    `)
+
+    const tx = this.db.transaction(() => {
+      // 1. Delete old chunks (triggers remove old FTS entries)
+      deleteStmt.run(sourceId, knowledgeBaseId)
+
+      // 2. Insert new chunks (triggers insert new FTS entries)
+      for (const chunk of newChunks) {
+        const parseResult = createKnowledgeChunkSchema.safeParse(chunk)
+        if (!parseResult.success) {
+          const messages = parseResult.error.issues.map((i) => i.message).join(' ')
+          throw new ValidationError(`Failed to validate Knowledge Chunk: ${messages}`)
+        }
+        const data = parseResult.data
+        insertStmt.run({
+          id: data.id,
+          knowledge_base_id: data.knowledge_base_id,
+          source_id: data.source_id,
+          chunk_index: data.chunk_index,
+          content: data.content,
+          page_number: data.page_number,
+          token_count: data.token_count,
+          metadata_json: data.metadata_json,
+          created_at: data.created_at ?? now
+        })
+      }
+
+      // 3. Mark completed and update timestamps
+      const info = updateStmt.run(now, now, sourceId, knowledgeBaseId)
+      if (info.changes === 0) {
+        throw new RepositoryError(
+          `Knowledge Source '${sourceId}' not found in Knowledge Base '${knowledgeBaseId}'.`
+        )
+      }
+    })
+
+    try {
+      tx()
+    } catch (err) {
+      if (err instanceof ValidationError || err instanceof RepositoryError) {
+        throw err
+      }
+      throw new RepositoryError(
+        `Failed to atomically replace Knowledge Chunks: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  /**
    * Deletes a knowledge source record by ID.
    * SQLite foreign key cascading deletes all its chunks, and triggers delete its FTS entries.
    */

@@ -131,6 +131,8 @@ export interface KnowledgeDocumentApi {
   ): Promise<readonly KnowledgeSourceDto[]>
   get(request: GetKnowledgeDocumentRequest): Promise<KnowledgeSourceDto | null>
   search(request: SearchKnowledgeDocumentsRequest): Promise<readonly DocumentSearchResultDto[]>
+  reindex(request: ReindexDocumentRequest): Promise<ReindexDocumentResultDto>
+  delete(request: DeleteDocumentRequest): Promise<DeleteDocumentResultDto>
 }
 
 /**
@@ -211,3 +213,57 @@ export const searchKnowledgeDocumentsRequestSchema = z
       .default(DEFAULT_SEARCH_LIMIT)
   })
   .strict()
+
+/**
+ * Caller input for reindexing an existing document.
+ */
+export interface ReindexDocumentRequest {
+  readonly knowledgeBaseId: string
+  readonly sourceId: string
+}
+
+export const reindexDocumentRequestSchema = z
+  .object({
+    knowledgeBaseId: knowledgeBaseIdSchema,
+    sourceId: sourceIdSchema
+  })
+  .strict()
+
+/**
+ * Result emitted when document reindexing completes successfully.
+ */
+export interface ReindexDocumentResultDto {
+  readonly status: 'completed'
+  readonly source: KnowledgeSourceDto
+  readonly totalChunks: number
+  readonly totalTokens: number
+  readonly chunkerVersion: string
+}
+
+/**
+ * Caller input for deleting an existing document.
+ */
+export interface DeleteDocumentRequest {
+  readonly knowledgeBaseId: string
+  readonly sourceId: string
+}
+
+export const deleteDocumentRequestSchema = z
+  .object({
+    knowledgeBaseId: knowledgeBaseIdSchema,
+    sourceId: sourceIdSchema
+  })
+  .strict()
+
+/**
+ * Result emitted when document deletion completes.
+ */
+export interface DeleteDocumentResultDto {
+  readonly success: boolean
+  readonly sourceId: string
+  readonly knowledgeBaseId: string
+  readonly fileCleaned: boolean
+  readonly cleanupPending: boolean
+  readonly code?: string
+  readonly error?: string
+}

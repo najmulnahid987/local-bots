@@ -533,4 +533,147 @@ describe('KnowledgeSourceRepository', () => {
     expect(limitedResults).toHaveLength(1)
     expect(limitedResults[0].chunk_id).toBe(c1Id)
   })
+
+  it('11. replaces chunks atomically and updates FTS5 index', () => {
+    const sourceId = randomUUID()
+    sourceRepo.create({
+      id: sourceId,
+      knowledge_base_id: kbId,
+      file_name: 'reindex-test.txt',
+      original_file_name: 'reindex-test.txt',
+      relative_file_path: `originals/${sourceId}.txt`,
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: 1000,
+      content_hash: 'c'.repeat(64),
+      indexing_status: 'completed'
+    })
+
+    const oldChunkId = randomUUID()
+    sourceRepo.insertChunks([
+      {
+        id: oldChunkId,
+        knowledge_base_id: kbId,
+        source_id: sourceId,
+        chunk_index: 0,
+        content: 'Old obsolete content about dinosaurs in prehistory.',
+        page_number: null,
+        token_count: 10,
+        metadata_json: '{}'
+      }
+    ])
+
+    // Verify old chunk is searchable
+    let searchOld = sourceRepo.searchChunks(kbId, '"dinosaurs"', 10)
+    expect(searchOld).toHaveLength(1)
+    expect(searchOld[0].chunk_id).toBe(oldChunkId)
+
+    // Atomically replace chunks with new content
+    const newChunk1Id = randomUUID()
+    const newChunk2Id = randomUUID()
+    const now = Date.now()
+    sourceRepo.replaceChunks(
+      sourceId,
+      kbId,
+      [
+        {
+          id: newChunk1Id,
+          knowledge_base_id: kbId,
+          source_id: sourceId,
+          chunk_index: 0,
+          content: 'Modern aerospace propulsion and rocket dynamics.',
+          page_number: null,
+          token_count: 12,
+          metadata_json: JSON.stringify({ section: 'Aerospace' }),
+          created_at: now
+        },
+        {
+          id: newChunk2Id,
+          knowledge_base_id: kbId,
+          source_id: sourceId,
+          chunk_index: 1,
+          content: 'Orbital velocity and satellite trajectory calculations.',
+          page_number: null,
+          token_count: 14,
+          metadata_json: JSON.stringify({ section: 'Orbital' }),
+          created_at: now
+        }
+      ],
+      now
+    )
+
+    // Old content must no longer be found in FTS5
+    searchOld = sourceRepo.searchChunks(kbId, '"dinosaurs"', 10)
+    expect(searchOld).toHaveLength(0)
+
+    // New content must be found
+    const searchAerospace = sourceRepo.searchChunks(kbId, '"aerospace"', 10)
+    expect(searchAerospace).toHaveLength(1)
+    expect(searchAerospace[0].chunk_id).toBe(newChunk1Id)
+
+    const searchOrbital = sourceRepo.searchChunks(kbId, '"orbital"', 10)
+    expect(searchOrbital).toHaveLength(1)
+    expect(searchOrbital[0].chunk_id).toBe(newChunk2Id)
+
+    // Source record must reflect updated chunk count and completed status
+    const updatedSource = sourceRepo.getByIdWithChunkCount(sourceId, kbId)
+    expect(updatedSource).not.toBeNull()
+    expect(updatedSource!.chunk_count).toBe(2)
+    expect(updatedSource!.indexing_status).toBe('completed')
+    expect(updatedSource!.indexed_at).toBe(now)
+  })
+
+  it('12. throws error and rolls back when replaceChunks is called with invalid parameters', () => {
+    const sourceId = randomUUID()
+    sourceRepo.create({
+      id: sourceId,
+      knowledge_base_id: kbId,
+      file_name: 'rollback-test.txt',
+      original_file_name: 'rollback-test.txt',
+      relative_file_path: `originals/${sourceId}.txt`,
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: 1000,
+      content_hash: 'd'.repeat(64),
+      indexing_status: 'completed'
+    })
+
+    const initialChunkId = randomUUID()
+    sourceRepo.insertChunks([
+      {
+        id: initialChunkId,
+        knowledge_base_id: kbId,
+        source_id: sourceId,
+        chunk_index: 0,
+        content: 'Preserved initial content that should survive failed replace.',
+        page_number: null,
+        token_count: 10,
+        metadata_json: '{}'
+      }
+    ])
+
+    // Invalid chunk triggers ValidationError and rolls back
+    expect(() =>
+      sourceRepo.replaceChunks(sourceId, kbId, [
+        {
+          id: 'invalid-uuid',
+          knowledge_base_id: kbId,
+          source_id: sourceId,
+          chunk_index: 0,
+          content: 'Will fail validation',
+          page_number: null,
+          token_count: 5,
+          metadata_json: '{}'
+        }
+      ])
+    ).toThrow(ValidationError)
+
+    // Non-existent sourceId triggers RepositoryError
+    expect(() => sourceRepo.replaceChunks(randomUUID(), kbId, [])).toThrow('not found')
+
+    // Initial chunk must still exist intact (transaction rollback succeeded)
+    const chunks = sourceRepo.getChunksBySourceId(sourceId, kbId)
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0].id).toBe(initialChunkId)
+  })
 })
