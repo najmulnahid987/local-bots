@@ -39,7 +39,8 @@ export type KbIpcChannel = (typeof KB_IPC_CHANNELS)[keyof typeof KB_IPC_CHANNELS
 export const KB_DOCS_IPC_CHANNELS = {
   SELECT_AND_IMPORT: 'kb:docs:select-and-import',
   LIST: 'kb:docs:list',
-  GET: 'kb:docs:get'
+  GET: 'kb:docs:get',
+  SEARCH: 'kb:docs:search'
 } as const
 
 export type KbDocsIpcChannel = (typeof KB_DOCS_IPC_CHANNELS)[keyof typeof KB_DOCS_IPC_CHANNELS]

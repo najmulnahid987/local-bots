@@ -130,7 +130,42 @@ export interface KnowledgeDocumentApi {
     knowledgeBaseIdOrRequest: string | ListKnowledgeDocumentsRequest
   ): Promise<readonly KnowledgeSourceDto[]>
   get(request: GetKnowledgeDocumentRequest): Promise<KnowledgeSourceDto | null>
+  search(request: SearchKnowledgeDocumentsRequest): Promise<readonly DocumentSearchResultDto[]>
 }
+
+/**
+ * Caller input for searching documents within a Knowledge Base using FTS5.
+ */
+export interface SearchKnowledgeDocumentsRequest {
+  readonly knowledgeBaseId: string
+  readonly query: string
+  readonly limit?: number
+}
+
+/**
+ * Public, renderer-safe Data Transfer Object representing a ranked search match chunk.
+ * Excludes internal storage paths, raw database handles, and provider secrets.
+ */
+export interface DocumentSearchResultDto {
+  readonly sourceId: string
+  readonly knowledgeBaseId: string
+  readonly filename: string
+  readonly chunkId: string
+  readonly chunkIndex: number
+  readonly content: string
+  readonly snippet: string
+  readonly score: number
+  readonly pageNumber: number | null
+  readonly heading: string | null
+  readonly headingLevel: number | null
+  readonly headingPath: readonly string[] | null
+  readonly lineRange: { readonly start: number; readonly end: number } | null
+  readonly chunkerVersion: string | null
+}
+
+export const DEFAULT_SEARCH_LIMIT = 10
+export const MAX_SEARCH_LIMIT = 50
+export const MAX_SEARCH_QUERY_LENGTH = 1000
 
 // Zod schemas for input validation
 export const sourceIdSchema = z
@@ -154,5 +189,25 @@ export const getKnowledgeDocumentRequestSchema = z
   .object({
     knowledgeBaseId: knowledgeBaseIdSchema,
     sourceId: sourceIdSchema
+  })
+  .strict()
+
+export const searchKnowledgeDocumentsRequestSchema = z
+  .object({
+    knowledgeBaseId: knowledgeBaseIdSchema,
+    query: z
+      .string()
+      .trim()
+      .min(1, { message: 'Search query cannot be empty.' })
+      .max(MAX_SEARCH_QUERY_LENGTH, {
+        message: `Search query cannot exceed ${MAX_SEARCH_QUERY_LENGTH} characters.`
+      }),
+    limit: z
+      .number()
+      .int()
+      .min(1, { message: 'Limit must be at least 1.' })
+      .max(MAX_SEARCH_LIMIT, { message: `Limit cannot exceed ${MAX_SEARCH_LIMIT}.` })
+      .optional()
+      .default(DEFAULT_SEARCH_LIMIT)
   })
   .strict()

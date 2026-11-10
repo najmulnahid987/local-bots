@@ -36,7 +36,9 @@ import {
   type SelectAndImportDocumentRequest,
   type ListKnowledgeDocumentsRequest,
   type GetKnowledgeDocumentRequest,
+  type SearchKnowledgeDocumentsRequest,
   type DocumentImportResultDto,
+  type DocumentSearchResultDto,
   KnowledgeDocumentBridgeError
 } from '../shared/ipc'
 
@@ -411,6 +413,16 @@ export function createKnowledgeDocumentsApi(ipc: typeof ipcRenderer): KnowledgeD
     get: async (request: GetKnowledgeDocumentRequest): Promise<KnowledgeSourceDto | null> => {
       try {
         return await ipc.invoke(KB_DOCS_IPC_CHANNELS.GET, request)
+      } catch (err) {
+        throw normalizeKnowledgeDocumentBridgeError(err)
+      }
+    },
+
+    search: async (
+      request: SearchKnowledgeDocumentsRequest
+    ): Promise<readonly DocumentSearchResultDto[]> => {
+      try {
+        return await ipc.invoke(KB_DOCS_IPC_CHANNELS.SEARCH, request)
       } catch (err) {
         throw normalizeKnowledgeDocumentBridgeError(err)
       }

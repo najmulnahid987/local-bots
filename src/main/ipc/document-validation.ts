@@ -3,7 +3,8 @@ import {
   type KnowledgeSourceDto,
   selectAndImportDocumentRequestSchema,
   listKnowledgeDocumentsRequestSchema,
-  getKnowledgeDocumentRequestSchema
+  getKnowledgeDocumentRequestSchema,
+  searchKnowledgeDocumentsRequestSchema
 } from '../../shared/knowledge-documents'
 import type { KnowledgeSourceWithChunkCount } from '../database/repositories/types'
 
@@ -26,6 +27,8 @@ export const documentSelectAndImportIpcSchema = selectAndImportDocumentRequestSc
 export const documentListIpcSchema = listKnowledgeDocumentsRequestSchema
 
 export const documentGetIpcSchema = getKnowledgeDocumentRequestSchema
+
+export const documentSearchIpcSchema = searchKnowledgeDocumentsRequestSchema
 
 /**
  * Validates a raw IPC payload using a strict Zod schema.

@@ -391,4 +391,146 @@ describe('KnowledgeSourceRepository', () => {
     expect(sourceRepo.knowledgeBaseExists(kbId)).toBe(true)
     expect(sourceRepo.knowledgeBaseExists(randomUUID())).toBe(false)
   })
+
+  it('10. verifies searchChunks executes scoped BM25 full-text search with metadata and status filtering', () => {
+    const completedSourceId = randomUUID()
+    const failedSourceId = randomUUID()
+    const otherKb = kbRepo.create({ name: 'Foreign Workspace' })
+    const foreignSourceId = randomUUID()
+
+    // 1. Completed source in target KB
+    sourceRepo.create({
+      id: completedSourceId,
+      knowledge_base_id: kbId,
+      file_name: 'quantum_doc.md',
+      original_file_name: 'Quantum Analysis.md',
+      relative_file_path: `originals/${completedSourceId}.md`,
+      file_type: 'md',
+      mime_type: 'text/markdown',
+      file_size: 2048,
+      content_hash: 'a'.repeat(64),
+      indexing_status: 'completed'
+    })
+
+    // 2. Failed source in target KB (should be excluded from searchChunks)
+    sourceRepo.create({
+      id: failedSourceId,
+      knowledge_base_id: kbId,
+      file_name: 'failed_doc.txt',
+      original_file_name: 'Failed.txt',
+      relative_file_path: `originals/${failedSourceId}.txt`,
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: 500,
+      content_hash: 'b'.repeat(64),
+      indexing_status: 'failed'
+    })
+
+    // 3. Completed source in other KB (should be excluded by KB scoping)
+    sourceRepo.create({
+      id: foreignSourceId,
+      knowledge_base_id: otherKb.id,
+      file_name: 'foreign_quantum.txt',
+      original_file_name: 'Foreign Quantum.txt',
+      relative_file_path: `originals/${foreignSourceId}.txt`,
+      file_type: 'txt',
+      mime_type: 'text/plain',
+      file_size: 1000,
+      content_hash: 'c'.repeat(64),
+      indexing_status: 'completed'
+    })
+
+    const c1Id = randomUUID()
+    const c2Id = randomUUID()
+    const cFailId = randomUUID()
+    const cForeignId = randomUUID()
+
+    // Insert chunks
+    sourceRepo.insertChunks([
+      // High relevance in target KB (quantum repeated multiple times)
+      {
+        id: c1Id,
+        knowledge_base_id: kbId,
+        source_id: completedSourceId,
+        chunk_index: 0,
+        content:
+          'Quantum quantum quantum entanglement principles and quantum teleportation protocols.',
+        page_number: null,
+        token_count: 20,
+        metadata_json: JSON.stringify({
+          heading: 'Quantum Teleportation',
+          headingLevel: 2,
+          chunkerVersion: '1.0.0'
+        })
+      },
+      // Lower relevance in target KB (quantum mentioned once)
+      {
+        id: c2Id,
+        knowledge_base_id: kbId,
+        source_id: completedSourceId,
+        chunk_index: 1,
+        content: 'Classical computing vs quantum computational complexity limits.',
+        page_number: null,
+        token_count: 15,
+        metadata_json: JSON.stringify({
+          heading: 'Complexity Limits',
+          headingLevel: 2,
+          chunkerVersion: '1.0.0'
+        })
+      },
+      // In failed source
+      {
+        id: cFailId,
+        knowledge_base_id: kbId,
+        source_id: failedSourceId,
+        chunk_index: 0,
+        content: 'Quantum processing in failed source.',
+        page_number: null,
+        token_count: 10,
+        metadata_json: '{}'
+      },
+      // In foreign KB
+      {
+        id: cForeignId,
+        knowledge_base_id: otherKb.id,
+        source_id: foreignSourceId,
+        chunk_index: 0,
+        content: 'Quantum physics in foreign workspace.',
+        page_number: null,
+        token_count: 10,
+        metadata_json: '{}'
+      }
+    ])
+
+    // Search in target KB
+    const results = sourceRepo.searchChunks(kbId, '"quantum"', 10)
+
+    // Verify only completed sources from target KB are returned
+    expect(results).toHaveLength(2)
+    expect(results.map((r) => r.chunk_id)).toEqual([c1Id, c2Id])
+
+    // Verify BM25 ordering: c1 has more quantum mentions -> more negative score -> first
+    expect(results[0].rank_score).toBeLessThan(results[1].rank_score)
+
+    // Verify metadata
+    expect(results[0].original_file_name).toBe('Quantum Analysis.md')
+    expect(results[0].file_type).toBe('md')
+    expect(results[0].chunk_index).toBe(0)
+    expect(results[0].match_snippet).toContain('[[HL]]quantum[[/HL]]')
+
+    const meta = JSON.parse(results[0].metadata_json)
+    expect(meta.heading).toBe('Quantum Teleportation')
+    expect(meta.chunkerVersion).toBe('1.0.0')
+
+    // Verify foreign KB search returns only foreign KB chunks
+    const foreignResults = sourceRepo.searchChunks(otherKb.id, '"quantum"', 10)
+    expect(foreignResults).toHaveLength(1)
+    expect(foreignResults[0].chunk_id).toBe(cForeignId)
+    expect(foreignResults[0].knowledge_base_id).toBe(otherKb.id)
+
+    // Verify limit enforcement
+    const limitedResults = sourceRepo.searchChunks(kbId, '"quantum"', 1)
+    expect(limitedResults).toHaveLength(1)
+    expect(limitedResults[0].chunk_id).toBe(c1Id)
+  })
 })

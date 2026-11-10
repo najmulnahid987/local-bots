@@ -19,7 +19,11 @@ import { ProviderConnectionRepository } from './database/repositories/provider-c
 import { KnowledgeBaseRepository } from './database/repositories/knowledge-base-repository'
 import { KnowledgeSourceRepository } from './database/repositories/knowledge-source-repository'
 import { KnowledgeBaseManager } from './services/knowledge-base-manager'
-import { DocumentStorageManager, DocumentIngestionService } from './documents'
+import {
+  DocumentStorageManager,
+  DocumentIngestionService,
+  DocumentSearchService
+} from './documents'
 import { providerRegistry } from './providers/provider-registry'
 import { ProviderManagerService } from './providers/provider-manager/provider-manager-service'
 import { sanitizeErrorMessage } from './providers/provider-manager/errors'
@@ -345,11 +349,15 @@ app.whenReady().then(async () => {
       sourceRepository: sourceRepo,
       storageManager
     })
+    const searchService = new DocumentSearchService({
+      sourceRepository: sourceRepo
+    })
 
     registerDocumentIpcHandlers({
       getMainWindow: () => mainWindow,
       ingestionService,
-      sourceRepository: sourceRepo
+      sourceRepository: sourceRepo,
+      searchService
     })
     console.log('[DOCUMENT_SUBSYSTEM_INITIALIZED]')
   } catch (docError) {

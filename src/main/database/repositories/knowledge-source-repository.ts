@@ -3,6 +3,7 @@ import {
   type KnowledgeSource,
   type KnowledgeSourceWithChunkCount,
   type KnowledgeChunk,
+  type SearchChunkMatchRow,
   type CreateKnowledgeSourceInput,
   type CreateKnowledgeChunkInput,
   type KnowledgeSourceStatus,
@@ -541,6 +542,49 @@ export class KnowledgeSourceRepository {
     } catch (err) {
       throw new RepositoryError(
         `Failed to search knowledge_fts: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  /**
+   * Performs an authoritative, Knowledge Base-scoped FTS5 BM25 search.
+   * Joins knowledge_chunks and knowledge_sources to retrieve rich chunk provenance,
+   * safe snippet highlights ([[HL]]...[[/HL]]), and filters strictly for completed sources.
+   * Results are ordered by BM25 relevance score ASC (more negative is higher relevance),
+   * with stable secondary ordering on chunk_index ASC and chunk id ASC.
+   */
+  public searchChunks(
+    knowledgeBaseId: string,
+    sanitizedQuery: string,
+    limit = 10
+  ): SearchChunkMatchRow[] {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT 
+          f.chunk_id,
+          f.source_id,
+          f.knowledge_base_id,
+          s.original_file_name,
+          s.file_type,
+          c.chunk_index,
+          c.content,
+          c.page_number,
+          c.metadata_json,
+          bm25(knowledge_fts) AS rank_score,
+          snippet(knowledge_fts, 0, '[[HL]]', '[[/HL]]', '...', 16) AS match_snippet
+        FROM knowledge_fts f
+        JOIN knowledge_chunks c ON c.rowid = f.rowid
+        JOIN knowledge_sources s ON s.id = f.source_id AND s.knowledge_base_id = f.knowledge_base_id
+        WHERE knowledge_fts MATCH ?
+          AND f.knowledge_base_id = ?
+          AND s.indexing_status IN ('completed', 'ready')
+        ORDER BY rank_score ASC, c.chunk_index ASC, c.id ASC
+        LIMIT ?
+      `)
+      return stmt.all(sanitizedQuery, knowledgeBaseId, limit) as SearchChunkMatchRow[]
+    } catch (err) {
+      throw new RepositoryError(
+        `Failed to search knowledge chunks: ${err instanceof Error ? err.message : String(err)}`
       )
     }
   }

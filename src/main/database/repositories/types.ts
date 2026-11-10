@@ -380,6 +380,23 @@ export interface KnowledgeSourceWithChunkCount extends KnowledgeSource {
 }
 
 /**
+ * Raw relational record returned by KnowledgeSourceRepository.searchChunks.
+ */
+export interface SearchChunkMatchRow {
+  readonly chunk_id: string
+  readonly source_id: string
+  readonly knowledge_base_id: string
+  readonly original_file_name: string
+  readonly file_type: 'txt' | 'md' | 'pdf'
+  readonly chunk_index: number
+  readonly content: string
+  readonly page_number: number | null
+  readonly metadata_json: string
+  readonly rank_score: number
+  readonly match_snippet: string
+}
+
+/**
  * Input for creating a new knowledge_sources row.
  */
 export interface CreateKnowledgeSourceInput {

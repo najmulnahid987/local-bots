@@ -172,10 +172,11 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
   // 1. Channel Registration & Fallback
   // ---------------------------------------------------------------------------
   describe('1. Channel Registration & Fallback', () => {
-    it('registers all 3 document management IPC channels', () => {
+    it('registers all 4 document management IPC channels', () => {
       expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.SELECT_AND_IMPORT)).toBe(true)
       expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.LIST)).toBe(true)
       expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.GET)).toBe(true)
+      expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.SEARCH)).toBe(true)
     })
 
     it('registerFailingDocumentIpcHandlers registers fallback handlers that reject safely', async () => {
@@ -553,9 +554,159 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
   })
 
   // ---------------------------------------------------------------------------
-  // 6. Preload Bridge API Contract & Sanitization
+  // 6. Document Search IPC Operations
   // ---------------------------------------------------------------------------
-  describe('6. Preload Bridge API Contract', () => {
+  describe('6. Document Search Operations', () => {
+    it('executes scoped BM25 search and returns DocumentSearchResultDto items', async () => {
+      const sourceId = randomUUID()
+      sourceRepo.create({
+        id: sourceId,
+        knowledge_base_id: defaultKbId,
+        file_name: 'physics.txt',
+        original_file_name: 'Physics Principles.txt',
+        relative_file_path: `originals/${sourceId}.txt`,
+        file_type: 'txt',
+        mime_type: 'text/plain',
+        file_size: 1024,
+        content_hash: 'f'.repeat(64),
+        indexing_status: 'completed'
+      })
+
+      sourceRepo.insertChunks([
+        {
+          id: randomUUID(),
+          knowledge_base_id: defaultKbId,
+          source_id: sourceId,
+          chunk_index: 0,
+          content: 'Thermodynamics entropy laws and kinetic energy distribution in gas dynamics.',
+          page_number: null,
+          token_count: 14,
+          metadata_json: JSON.stringify({ chunkerVersion: '1.0.0' })
+        }
+      ])
+
+      const results = (await invokeHandler(KB_DOCS_IPC_CHANNELS.SEARCH, {
+        knowledgeBaseId: defaultKbId,
+        query: 'entropy kinetic'
+      })) as Array<{
+        filename: string
+        snippet: string
+        score: number
+        chunkerVersion: string
+      }>
+
+      expect(results).toHaveLength(1)
+      expect(results[0].filename).toBe('Physics Principles.txt')
+      expect(results[0].snippet).toContain('[[HL]]entropy[[/HL]]')
+      expect(results[0].chunkerVersion).toBe('1.0.0')
+    })
+
+    it('enforces Knowledge Base isolation over IPC search', async () => {
+      const otherKb = kbRepo.create({ name: 'Foreign KB' })
+      const otherSrcId = randomUUID()
+
+      sourceRepo.create({
+        id: otherSrcId,
+        knowledge_base_id: otherKb.id,
+        file_name: 'secret.txt',
+        original_file_name: 'Secret.txt',
+        relative_file_path: `originals/${otherSrcId}.txt`,
+        file_type: 'txt',
+        mime_type: 'text/plain',
+        file_size: 500,
+        content_hash: 'e'.repeat(64),
+        indexing_status: 'completed'
+      })
+
+      sourceRepo.insertChunks([
+        {
+          id: randomUUID(),
+          knowledge_base_id: otherKb.id,
+          source_id: otherSrcId,
+          chunk_index: 0,
+          content: 'Confidential corporate strategy exclusively in foreign KB.',
+          page_number: null,
+          token_count: 10,
+          metadata_json: '{}'
+        }
+      ])
+
+      // Search in defaultKbId should find nothing
+      const results = (await invokeHandler(KB_DOCS_IPC_CHANNELS.SEARCH, {
+        knowledgeBaseId: defaultKbId,
+        query: 'confidential corporate strategy'
+      })) as unknown[]
+      expect(results).toHaveLength(0)
+
+      // Search in otherKb should find 1 match
+      const otherResults = (await invokeHandler(KB_DOCS_IPC_CHANNELS.SEARCH, {
+        knowledgeBaseId: otherKb.id,
+        query: 'confidential corporate strategy'
+      })) as unknown[]
+      expect(otherResults).toHaveLength(1)
+    })
+
+    it('rejects search for non-existent Knowledge Base with KNOWLEDGE_BASE_NOT_FOUND', async () => {
+      const fakeKbId = randomUUID()
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.SEARCH, {
+          knowledgeBaseId: fakeKbId,
+          query: 'anything'
+        })
+      ).rejects.toThrow(/KNOWLEDGE_BASE_NOT_FOUND/)
+    })
+
+    it('rejects invalid search payloads with VALIDATION_ERROR', async () => {
+      // Empty query
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.SEARCH, {
+          knowledgeBaseId: defaultKbId,
+          query: ''
+        })
+      ).rejects.toThrow(/VALIDATION_ERROR/)
+
+      // Invalid KB UUID
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.SEARCH, {
+          knowledgeBaseId: 'not-valid-uuid',
+          query: 'valid query'
+        })
+      ).rejects.toThrow(/VALIDATION_ERROR/)
+
+      // Negative limit
+      await expect(
+        invokeHandler(KB_DOCS_IPC_CHANNELS.SEARCH, {
+          knowledgeBaseId: defaultKbId,
+          query: 'valid query',
+          limit: -5
+        })
+      ).rejects.toThrow(/VALIDATION_ERROR/)
+    })
+
+    it('rejects search requests from untrusted sender frame', async () => {
+      const untrustedFrame = {
+        url: `${devOrigin}/evil.html`
+      } as unknown as WebFrameMainLike
+
+      const untrustedEvent: IpcSenderEventLike = {
+        sender: mockWebContents,
+        senderFrame: untrustedFrame
+      }
+
+      const handler = mockIpcHandlers.get(KB_DOCS_IPC_CHANNELS.SEARCH)!
+      await expect(
+        handler(untrustedEvent, {
+          knowledgeBaseId: defaultKbId,
+          query: 'valid query'
+        })
+      ).rejects.toThrow(/UNAUTHORIZED_SENDER/)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // 7. Preload Bridge API Contract & Sanitization
+  // ---------------------------------------------------------------------------
+  describe('7. Preload Bridge API Contract', () => {
     it('creates typed window.api.knowledgeDocuments bridge that invokes ipcRenderer correctly', async () => {
       const mockIpc = {
         invoke: vi.fn(async (channel: string) => {
@@ -574,6 +725,9 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
           }
           if (channel === KB_DOCS_IPC_CHANNELS.GET) {
             return { id: 'test-src-id' }
+          }
+          if (channel === KB_DOCS_IPC_CHANNELS.SEARCH) {
+            return [{ chunkId: 'c1', content: 'test content' }]
           }
           throw new Error('Unknown channel')
         })
@@ -613,6 +767,15 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
         sourceId: 'src-id'
       })
       expect(getRes?.id).toBe('test-src-id')
+
+      // Test search
+      const searchRes = await bridge.search({ knowledgeBaseId: defaultKbId, query: 'test' })
+      expect(mockIpc.invoke).toHaveBeenCalledWith(KB_DOCS_IPC_CHANNELS.SEARCH, {
+        knowledgeBaseId: defaultKbId,
+        query: 'test'
+      })
+      expect(searchRes).toHaveLength(1)
+      expect(searchRes[0].chunkId).toBe('c1')
     })
 
     it('normalizes IPC error rejections into KnowledgeDocumentBridgeError with sanitized messages', () => {

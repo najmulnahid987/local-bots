@@ -2,9 +2,11 @@ import { ipcMain, BrowserWindow, dialog } from 'electron'
 import {
   KB_DOCS_IPC_CHANNELS,
   type KnowledgeSourceDto,
-  type DocumentImportResultDto
+  type DocumentImportResultDto,
+  type DocumentSearchResultDto
 } from '../../shared/ipc'
 import { DocumentIngestionService } from '../documents/ingestion/document-ingestion-service'
+import { DocumentSearchService } from '../documents/search'
 import { KnowledgeSourceRepository } from '../database/repositories/knowledge-source-repository'
 import { validateIpcSender, type BrowserWindowLike, type IpcSenderEventLike } from '../security'
 import {
@@ -13,7 +15,8 @@ import {
   toKnowledgeSourceDto,
   documentSelectAndImportIpcSchema,
   documentListIpcSchema,
-  documentGetIpcSchema
+  documentGetIpcSchema,
+  documentSearchIpcSchema
 } from './document-validation'
 
 export interface DocumentErrorDto {
@@ -78,6 +81,7 @@ export interface DocumentIpcHandlerOptions {
   getMainWindow: () => BrowserWindowLike | BrowserWindow | null
   ingestionService: DocumentIngestionService
   sourceRepository: KnowledgeSourceRepository
+  searchService?: DocumentSearchService
   dialogOps?: DocumentDialogOperations
 }
 
@@ -87,6 +91,7 @@ export interface DocumentIpcHandlerOptions {
  */
 export function registerDocumentIpcHandlers(options: DocumentIpcHandlerOptions): void {
   const { getMainWindow, ingestionService, sourceRepository, dialogOps } = options
+  const searchService = options.searchService ?? new DocumentSearchService({ sourceRepository })
 
   const assertAuthorizedSender = (event: IpcSenderEventLike): BrowserWindowLike => {
     const mainWindow = getMainWindow()
@@ -231,6 +236,21 @@ export function registerDocumentIpcHandlers(options: DocumentIpcHandlerOptions):
           return null
         }
         return toKnowledgeSourceDto(row)
+      } catch (err) {
+        throw formatDocumentIpcError(err)
+      }
+    }
+  )
+
+  // 4. Search Documents via FTS5
+  ipcMain.removeHandler(KB_DOCS_IPC_CHANNELS.SEARCH)
+  ipcMain.handle(
+    KB_DOCS_IPC_CHANNELS.SEARCH,
+    async (event, rawPayload: unknown): Promise<readonly DocumentSearchResultDto[]> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateDocumentIpcPayload(documentSearchIpcSchema, rawPayload)
+        return await searchService.search(payload)
       } catch (err) {
         throw formatDocumentIpcError(err)
       }
