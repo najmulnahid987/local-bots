@@ -43,3 +43,4 @@ export function WorkspaceBotsTab(): ReactElement {
     </div>
   )
 }
+

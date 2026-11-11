@@ -59,6 +59,44 @@ export function KnowledgeBaseWorkspaceLayout(): ReactElement {
     }
   }, [kb, activeKnowledgeBaseId, selectKnowledgeBase])
 
+  // Synchronize authoritative active workspace context in Main process
+  useEffect(() => {
+    if (!kb || kb.archivedAt !== null) {
+      return
+    }
+
+    let isCancelled = false
+
+    const activate = async (): Promise<void> => {
+      try {
+        if (window.api?.bots?.activateWorkspace) {
+          await window.api.bots.activateWorkspace(kb.id)
+        } else if (window.api?.knowledgeBases?.activateWorkspace) {
+          await window.api.knowledgeBases.activateWorkspace(kb.id)
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          console.error('Failed to activate workspace context in main process:', err)
+        }
+      }
+    }
+
+    void activate()
+
+    return () => {
+      isCancelled = true
+      try {
+        if (window.api?.bots?.deactivateWorkspace) {
+          void window.api.bots.deactivateWorkspace().catch(() => {})
+        } else if (window.api?.knowledgeBases?.deactivateWorkspace) {
+          void window.api.knowledgeBases.deactivateWorkspace().catch(() => {})
+        }
+      } catch {
+        // Ignore deactivation errors on unmount
+      }
+    }
+  }, [kb])
+
   // Handle invalid UUID
   if (!isValidUuid) {
     return (

@@ -153,6 +153,8 @@ export interface KnowledgeBaseApi {
   unarchive(id: string): Promise<KnowledgeBaseDto | null>
   delete(id: string): Promise<DeleteKnowledgeBaseResult>
   getOverview(id: string): Promise<KnowledgeBaseOverviewDto>
+  activateWorkspace?(id: string): Promise<KnowledgeBaseDto>
+  deactivateWorkspace?(): Promise<{ success: boolean }>
 }
 
 /**

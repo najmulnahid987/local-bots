@@ -247,3 +247,4 @@ describe('Renderer Hook: useKnowledgeBaseOverview (Phase 4 Step 4.6C)', () => {
     // No error or warning thrown
   })
 })
+

@@ -45,7 +45,15 @@ import {
   type DocumentPreviewDto,
   type ReindexDocumentResultDto,
   type DeleteDocumentResultDto,
-  KnowledgeDocumentBridgeError
+  KnowledgeDocumentBridgeError,
+  BOT_IPC_CHANNELS,
+  type BotApi,
+  type BotDto,
+  type CreateBotRequest,
+  type UpdateBotRequest,
+  type ListBotsRequest,
+  type DeleteBotResultDto,
+  BotBridgeError
 } from '../shared/ipc'
 
 /**
@@ -341,6 +349,22 @@ export function createKnowledgeBasesApi(ipc: typeof ipcRenderer): KnowledgeBaseA
       } catch (err) {
         throw normalizeKnowledgeBaseBridgeError(err)
       }
+    },
+
+    activateWorkspace: async (id: string): Promise<KnowledgeBaseDto> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.ACTIVATE_WORKSPACE, { id })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    deactivateWorkspace: async (): Promise<{ success: boolean }> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.DEACTIVATE_WORKSPACE)
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
     }
   }
 }
@@ -460,6 +484,112 @@ export function createKnowledgeDocumentsApi(ipc: typeof ipcRenderer): KnowledgeD
   }
 }
 
+/**
+ * Parses and normalizes any Bot IPC error rejection into a structured BotBridgeError.
+ */
+export function normalizeBotBridgeError(error: unknown): BotBridgeError {
+  if (error instanceof BotBridgeError) {
+    return error
+  }
+  const rawMsg = error instanceof Error ? error.message : String(error)
+  const jsonMatch = rawMsg.match(/\{[\s\S]*"code"[\s\S]*"message"[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        code?: string
+        message?: string
+      }
+      if (parsed.code && parsed.message) {
+        return new BotBridgeError(parsed.message, parsed.code)
+      }
+    } catch {
+      // Fall through to default sanitization
+    }
+  }
+
+  return new BotBridgeError(rawMsg, 'BOT_ERROR')
+}
+
+/**
+ * Creates the typed BotApi bridge wrapping ipcRenderer.
+ * Dependency injection allows deterministic unit testing without native Electron handles.
+ */
+export function createBotsApi(ipc: typeof ipcRenderer): BotApi {
+  return {
+    list: async (options?: ListBotsRequest): Promise<readonly BotDto[]> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.LIST, options ?? {})
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    },
+
+    get: async (botId: string): Promise<BotDto | null> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.GET, { id: botId })
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    },
+
+    create: async (request: CreateBotRequest): Promise<BotDto> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.CREATE, request)
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    },
+
+    update: async (botId: string, request: UpdateBotRequest): Promise<BotDto> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.UPDATE, { id: botId, input: request })
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    },
+
+    archive: async (botId: string): Promise<BotDto> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.ARCHIVE, { id: botId })
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    },
+
+    unarchive: async (botId: string): Promise<BotDto> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.UNARCHIVE, { id: botId })
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    },
+
+    delete: async (botId: string): Promise<DeleteBotResultDto> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.DELETE, { id: botId })
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    },
+
+    activateWorkspace: async (knowledgeBaseId: string): Promise<KnowledgeBaseDto> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.ACTIVATE_WORKSPACE, { id: knowledgeBaseId })
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    },
+
+    deactivateWorkspace: async (): Promise<{ success: boolean }> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.DEACTIVATE_WORKSPACE)
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    }
+  }
+}
+
 // Bounded, typed APIs exposed to the Renderer
 export const api = {
   ping: (request: PingRequest): Promise<PingResponse> => {
@@ -467,7 +597,8 @@ export const api = {
   },
   providers: createProvidersApi(ipcRenderer),
   knowledgeBases: createKnowledgeBasesApi(ipcRenderer),
-  knowledgeDocuments: createKnowledgeDocumentsApi(ipcRenderer)
+  knowledgeDocuments: createKnowledgeDocumentsApi(ipcRenderer),
+  bots: createBotsApi(ipcRenderer)
 }
 
 // Expose safe, bounded APIs using contextBridge

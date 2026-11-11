@@ -3,7 +3,8 @@ import type {
   PingResponse,
   ProviderApi,
   KnowledgeBaseApi,
-  KnowledgeDocumentApi
+  KnowledgeDocumentApi,
+  BotApi
 } from '../shared/ipc'
 
 export interface AppApi {
@@ -11,6 +12,7 @@ export interface AppApi {
   providers: ProviderApi
   knowledgeBases: KnowledgeBaseApi
   knowledgeDocuments?: KnowledgeDocumentApi
+  bots?: BotApi
 }
 
 declare global {

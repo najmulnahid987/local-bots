@@ -16,3 +16,4 @@ export function formatCount(count: number): string {
   if (!Number.isFinite(count) || count < 0) return '0'
   return new Intl.NumberFormat().format(count)
 }
+

@@ -10,6 +10,8 @@ import {
   registerFailingKnowledgeBaseIpcHandlers,
   registerDocumentIpcHandlers,
   registerFailingDocumentIpcHandlers,
+  registerBotIpcHandlers,
+  registerFailingBotIpcHandlers,
   isTrustedRendererUrl
 } from './ipc'
 import { databaseManager } from './database/connection'
@@ -18,7 +20,11 @@ import { CredentialVault } from './security/credential-vault/credential-vault'
 import { ProviderConnectionRepository } from './database/repositories/provider-connection-repository'
 import { KnowledgeBaseRepository } from './database/repositories/knowledge-base-repository'
 import { KnowledgeSourceRepository } from './database/repositories/knowledge-source-repository'
+import { BotRepository } from './database/repositories/bot-repository'
 import { KnowledgeBaseManager } from './services/knowledge-base-manager'
+import { ActiveWorkspaceContext } from './services/active-workspace-context'
+import { BotManagerService } from './services/bot-manager'
+import { sanitizeBotErrorMessage } from './services/bot-errors'
 import {
   DocumentStorageManager,
   DocumentIngestionService,
@@ -271,6 +277,9 @@ app.whenReady().then(async () => {
 
   // Initialize persistent SQLite database and execute migrations before window creation
   let db
+  let connectionRepo: ProviderConnectionRepository
+  let kbRepo: KnowledgeBaseRepository
+  let activeWorkspaceContext: ActiveWorkspaceContext
   try {
     const userDataPath = app.getPath('userData')
     const initResult = databaseManager.initialize(userDataPath)
@@ -289,6 +298,10 @@ app.whenReady().then(async () => {
     db = databaseManager.getDatabase()
     const migrationResult = runMigrations(db, migrations)
     console.log('[MIGRATIONS_COMPLETED]', JSON.stringify(migrationResult))
+
+    connectionRepo = new ProviderConnectionRepository(db)
+    kbRepo = new KnowledgeBaseRepository(db)
+    activeWorkspaceContext = new ActiveWorkspaceContext(kbRepo)
   } catch (dbError) {
     console.error('[DATABASE_INITIALIZATION_FAILED]', dbError)
     app.quit()
@@ -302,7 +315,6 @@ app.whenReady().then(async () => {
   try {
     const userDataPath = app.getPath('userData')
     const vault = new CredentialVault({ vaultDir: join(userDataPath, 'credentials') })
-    const connectionRepo = new ProviderConnectionRepository(db)
     const providerManager = new ProviderManagerService({
       credentialVault: vault,
       connectionRepo,
@@ -323,7 +335,6 @@ app.whenReady().then(async () => {
   // Initialize KnowledgeBaseManager and register Knowledge Base IPC handlers
   try {
     const userDataPath = app.getPath('userData')
-    const kbRepo = new KnowledgeBaseRepository(db)
     const kbManager = new KnowledgeBaseManager({
       repository: kbRepo,
       userDataPath
@@ -393,6 +404,31 @@ app.whenReady().then(async () => {
   } catch (docError) {
     console.error('[DOCUMENT_SUBSYSTEM_INITIALIZATION_FAILED]', docError)
     registerFailingDocumentIpcHandlers(() => mainWindow, 'Document subsystem failed to initialize.')
+  }
+
+  // Initialize ActiveWorkspaceContext and BotManagerService, and register Bot IPC handlers
+  try {
+    const botRepo = new BotRepository(db)
+    const botManager = new BotManagerService({
+      botRepo,
+      kbRepo,
+      connectionRepo,
+      registry: providerRegistry,
+      activeContext: activeWorkspaceContext
+    })
+
+    registerBotIpcHandlers({
+      getMainWindow: () => mainWindow,
+      botManager,
+      activeContext: activeWorkspaceContext
+    })
+    console.log('[BOT_SUBSYSTEM_INITIALIZED]')
+  } catch (botError) {
+    console.error(
+      '[BOT_SUBSYSTEM_INITIALIZATION_FAILED]',
+      sanitizeBotErrorMessage(String(botError))
+    )
+    registerFailingBotIpcHandlers(() => mainWindow, 'Bot subsystem failed to initialize.')
   }
 
   createWindow()
