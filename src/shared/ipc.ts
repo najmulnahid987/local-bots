@@ -13,6 +13,7 @@ export const PROVIDER_IPC_CHANNELS = {
   TEST_DRAFT_CONNECTION: 'provider:test-draft-connection',
   CREATE_CONNECTION: 'provider:create-connection',
   TEST_CONNECTION: 'provider:test-connection',
+  GET_AVAILABLE_MODELS: 'provider:get-available-models',
   UPDATE_LABEL: 'provider:update-label',
   REPLACE_CREDENTIAL: 'provider:replace-credential',
   REMOVE_CONNECTION: 'provider:remove-connection',

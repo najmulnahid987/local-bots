@@ -28,6 +28,7 @@ export interface ProviderConnectionSummary {
   readonly hasCredential: boolean
   readonly createdAt: number
   readonly updatedAt: number
+  readonly availableModels?: readonly string[]
 }
 
 /**

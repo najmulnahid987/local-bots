@@ -178,6 +178,12 @@ export class ConversationTurnService {
    */
   private readonly activeTurns = new Set<string>()
 
+  /**
+   * Tracks in-memory conversation IDs currently undergoing deletion.
+   * Prevents race conditions between active generation and deletion.
+   */
+  private readonly deletingConversations = new Set<string>()
+
   constructor(deps: ConversationTurnServiceDependencies) {
     if (!deps || typeof deps !== 'object') {
       throw new ConversationTurnError(
@@ -254,6 +260,40 @@ export class ConversationTurnService {
   }
 
   /**
+   * Returns whether a conversation is currently undergoing deletion.
+   */
+  public isDeleting(conversationId: string): boolean {
+    return this.deletingConversations.has(conversationId)
+  }
+
+  /**
+   * Acquires an in-memory deletion lock on a conversation.
+   * Throws CONCURRENT_TURN_ACTIVE if generation is in progress or if deletion is already underway.
+   */
+  public acquireDeletionLock(conversationId: string): void {
+    if (this.activeTurns.has(conversationId)) {
+      throw new ConversationTurnError(
+        'Cannot delete conversation while generation is in progress. Please stop generation first.',
+        'CONCURRENT_TURN_ACTIVE'
+      )
+    }
+    if (this.deletingConversations.has(conversationId)) {
+      throw new ConversationTurnError(
+        'Conversation deletion is already in progress.',
+        'CONCURRENT_TURN_ACTIVE'
+      )
+    }
+    this.deletingConversations.add(conversationId)
+  }
+
+  /**
+   * Releases an in-memory deletion lock on a conversation.
+   */
+  public releaseDeletionLock(conversationId: string): void {
+    this.deletingConversations.delete(conversationId)
+  }
+
+  /**
    * Returns the number of currently active generation operations across all conversations.
    */
   public getActiveTurnCount(): number {
@@ -288,7 +328,10 @@ export class ConversationTurnService {
     const validatedRequest = parsedRequest.data
 
     // 3. Acquire concurrent turn lock
-    if (this.activeTurns.has(validatedRequest.conversationId)) {
+    if (
+      this.activeTurns.has(validatedRequest.conversationId) ||
+      this.deletingConversations.has(validatedRequest.conversationId)
+    ) {
       throw new ConversationTurnError(
         `A generation is already in progress for conversation '${validatedRequest.conversationId}'.`,
         'CONCURRENT_TURN_ACTIVE'
@@ -369,7 +412,10 @@ export class ConversationTurnService {
     const validatedRequest = parsedRequest.data
 
     // 3. Acquire concurrent turn lock
-    if (this.activeTurns.has(validatedRequest.conversationId)) {
+    if (
+      this.activeTurns.has(validatedRequest.conversationId) ||
+      this.deletingConversations.has(validatedRequest.conversationId)
+    ) {
       throw new ConversationTurnError(
         `A generation is already in progress for conversation '${validatedRequest.conversationId}'.`,
         'CONCURRENT_TURN_ACTIVE'

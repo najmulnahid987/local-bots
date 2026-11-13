@@ -251,6 +251,7 @@ export interface ConnectionTestResult {
   readonly latencyMs: number
   readonly testedModelId: string
   readonly error?: ProviderError
+  readonly availableModels?: readonly string[]
 }
 
 /**
@@ -266,4 +267,5 @@ export interface ProviderAdapter {
   ): Promise<ConnectionTestResult>
   generateText(apiKey: string, options: GenerateTextOptions): Promise<GenerateTextResult>
   streamText(apiKey: string, options: GenerateTextOptions): AsyncIterable<StreamTextChunk>
+  discoverAvailableModels?(apiKey: string, signal?: AbortSignal): Promise<readonly string[]>
 }

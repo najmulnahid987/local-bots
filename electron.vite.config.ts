@@ -70,7 +70,11 @@ export default defineConfig({
       }
     }
   },
-  preload: {},
+  preload: {
+    build: {
+      externalizeDeps: false
+    }
+  },
   renderer: {
     resolve: {
       alias: {

@@ -508,6 +508,7 @@ describe('Phase 3 Step 3.7B: Secure IPC Bridge & Preload Integration', () => {
     expect(exposedMethods).toEqual([
       'getCatalog',
       'listConnections',
+      'getAvailableModels',
       'testDraftConnection',
       'createConnection',
       'testConnection',

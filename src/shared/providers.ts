@@ -125,6 +125,7 @@ export interface ProviderConnectionSummary {
   readonly hasCredential: boolean
   readonly createdAt: number
   readonly updatedAt: number
+  readonly availableModels?: readonly string[]
 }
 
 /**
@@ -145,6 +146,7 @@ export interface ConnectionTestResult {
   readonly latencyMs: number
   readonly testedModelId: string
   readonly error?: ProviderErrorDto
+  readonly availableModels?: readonly string[]
 }
 
 /**
@@ -283,6 +285,7 @@ export interface StreamStartIpcPayload extends StreamTextInput {
 export interface ProviderApi {
   getCatalog(): Promise<ProviderCatalogDto>
   listConnections(): Promise<readonly ProviderConnectionSummary[]>
+  getAvailableModels(input: { connectionId: string }): Promise<readonly ModelDescriptorDto[]>
   testDraftConnection(input: TestDraftConnectionInput): Promise<ConnectionTestResult>
   createConnection(input: CreateProviderConnectionInput): Promise<ProviderConnectionSummary>
   testConnection(input: TestProviderConnectionInput): Promise<ConnectionTestResult>

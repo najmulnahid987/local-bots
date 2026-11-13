@@ -6,7 +6,8 @@ import {
   type ConnectionTestResult,
   type RemoveConnectionResult,
   type GenerateTextResult,
-  type ProviderErrorDto
+  type ProviderErrorDto,
+  type ModelDescriptorDto
 } from '../../shared/providers'
 import { ProviderManagerService } from '../providers/provider-manager/provider-manager-service'
 import { sanitizeErrorMessage } from '../providers/provider-manager/errors'
@@ -16,6 +17,7 @@ import {
   testDraftConnectionIpcSchema,
   createConnectionIpcSchema,
   testConnectionIpcSchema,
+  getAvailableModelsIpcSchema,
   updateConnectionLabelIpcSchema,
   replaceCredentialIpcSchema,
   removeConnectionIpcSchema,
@@ -153,6 +155,21 @@ export function registerProviderIpcHandlers(
           ...testRes,
           ok: testRes.success
         }
+      } catch (err) {
+        throw formatIpcError(err)
+      }
+    }
+  )
+
+  // 5B. Get Available Models for Connection
+  ipcMain.removeHandler(PROVIDER_IPC_CHANNELS.GET_AVAILABLE_MODELS)
+  ipcMain.handle(
+    PROVIDER_IPC_CHANNELS.GET_AVAILABLE_MODELS,
+    async (event, rawPayload: unknown): Promise<readonly ModelDescriptorDto[]> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateIpcPayload(getAvailableModelsIpcSchema, rawPayload)
+        return await providerManager.getAvailableModels(payload.connectionId)
       } catch (err) {
         throw formatIpcError(err)
       }

@@ -1268,6 +1268,67 @@ describe('ConversationTurnService (Phase 7 Step 7.6B.3)', () => {
       expect(turnService.isGenerating(convBId)).toBe(false)
       expect(turnService.getActiveTurnCount()).toBe(0)
     })
+
+    it('22b. enforces bidirectional mutual exclusion between generation and deletion', () => {
+      // 1. When generation is in progress, acquireDeletionLock throws CONCURRENT_TURN_ACTIVE
+      const mockExecService = {
+        streamPreparedTurn: vi.fn(() => createMockExecutionStream({ delayMs: 50 }))
+      } as unknown as ConversationExecutionService
+
+      const customTurnService = new ConversationTurnService({
+        db,
+        conversationRepo: convRepo,
+        messageRepo: msgRepo,
+        activeWorkspaceContext: activeContext,
+        conversationService,
+        executionService: mockExecService,
+        persistenceService
+      })
+
+      const stream = customTurnService.sendMessage(sessionId, {
+        conversationId: convAId,
+        content: 'Active generation test'
+      })
+
+      expect(customTurnService.isGenerating(convAId)).toBe(true)
+
+      expect(() => customTurnService.acquireDeletionLock(convAId)).toThrow(ConversationTurnError)
+      try {
+        customTurnService.acquireDeletionLock(convAId)
+      } catch (err) {
+        expect((err as ConversationTurnError).code).toBe('CONCURRENT_TURN_ACTIVE')
+      }
+
+      // Cleanup stream
+      stream[Symbol.asyncIterator]().return?.(undefined as unknown as ConversationTurnEvent)
+
+      // 2. When deletion lock is held, new sendMessage or retry is blocked
+      expect(customTurnService.isDeleting(convBId)).toBe(false)
+      customTurnService.acquireDeletionLock(convBId)
+      expect(customTurnService.isDeleting(convBId)).toBe(true)
+
+      // Another acquireDeletionLock call is rejected
+      expect(() => customTurnService.acquireDeletionLock(convBId)).toThrow(ConversationTurnError)
+
+      // sendMessage is blocked
+      expect(() =>
+        customTurnService.sendMessage(sessionId, {
+          conversationId: convBId,
+          content: 'Should be blocked by deletion'
+        })
+      ).toThrow(ConversationTurnError)
+
+      // retry is blocked
+      expect(() =>
+        customTurnService.retryLastUserMessage(sessionId, {
+          conversationId: convBId
+        })
+      ).toThrow(ConversationTurnError)
+
+      // 3. Releasing deletion lock allows operations again
+      customTurnService.releaseDeletionLock(convBId)
+      expect(customTurnService.isDeleting(convBId)).toBe(false)
+    })
   })
 
   // ==========================================================================

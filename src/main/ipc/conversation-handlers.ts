@@ -147,16 +147,12 @@ export function registerConversationIpcHandlers(options: ConversationIpcHandlerO
           conversationDeleteIpcSchema,
           rawPayload
         )
-        if (turnService.isGenerating(conversationId)) {
-          throw new Error(
-            JSON.stringify({
-              code: 'CONCURRENT_TURN_ACTIVE',
-              message:
-                'Cannot delete conversation while generation is in progress. Please stop generation first.'
-            })
-          )
+        turnService.acquireDeletionLock(conversationId)
+        try {
+          return conversationManager.deleteConversation(sessionId, conversationId)
+        } finally {
+          turnService.releaseDeletionLock(conversationId)
         }
-        return conversationManager.deleteConversation(sessionId, conversationId)
       } catch (err) {
         throw formatConversationIpcError(err)
       }

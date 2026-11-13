@@ -97,6 +97,8 @@ export class MessageRepository {
     const metadataJson = serializeMessageMetadata(input.metadata)
     const tokenUsageJson = serializeMessageTokenUsage(input.tokenUsage)
 
+    let effectiveCreatedAt = now
+
     // Execute ownership check, conversation updated_at update, and message insertion inside a transaction
     const executeInsert = this.db.transaction(() => {
       const conv = this.db
@@ -115,8 +117,17 @@ export class MessageRepository {
         )
       }
 
+      // Ensure monotonic created_at for messages within the conversation so chronological ordering is strictly preserved
+      const latestMsg = this.db
+        .prepare('SELECT MAX(created_at) as max_created_at FROM messages WHERE conversation_id = ?')
+        .get(input.conversationId) as { max_created_at: number | null } | undefined
+      effectiveCreatedAt =
+        latestMsg?.max_created_at !== null && latestMsg?.max_created_at !== undefined
+          ? Math.max(now, latestMsg.max_created_at + 1)
+          : now
+
       // Monotonic-safe conversation timestamp update
-      const newUpdatedAt = Math.max(now, conv.updated_at, conv.created_at)
+      const newUpdatedAt = Math.max(effectiveCreatedAt, conv.updated_at, conv.created_at)
       this.db
         .prepare(
           `
@@ -143,7 +154,7 @@ export class MessageRepository {
           contentFormat,
           metadataJson,
           tokenUsageJson,
-          now
+          effectiveCreatedAt
         )
     })
 
@@ -166,7 +177,7 @@ export class MessageRepository {
       contentFormat,
       metadata: input.metadata ?? {},
       tokenUsage: input.tokenUsage ?? null,
-      createdAt: now
+      createdAt: effectiveCreatedAt
     }
   }
 

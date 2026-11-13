@@ -2,7 +2,11 @@ import { ReactElement, useState, useEffect, useMemo, FormEvent, ChangeEvent } fr
 import { Loader2, AlertCircle, Wrench } from 'lucide-react'
 import type { ToolPermission } from '../../../../shared/bots'
 import { APPROVED_BOT_TOOLS } from '../../../../shared/bots'
-import type { ProviderCatalogDto, ProviderConnectionSummary } from '../../../../shared/providers'
+import type {
+  ProviderCatalogDto,
+  ProviderConnectionSummary,
+  ModelDescriptorDto
+} from '../../../../shared/providers'
 import { BOT_TOOLS_METADATA } from './bot-tools-meta'
 
 export interface BotFormValues {
@@ -65,6 +69,10 @@ export function BotConfigurationForm({
   const [providerConnectionId, setProviderConnectionId] = useState<string | null>(
     initialProviderConnectionId
   )
+  const [discoveredModels, setDiscoveredModels] = useState<
+    Record<string, readonly ModelDescriptorDto[]>
+  >({})
+  const [isDetectingModels, setIsDetectingModels] = useState<boolean>(false)
 
   // Derive selectable models based on selected provider connection
   const selectableModels = useMemo(() => {
@@ -81,8 +89,25 @@ export function BotConfigurationForm({
       return nonDeprecated
     }
 
+    // 1. If dynamically discovered models are available for this connection, use them
+    if (
+      discoveredModels[providerConnectionId] &&
+      discoveredModels[providerConnectionId].length > 0
+    ) {
+      return discoveredModels[providerConnectionId]
+    }
+
+    // 2. If connection summary already carried availableModels
+    if (connection.availableModels && connection.availableModels.length > 0) {
+      const allowedSet = new Set(connection.availableModels)
+      const matched = allModels.filter((m) => allowedSet.has(m.id))
+      if (matched.length > 0) {
+        return matched
+      }
+    }
+
     return nonDeprecated.filter((m) => m.providerId === connection.providerId)
-  }, [catalog?.models, providerConnectionId, connections])
+  }, [catalog?.models, providerConnectionId, connections, discoveredModels])
 
   // Initial model resolution
   const initialModel = useMemo(() => {
@@ -143,6 +168,48 @@ export function BotConfigurationForm({
       isCurrent = false
     }
   }, [propConnections, propCatalog])
+
+  // Discover and filter models dynamically for the selected provider connection
+  useEffect(() => {
+    let isCurrent = true
+    if (!providerConnectionId || !window.api?.providers?.getAvailableModels) {
+      return
+    }
+
+    if (discoveredModels[providerConnectionId]) {
+      return
+    }
+
+    setIsDetectingModels(true)
+    window.api.providers
+      .getAvailableModels({ connectionId: providerConnectionId })
+      .then((models) => {
+        if (isCurrent && models && models.length > 0) {
+          setDiscoveredModels((prev) => ({
+            ...prev,
+            [providerConnectionId]: models
+          }))
+          setModelId((prevModelId) => {
+            if (models.some((m) => m.id === prevModelId)) {
+              return prevModelId
+            }
+            return models[0]?.id ?? prevModelId
+          })
+        }
+      })
+      .catch(() => {
+        // Fallback to static catalog on error
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsDetectingModels(false)
+        }
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [providerConnectionId])
 
   // Handle provider connection selection changes
   const handleConnectionChange = (e: ChangeEvent<HTMLSelectElement>): void => {
@@ -461,7 +528,11 @@ export function BotConfigurationForm({
             )}
           </select>
           <span className="form-helper">
-            Authoritative models available from the verified provider catalog.
+            {isDetectingModels
+              ? 'Detecting active models for this API key...'
+              : providerConnectionId && discoveredModels[providerConnectionId]
+                ? `✓ Showing ${selectableModels.length} models verified and active for this API key.`
+                : 'Authoritative models available from the verified provider catalog.'}
           </span>
           {fieldErrors.modelId && (
             <span className="form-field-error" data-testid="bot-model-error">

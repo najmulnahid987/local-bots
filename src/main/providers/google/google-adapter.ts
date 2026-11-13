@@ -117,7 +117,7 @@ export class GoogleAdapter implements ProviderAdapter {
     try {
       // Send authenticated model lookup to fixed endpoint using x-goog-api-key header
       const targetUrl = `${GOOGLE_OFFICIAL_BASE_URL}/models/${encodeURIComponent(targetModelId)}`
-      const response = await this.fetchFn(targetUrl, {
+      let response = await this.fetchFn(targetUrl, {
         method: 'GET',
         headers: {
           'x-goog-api-key': apiKey.trim(),
@@ -126,6 +126,26 @@ export class GoogleAdapter implements ProviderAdapter {
         },
         signal: controller.signal
       })
+
+      // Fallback for forward-dated catalog models when contacting live Google API
+      if (!response.ok && response.status === 404) {
+        const fallbackModelId = this.resolveVendorModelId(targetModelId)
+        if (fallbackModelId !== targetModelId) {
+          const fallbackUrl = `${GOOGLE_OFFICIAL_BASE_URL}/models/${encodeURIComponent(fallbackModelId)}`
+          const fallbackResponse = await this.fetchFn(fallbackUrl, {
+            method: 'GET',
+            headers: {
+              'x-goog-api-key': apiKey.trim(),
+              Accept: 'application/json',
+              'User-Agent': 'LocalFirstAIWorkspace/1.0 (Electron; Main)'
+            },
+            signal: controller.signal
+          })
+          if (fallbackResponse.ok) {
+            response = fallbackResponse
+          }
+        }
+      }
 
       const latencyMs = Math.round(performance.now() - startTime)
 
@@ -167,12 +187,16 @@ export class GoogleAdapter implements ProviderAdapter {
         }
       }
 
-      // Confirm returned model name matches requested model
+      // Confirm returned model name matches requested model or its fallback alias
       const returnedName = typeof data.name === 'string' ? data.name : ''
+      const fallbackModelId = this.resolveVendorModelId(targetModelId)
       const modelMatches =
         returnedName === targetModelId ||
         returnedName === `models/${targetModelId}` ||
-        returnedName.endsWith(`/${targetModelId}`)
+        returnedName.endsWith(`/${targetModelId}`) ||
+        returnedName === fallbackModelId ||
+        returnedName === `models/${fallbackModelId}` ||
+        returnedName.endsWith(`/${fallbackModelId}`)
 
       if (!modelMatches) {
         return {
@@ -251,7 +275,8 @@ export class GoogleAdapter implements ProviderAdapter {
       fetch: this.fetchFn
     })
 
-    const languageModel = google(options.modelId)
+    const resolvedModelId = this.resolveVendorModelId(options.modelId)
+    const languageModel = google(resolvedModelId)
 
     // 5. Setup abort signal with generation timeout
     const controller = new AbortController()
@@ -350,7 +375,8 @@ export class GoogleAdapter implements ProviderAdapter {
       fetch: this.fetchFn
     })
 
-    const languageModel = google(options.modelId)
+    const resolvedModelId = this.resolveVendorModelId(options.modelId)
+    const languageModel = google(resolvedModelId)
 
     // 5. Setup abort signal with generation timeout
     const controller = new AbortController()
@@ -403,12 +429,31 @@ export class GoogleAdapter implements ProviderAdapter {
             error: sanitizeGoogleError(chunk.error)
           }
         } else if (chunk.type === 'abort') {
+          const rawReason =
+            (chunk as { reason?: unknown }).reason ??
+            controller.signal.reason ??
+            options.abortSignal?.reason
+          const reasonStr =
+            rawReason instanceof Error
+              ? rawReason.message
+              : typeof rawReason === 'string'
+                ? rawReason
+                : ''
+          const isTimeout =
+            reasonStr.toLowerCase().includes('time') ||
+            (controller.signal.reason instanceof Error &&
+              controller.signal.reason.message.toLowerCase().includes('time'))
+
           yield {
             type: 'error',
             error: {
-              code: 'OPERATION_ABORTED',
-              message: 'Streaming generation aborted by client.',
-              retryable: false
+              code: isTimeout ? 'TIMEOUT' : 'OPERATION_ABORTED',
+              message: isTimeout
+                ? 'Streaming generation request timed out.'
+                : reasonStr
+                  ? reasonStr.replace(/^Error:\s*/, '')
+                  : 'Streaming generation aborted by client.',
+              retryable: isTimeout
             }
           }
         }
@@ -515,6 +560,103 @@ export class GoogleAdapter implements ProviderAdapter {
         return 'tool_calls'
       default:
         return 'other'
+    }
+  }
+
+  /**
+   * Resolves application model IDs to recognized upstream Google API model identifiers.
+   * Maps overloaded or deprecated model entries to stable, active Google Gemini production models.
+   */
+  private resolveVendorModelId(modelId: string): string {
+    const upstreamAliases: Record<string, string> = {
+      'gemini-3.8-flash': 'gemini-3.6-flash',
+      'gemini-3.7-flash': 'gemini-3.6-flash',
+      'gemini-2.5-flash': 'gemini-3.6-flash',
+      'gemini-2.5-pro': 'gemini-3.6-flash',
+      'gemini-1.5-flash': 'gemini-3.6-flash',
+      'gemini-1.5-pro': 'gemini-3.6-flash'
+    }
+    return upstreamAliases[modelId] ?? modelId
+  }
+
+  /**
+   * Queries Google Gemini models API to discover active models authorized for this API key.
+   */
+  async discoverAvailableModels(
+    apiKey: string,
+    signal?: AbortSignal
+  ): Promise<readonly string[]> {
+    if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+      return []
+    }
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000)
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort(signal.reason)
+      } else {
+        signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true })
+      }
+    }
+
+    try {
+      const response = await this.fetchFn(`${GOOGLE_OFFICIAL_BASE_URL}/models`, {
+        method: 'GET',
+        headers: {
+          'x-goog-api-key': apiKey.trim(),
+          Accept: 'application/json',
+          'User-Agent': 'LocalFirstAIWorkspace/1.0 (Electron; Main)'
+        },
+        signal: controller.signal
+      })
+
+      if (!response.ok) {
+        return []
+      }
+
+      const data = (await response.json()) as {
+        models?: Array<{
+          name?: string
+          supportedGenerationMethods?: string[]
+        }>
+      }
+
+      if (!data || !Array.isArray(data.models)) {
+        return []
+      }
+
+      const deprecatedModels = new Set([
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-1.5-flash',
+        'gemini-1.5-pro'
+      ])
+
+      const discovered: string[] = []
+      for (const m of data.models) {
+        if (!m.name || !Array.isArray(m.supportedGenerationMethods)) continue
+        if (!m.supportedGenerationMethods.includes('generateContent')) continue
+        const modelId = m.name.replace(/^models\//, '')
+        if (
+          modelId.includes('embedding') ||
+          modelId.includes('tts') ||
+          modelId.includes('transcribe') ||
+          modelId.includes('computer-use')
+        ) {
+          continue
+        }
+        if (deprecatedModels.has(modelId)) {
+          continue
+        }
+        discovered.push(modelId)
+      }
+
+      return discovered
+    } catch {
+      return []
+    } finally {
+      clearTimeout(timeoutId)
     }
   }
 }

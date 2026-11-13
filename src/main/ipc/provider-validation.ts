@@ -96,6 +96,12 @@ export const testConnectionIpcSchema = z
   })
   .strict()
 
+export const getAvailableModelsIpcSchema = z
+  .object({
+    connectionId: UUID_SCHEMA
+  })
+  .strict()
+
 export const updateConnectionLabelIpcSchema = z
   .object({
     connectionId: UUID_SCHEMA,

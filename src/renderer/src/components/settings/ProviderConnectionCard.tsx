@@ -116,6 +116,19 @@ export function ProviderConnectionCard({
                   Missing Key
                 </span>
               )}
+              {connection.availableModels && connection.availableModels.length > 0 && (
+                <>
+                  <span className="meta-separator" aria-hidden="true">
+                    •
+                  </span>
+                  <span
+                    className="credential-indicator credential-present"
+                    title={`${connection.availableModels.length} models verified for this key`}
+                  >
+                    {connection.availableModels.length} Models
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>

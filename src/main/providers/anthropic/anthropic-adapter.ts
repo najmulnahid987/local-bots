@@ -366,12 +366,31 @@ export class AnthropicAdapter implements ProviderAdapter {
             error: sanitizeAnthropicError(chunk.error)
           }
         } else if (chunk.type === 'abort') {
+          const rawReason =
+            (chunk as { reason?: unknown }).reason ??
+            controller.signal.reason ??
+            options.abortSignal?.reason
+          const reasonStr =
+            rawReason instanceof Error
+              ? rawReason.message
+              : typeof rawReason === 'string'
+                ? rawReason
+                : ''
+          const isTimeout =
+            reasonStr.toLowerCase().includes('time') ||
+            (controller.signal.reason instanceof Error &&
+              controller.signal.reason.message.toLowerCase().includes('time'))
+
           yield {
             type: 'error',
             error: {
-              code: 'OPERATION_ABORTED',
-              message: 'Streaming generation aborted by client.',
-              retryable: false
+              code: isTimeout ? 'TIMEOUT' : 'OPERATION_ABORTED',
+              message: isTimeout
+                ? 'Streaming generation request timed out.'
+                : reasonStr
+                  ? reasonStr.replace(/^Error:\s*/, '')
+                  : 'Streaming generation aborted by client.',
+              retryable: isTimeout
             }
           }
         }
@@ -479,5 +498,58 @@ export class AnthropicAdapter implements ProviderAdapter {
       default:
         return 'other'
     }
+  }
+
+  /**
+   * Queries Anthropic models API to discover active models authorized for this API key.
+   * Falls back to verified catalog models if endpoint is unavailable.
+   */
+  async discoverAvailableModels(
+    apiKey: string,
+    signal?: AbortSignal
+  ): Promise<readonly string[]> {
+    if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+      return []
+    }
+
+    const fallbackModels = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5']
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000)
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort(signal.reason)
+      } else {
+        signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true })
+      }
+    }
+
+    try {
+      const response = await this.fetchFn(`${ANTHROPIC_OFFICIAL_BASE_URL}/models`, {
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey.trim(),
+          'anthropic-version': ANTHROPIC_DEFAULT_VERSION,
+          Accept: 'application/json',
+          'User-Agent': 'LocalFirstAIWorkspace/1.0 (Electron; Main)'
+        },
+        signal: controller.signal
+      })
+
+      if (response.ok) {
+        const data = (await response.json()) as { data?: Array<{ id?: string }> }
+        if (data && Array.isArray(data.data) && data.data.length > 0) {
+          const list = data.data.filter((m) => Boolean(m.id)).map((m) => m.id!)
+          if (list.length > 0) {
+            return list
+          }
+        }
+      }
+    } catch {
+      // Fallback
+    } finally {
+      clearTimeout(timeoutId)
+    }
+
+    return fallbackModels
   }
 }

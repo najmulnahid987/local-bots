@@ -128,6 +128,7 @@ describe('Renderer: Provider Management Settings UI (Phase 3 Step 3.8)', () => {
     mockProviderApi = {
       getCatalog: vi.fn().mockResolvedValue(mockCatalog),
       listConnections: vi.fn().mockResolvedValue(mockConnections),
+      getAvailableModels: vi.fn().mockResolvedValue([]),
       testDraftConnection: vi.fn(),
       createConnection: vi.fn(),
       testConnection: vi.fn(),
@@ -762,12 +763,13 @@ describe('Renderer: Provider Management Settings UI (Phase 3 Step 3.8)', () => {
   it('24. triggers connection list refresh after dialog confirmations', async () => {
     render(<ProviderConnectionsSection />)
 
+    const refreshBtn = screen.getByRole('button', { name: /refresh connections/i })
     await waitFor(() => {
       expect(mockProviderApi.listConnections).toHaveBeenCalledTimes(1)
+      expect((refreshBtn as HTMLButtonElement).disabled).toBe(false)
     })
 
     // Click refresh button in header
-    const refreshBtn = screen.getByRole('button', { name: /refresh connections/i })
     await act(async () => {
       fireEvent.click(refreshBtn)
     })

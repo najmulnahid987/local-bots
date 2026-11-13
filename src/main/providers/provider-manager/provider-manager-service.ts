@@ -48,6 +48,7 @@ export class ProviderManagerService {
 
   private isReconciling = false
   private readonly activeMutationLocks = new Set<string>()
+  private readonly connectionModelCache = new Map<string, readonly string[]>()
 
   constructor(options: ProviderManagerServiceOptions) {
     this.vault = options.credentialVault
@@ -259,6 +260,9 @@ export class ProviderManagerService {
         credentialRef,
         status: 'active'
       })
+      if (testResult.availableModels && testResult.availableModels.length > 0) {
+        this.connectionModelCache.set(record.id, testResult.availableModels)
+      }
       return this.mapToSummary(record)
     } catch (err: unknown) {
       // Compensatory cleanup: remove newly created credential file if DB insert fails
@@ -325,6 +329,9 @@ export class ProviderManagerService {
     // Transient network/rate limit failure -> retain current status
     if (testResult.success) {
       this.connectionRepo.updateStatus(connectionId, 'active')
+      if (testResult.availableModels && testResult.availableModels.length > 0) {
+        this.connectionModelCache.set(connectionId, testResult.availableModels)
+      }
     } else {
       const code = testResult.error?.code
       if (
@@ -434,6 +441,9 @@ export class ProviderManagerService {
 
       // 3. Update status to active
       const updated = this.connectionRepo.updateStatus(connectionId, 'active')
+      if (testResult.availableModels && testResult.availableModels.length > 0) {
+        this.connectionModelCache.set(connectionId, testResult.availableModels)
+      }
       return this.mapToSummary(updated)
     })
   }
@@ -483,6 +493,7 @@ export class ProviderManagerService {
         // Filesystem cleanup failure: orphan will be cleaned during startup reconciliation
       }
 
+      this.connectionModelCache.delete(connectionId)
       return {
         success: true,
         connectionId,
@@ -690,6 +701,84 @@ export class ProviderManagerService {
     return adapter
   }
 
+  /**
+   * Returns models confirmed to be available for a specific provider connection.
+   * If cached, returns cached models. Otherwise, queries the adapter and caches.
+   */
+  public async getAvailableModels(connectionId: string): Promise<readonly ModelDescriptor[]> {
+    const connection = this.connectionRepo.getById(connectionId)
+    if (!connection) {
+      throw new ProviderManagerError(
+        `Provider connection '${connectionId}' not found.`,
+        'CONNECTION_NOT_FOUND'
+      )
+    }
+
+    const providerId = connection.providerId as ProviderId
+    let modelIds = this.connectionModelCache.get(connectionId)
+
+    if (!modelIds || modelIds.length === 0) {
+      try {
+        const apiKey = await this.vault.retrieve(connection.credentialRef)
+        const adapter = this.getAdapter(providerId)
+        if (typeof adapter.discoverAvailableModels === 'function') {
+          const discovered = await adapter.discoverAvailableModels(apiKey)
+          if (discovered && discovered.length > 0) {
+            modelIds = discovered
+            this.connectionModelCache.set(connectionId, modelIds)
+          }
+        }
+      } catch {
+        // Fallback to catalog
+      }
+    }
+
+    const catalogModels = this.registry.getModels(providerId)
+    if (modelIds && modelIds.length > 0) {
+      const allowedSet = new Set(modelIds)
+      const matched = catalogModels.filter((m) => allowedSet.has(m.id))
+      const matchedIds = new Set(matched.map((m) => m.id))
+      const extraModels: ModelDescriptor[] = []
+      for (const id of modelIds) {
+        if (!matchedIds.has(id)) {
+          const cleanName = id
+            .split('-')
+            .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+            .join(' ')
+          extraModels.push({
+            id,
+            providerId,
+            displayName: cleanName,
+            description: `Active model discovered from ${providerId} API`,
+            availability: 'stable',
+            capabilities: {
+              streaming: true,
+              tools: true,
+              imageInput: false,
+              structuredOutput: true
+            },
+            providerCapabilities: {
+              streaming: true,
+              tools: true,
+              imageInput: false,
+              structuredOutput: true
+            },
+            applicationCapabilities: {
+              streaming: true,
+              tools: true,
+              imageInput: false,
+              structuredOutput: true
+            },
+            docUrl: ''
+          })
+        }
+      }
+      return [...matched, ...extraModels]
+    }
+
+    return catalogModels.filter((m) => m.availability !== 'deprecated')
+  }
+
   private mapToSummary(connection: ProviderConnection): ProviderConnectionSummary {
     const fileExists = Boolean(
       connection.credentialRef &&
@@ -698,6 +787,8 @@ export class ProviderManagerService {
         : true)
     )
 
+    const available = this.connectionModelCache.get(connection.id)
+
     return {
       id: connection.id,
       providerId: connection.providerId as ProviderId,
@@ -705,7 +796,8 @@ export class ProviderManagerService {
       status: !fileExists && connection.status === 'active' ? 'error' : connection.status,
       hasCredential: fileExists,
       createdAt: connection.createdAt,
-      updatedAt: connection.updatedAt
+      updatedAt: connection.updatedAt,
+      availableModels: available && available.length > 0 ? available : undefined
     }
   }
 

@@ -722,4 +722,18 @@ describe('ProviderManagerService (Phase 3 Step 3.7A)', () => {
       expect(errMsg).not.toContain('sk-proj-LEAKY-KEY-VALUE-FAIL')
     }
   })
+
+  // 31. Available models discovery
+  it('31. returns available models for a connection using discovery or catalog fallback', async () => {
+    const summary = await service.createConnection({
+      providerId: 'google',
+      label: 'Google Connection',
+      apiKey: 'AIzaSyValidGoogleKey'
+    })
+
+    const models = await service.getAvailableModels(summary.id)
+    expect(Array.isArray(models)).toBe(true)
+    expect(models.length).toBeGreaterThan(0)
+    expect(models.every((m) => m.providerId === 'google')).toBe(true)
+  })
 })

@@ -43,4 +43,3 @@ export function WorkspaceActivityTab(): ReactElement {
     </div>
   )
 }
-

@@ -25,6 +25,7 @@ import { createConversationApi, normalizeConversationBridgeError } from '../../p
 import { ConversationManagerService } from '../services/conversation-manager'
 import {
   ConversationTurnService,
+  ConversationTurnError,
   type ConversationTurnStream,
   type ConversationTurnEvent
 } from '../services/conversation-turn-service'
@@ -342,6 +343,16 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
       sendMessage: vi.fn(),
       retryLastUserMessage: vi.fn(),
       isGenerating: vi.fn().mockReturnValue(false),
+      isDeleting: vi.fn().mockReturnValue(false),
+      acquireDeletionLock: vi.fn((id: string) => {
+        if (turnService.isGenerating(id)) {
+          throw new ConversationTurnError(
+            'Cannot delete conversation while generation is in progress. Please stop generation first.',
+            'CONCURRENT_TURN_ACTIVE'
+          )
+        }
+      }),
+      releaseDeletionLock: vi.fn(),
       getActiveTurnCount: vi.fn().mockReturnValue(0)
     } as unknown as ConversationTurnService
 

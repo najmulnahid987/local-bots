@@ -156,6 +156,11 @@ export function TestProviderConnectionDialog({
                     Successfully authenticated with {connection.providerId} using{' '}
                     <code>{testResult.testedModelId}</code>. Latency: {testResult.latencyMs}ms.
                   </p>
+                  {testResult.availableModels && testResult.availableModels.length > 0 && (
+                    <p className="alert-subtext font-medium" style={{ color: 'var(--color-accent, #6366f1)', marginTop: '4px' }}>
+                      ✓ {testResult.availableModels.length} models detected and available for this key.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

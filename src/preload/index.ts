@@ -8,6 +8,7 @@ import {
   PingResponse,
   type ProviderApi,
   type ProviderCatalogDto,
+  type ModelDescriptorDto,
   type ProviderConnectionSummary,
   type ConnectionTestResult,
   type CreateProviderConnectionInput,
@@ -117,6 +118,16 @@ export function createProvidersApi(ipc: typeof ipcRenderer): ProviderApi {
     listConnections: async (): Promise<readonly ProviderConnectionSummary[]> => {
       try {
         return await ipc.invoke(PROVIDER_IPC_CHANNELS.LIST_CONNECTIONS)
+      } catch (err) {
+        throw normalizeBridgeError(err)
+      }
+    },
+
+    getAvailableModels: async (input: {
+      connectionId: string
+    }): Promise<readonly ModelDescriptorDto[]> => {
+      try {
+        return await ipc.invoke(PROVIDER_IPC_CHANNELS.GET_AVAILABLE_MODELS, input)
       } catch (err) {
         throw normalizeBridgeError(err)
       }

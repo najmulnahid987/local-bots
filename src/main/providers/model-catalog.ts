@@ -213,6 +213,44 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
 
   // --- Google Gemini Models ---
   defineModel({
+    id: 'gemini-2.5-flash',
+    providerId: 'google',
+    displayName: 'Gemini 2.5 Flash',
+    description:
+      'Ultra-fast, cost-efficient multimodal flagship model with 1M context window.',
+    availability: 'stable',
+    contextWindow: {
+      inputTokens: 1048576,
+      outputTokens: 65536
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: true,
+      structuredOutput: true
+    },
+    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
+  }),
+  defineModel({
+    id: 'gemini-2.5-pro',
+    providerId: 'google',
+    displayName: 'Gemini 2.5 Pro',
+    description:
+      'Frontier multimodal reasoning model with exceptional coding and analysis capabilities.',
+    availability: 'stable',
+    contextWindow: {
+      inputTokens: 2097152,
+      outputTokens: 65536
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: true,
+      structuredOutput: true
+    },
+    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
+  }),
+  defineModel({
     id: 'gemini-3.8-flash',
     providerId: 'google',
     displayName: 'Gemini 3.8 Flash',
@@ -260,6 +298,44 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
     contextWindow: {
       inputTokens: 1048576,
       outputTokens: 65536
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: true,
+      structuredOutput: true
+    },
+    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
+  }),
+  defineModel({
+    id: 'gemini-1.5-flash',
+    providerId: 'google',
+    displayName: 'Gemini 1.5 Flash',
+    description:
+      'Fast, versatile multimodal model for high-frequency workflows, document retrieval, and 1M context.',
+    availability: 'stable',
+    contextWindow: {
+      inputTokens: 1048576,
+      outputTokens: 8192
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: true,
+      structuredOutput: true
+    },
+    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
+  }),
+  defineModel({
+    id: 'gemini-2.0-flash',
+    providerId: 'google',
+    displayName: 'Gemini 2.0 Flash',
+    description:
+      'Next-generation multimodal model with enhanced speed, multimodal reasoning, and 1M context.',
+    availability: 'stable',
+    contextWindow: {
+      inputTokens: 1048576,
+      outputTokens: 8192
     },
     providerCapabilities: {
       streaming: true,

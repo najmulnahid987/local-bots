@@ -456,9 +456,14 @@ export class ConversationStreamManager {
     }
 
     if (win.webContents && typeof win.webContents.on === 'function') {
-      win.webContents.on('did-start-navigation', () => {
-        this.abortWindowStreams(window)
-      })
+      win.webContents.on(
+        'did-start-navigation',
+        (_event?: unknown, _url?: unknown, isInPlace?: boolean) => {
+          if (isInPlace !== true) {
+            this.abortWindowStreams(window)
+          }
+        }
+      )
       win.webContents.on('destroyed', () => {
         this.abortWindowStreams(window)
       })
