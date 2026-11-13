@@ -126,4 +126,3 @@ describe('Renderer: BotUnarchiveDialog (Phase 6 Step 6.5)', () => {
     expect(screen.getByText(/Unarchive failed \[REDACTED_KEY\]/)).not.toBeNull()
   })
 })
-

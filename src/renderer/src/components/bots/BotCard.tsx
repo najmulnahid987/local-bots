@@ -1,11 +1,24 @@
 import { ReactElement, KeyboardEvent } from 'react'
-import { Cpu, CheckCircle2, AlertCircle, Wrench } from 'lucide-react'
+import {
+  Cpu,
+  CheckCircle2,
+  AlertCircle,
+  Wrench,
+  Edit3,
+  Archive,
+  RotateCcw,
+  Trash2
+} from 'lucide-react'
 import type { BotDto } from '../../../../shared/bots'
 
 export interface BotCardProps {
   readonly bot: BotDto
   readonly onSelect?: (bot: BotDto) => void
   readonly onClick?: (bot: BotDto) => void
+  readonly onEdit?: (bot: BotDto) => void
+  readonly onArchive?: (bot: BotDto) => void
+  readonly onUnarchive?: (bot: BotDto) => void
+  readonly onDelete?: (bot: BotDto) => void
   readonly className?: string
 }
 
@@ -22,7 +35,16 @@ function formatToolName(tool: string): string {
   return TOOL_DISPLAY_NAMES[tool] ?? tool
 }
 
-export function BotCard({ bot, onSelect, onClick, className = '' }: BotCardProps): ReactElement {
+export function BotCard({
+  bot,
+  onSelect,
+  onClick,
+  onEdit,
+  onArchive,
+  onUnarchive,
+  onDelete,
+  className = ''
+}: BotCardProps): ReactElement {
   const isArchived = bot.status === 'archived'
   const isInteractive = Boolean(onSelect || onClick)
 
@@ -37,6 +59,8 @@ export function BotCard({ bot, onSelect, onClick, className = '' }: BotCardProps
       handleInteraction()
     }
   }
+
+  const hasActions = Boolean(onEdit || onArchive || onUnarchive || onDelete)
 
   return (
     <article
@@ -75,6 +99,75 @@ export function BotCard({ bot, onSelect, onClick, className = '' }: BotCardProps
             )}
           </div>
         </div>
+
+        {hasActions && (
+          <div className="bot-card-actions" data-testid={`bot-card-actions-${bot.id}`}>
+            {onEdit && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                title="Edit Bot"
+                aria-label={`Edit ${bot.name}`}
+                data-testid={`bot-card-edit-btn-${bot.id}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onEdit(bot)
+                }}
+              >
+                <Edit3 size={13} aria-hidden="true" />
+                Edit
+              </button>
+            )}
+            {onArchive && !isArchived && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                title="Archive Bot"
+                aria-label={`Archive ${bot.name}`}
+                data-testid={`bot-card-archive-btn-${bot.id}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onArchive(bot)
+                }}
+              >
+                <Archive size={13} aria-hidden="true" />
+                Archive
+              </button>
+            )}
+            {onUnarchive && isArchived && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                title="Restore Bot"
+                aria-label={`Restore ${bot.name}`}
+                data-testid={`bot-card-unarchive-btn-${bot.id}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onUnarchive(bot)
+                }}
+              >
+                <RotateCcw size={13} aria-hidden="true" />
+                Restore
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm text-danger"
+                title="Delete Bot"
+                aria-label={`Delete ${bot.name}`}
+                data-testid={`bot-card-delete-btn-${bot.id}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDelete(bot)
+                }}
+              >
+                <Trash2 size={13} aria-hidden="true" />
+                Delete
+              </button>
+            )}
+          </div>
+        )}
       </header>
 
       <div className="bot-card-body">

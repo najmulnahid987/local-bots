@@ -124,4 +124,3 @@ describe('Renderer: BotArchiveDialog (Phase 6 Step 6.5)', () => {
     expect(screen.getByText(/Database locked \[REDACTED_PATH\]/)).not.toBeNull()
   })
 })
-

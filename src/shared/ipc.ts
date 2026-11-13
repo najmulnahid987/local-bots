@@ -54,11 +54,13 @@ export type IpcChannel =
   | KbIpcChannel
   | KbDocsIpcChannel
   | import('./bots').BotIpcChannel
+  | import('./conversations').ConversationIpcChannel
 
 export * from './providers'
 export * from './knowledge-bases'
 export * from './knowledge-documents'
 export * from './bots'
+export * from './conversations'
 
 export interface PingRequest {
   requestId: string

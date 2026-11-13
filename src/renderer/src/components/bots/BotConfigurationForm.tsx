@@ -40,6 +40,13 @@ export function BotConfigurationForm({
   connections: propConnections,
   catalog: propCatalog
 }: BotConfigurationFormProps): ReactElement {
+  const initialName = initialValues?.name ?? ''
+  const initialDescription = initialValues?.description ?? ''
+  const initialSystemPrompt = initialValues?.systemPrompt ?? ''
+  const initialProviderConnectionId = initialValues?.providerConnectionId ?? null
+  const initialModelId = initialValues?.modelId
+  const initialEnabledTools = initialValues?.enabledTools
+
   const [internalConnections, setInternalConnections] = useState<
     readonly ProviderConnectionSummary[]
   >([])
@@ -50,52 +57,6 @@ export function BotConfigurationForm({
 
   const connections = propConnections ?? internalConnections
   const catalog = propCatalog ?? internalCatalog
-
-  // Load provider connections and catalog from window.api if not provided as props
-  useEffect(() => {
-    let isCurrent = true
-
-    if (propConnections && propCatalog) {
-      return
-    }
-
-    const loadProvidersData = async (): Promise<void> => {
-      try {
-        if (!window.api?.providers) return
-
-        const [loadedCatalog, loadedConns] = await Promise.all([
-          propCatalog ? Promise.resolve(propCatalog) : window.api.providers.getCatalog(),
-          propConnections
-            ? Promise.resolve(propConnections)
-            : window.api.providers.listConnections()
-        ])
-
-        if (isCurrent) {
-          setInternalCatalog(loadedCatalog)
-          setInternalConnections(loadedConns)
-        }
-      } catch {
-        // Fallback: Continue with loaded or empty metadata
-      } finally {
-        if (isCurrent) {
-          setIsLoadingMetadata(false)
-        }
-      }
-    }
-
-    void loadProvidersData()
-
-    return () => {
-      isCurrent = false
-    }
-  }, [propConnections, propCatalog])
-
-  const initialName = initialValues?.name ?? ''
-  const initialDescription = initialValues?.description ?? ''
-  const initialSystemPrompt = initialValues?.systemPrompt ?? ''
-  const initialProviderConnectionId = initialValues?.providerConnectionId ?? null
-  const initialModelId = initialValues?.modelId
-  const initialEnabledTools = initialValues?.enabledTools
 
   // Form Fields State
   const [name, setName] = useState<string>(initialName)
@@ -136,6 +97,52 @@ export function BotConfigurationForm({
     initialEnabledTools ?? [...DEFAULT_TOOLS]
   )
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+
+  // Load provider connections and catalog from window.api if not provided as props
+  useEffect(() => {
+    let isCurrent = true
+
+    if (propConnections && propCatalog) {
+      return
+    }
+
+    const loadProvidersData = async (): Promise<void> => {
+      try {
+        if (!window.api?.providers) return
+
+        const [loadedCatalog, loadedConns] = await Promise.all([
+          propCatalog ? Promise.resolve(propCatalog) : window.api.providers.getCatalog(),
+          propConnections
+            ? Promise.resolve(propConnections)
+            : window.api.providers.listConnections()
+        ])
+
+        if (isCurrent) {
+          setInternalCatalog(loadedCatalog)
+          setInternalConnections(loadedConns)
+          setModelId((prev) => {
+            if (prev) return prev
+            const nonDep = (loadedCatalog?.models ?? []).filter(
+              (m) => m.availability !== 'deprecated'
+            )
+            return nonDep[0]?.id ?? ''
+          })
+        }
+      } catch {
+        // Fallback: Continue with loaded or empty metadata
+      } finally {
+        if (isCurrent) {
+          setIsLoadingMetadata(false)
+        }
+      }
+    }
+
+    void loadProvidersData()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [propConnections, propCatalog])
 
   // Handle provider connection selection changes
   const handleConnectionChange = (e: ChangeEvent<HTMLSelectElement>): void => {

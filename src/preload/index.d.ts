@@ -4,7 +4,8 @@ import type {
   ProviderApi,
   KnowledgeBaseApi,
   KnowledgeDocumentApi,
-  BotApi
+  BotApi,
+  ConversationApi
 } from '../shared/ipc'
 
 export interface AppApi {
@@ -13,6 +14,8 @@ export interface AppApi {
   knowledgeBases: KnowledgeBaseApi
   knowledgeDocuments?: KnowledgeDocumentApi
   bots?: BotApi
+  conversation?: ConversationApi
+  conversations?: ConversationApi
 }
 
 declare global {

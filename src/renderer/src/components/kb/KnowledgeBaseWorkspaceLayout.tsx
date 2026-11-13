@@ -1,4 +1,4 @@
-import { ReactElement, useEffect, useRef } from 'react'
+import { ReactElement, useEffect, useRef, useState } from 'react'
 import { useParams, useLocation, NavLink, Link, Outlet, Navigate } from 'react-router-dom'
 import {
   FolderOpen,
@@ -12,6 +12,13 @@ import {
   Settings
 } from 'lucide-react'
 import { useKnowledgeBases } from '../../contexts/KnowledgeBaseContext'
+import type { KnowledgeBaseDto } from '../../../../shared/knowledge-bases'
+
+export interface WorkspaceOutletContext {
+  readonly knowledgeBase: KnowledgeBaseDto
+  readonly isWorkspaceActivated?: boolean
+  readonly workspaceActivationError?: string | null
+}
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -59,6 +66,11 @@ export function KnowledgeBaseWorkspaceLayout(): ReactElement {
     }
   }, [kb, activeKnowledgeBaseId, selectKnowledgeBase])
 
+  const [activatedKbId, setActivatedKbId] = useState<string | null>(null)
+  const [workspaceActivationError, setWorkspaceActivationError] = useState<string | null>(null)
+
+  const isWorkspaceActivated = Boolean(kb && kb.archivedAt === null && activatedKbId === kb.id)
+
   // Synchronize authoritative active workspace context in Main process
   useEffect(() => {
     if (!kb || kb.archivedAt !== null) {
@@ -74,9 +86,16 @@ export function KnowledgeBaseWorkspaceLayout(): ReactElement {
         } else if (window.api?.knowledgeBases?.activateWorkspace) {
           await window.api.knowledgeBases.activateWorkspace(kb.id)
         }
-      } catch (err) {
         if (!isCancelled) {
+          setActivatedKbId(kb.id)
+          setWorkspaceActivationError(null)
+        }
+      } catch (err: unknown) {
+        if (!isCancelled) {
+          const msg = err instanceof Error ? err.message : 'Failed to activate workspace.'
           console.error('Failed to activate workspace context in main process:', err)
+          setWorkspaceActivationError(msg)
+          setActivatedKbId(null)
         }
       }
     }
@@ -85,6 +104,7 @@ export function KnowledgeBaseWorkspaceLayout(): ReactElement {
 
     return () => {
       isCancelled = true
+      setActivatedKbId(null)
       try {
         if (window.api?.bots?.deactivateWorkspace) {
           void window.api.bots.deactivateWorkspace().catch(() => {})
@@ -303,7 +323,13 @@ export function KnowledgeBaseWorkspaceLayout(): ReactElement {
 
       {/* Main Tab Content */}
       <main className="workspace-content" tabIndex={-1}>
-        <Outlet context={{ knowledgeBase: kb }} />
+        <Outlet
+          context={{
+            knowledgeBase: kb,
+            isWorkspaceActivated,
+            workspaceActivationError
+          }}
+        />
       </main>
     </div>
   )

@@ -739,4 +739,30 @@ describe('BotRepository', () => {
   it('44. rejects instantiation when database instance is not provided', () => {
     expect(() => new BotRepository(null as unknown as Database.Database)).toThrow(RepositoryError)
   })
+
+  // === Authoritative getByIdOnly Tests ===
+
+  it('45. retrieves Bot strictly by botId and resolves its authoritative parent Knowledge Base ID', () => {
+    const bot = botRepo.create({
+      knowledgeBaseId: defaultKbId,
+      name: 'Authoritative Scope Bot',
+      modelId: 'gpt-4o'
+    })
+
+    const fetched = botRepo.getByIdOnly(bot.id)
+    expect(fetched).not.toBeNull()
+    expect(fetched?.id).toBe(bot.id)
+    expect(fetched?.knowledgeBaseId).toBe(defaultKbId)
+    expect(fetched?.name).toBe('Authoritative Scope Bot')
+  })
+
+  it('46. returns null when getByIdOnly is given a non-existent Bot UUID', () => {
+    const nonExistentId = '00000000-0000-4000-8000-000000000999'
+    const fetched = botRepo.getByIdOnly(nonExistentId)
+    expect(fetched).toBeNull()
+  })
+
+  it('47. throws ValidationError when getByIdOnly is given an invalid UUID string', () => {
+    expect(() => botRepo.getByIdOnly('invalid-uuid')).toThrow(ValidationError)
+  })
 })

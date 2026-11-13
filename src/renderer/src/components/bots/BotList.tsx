@@ -9,6 +9,10 @@ export interface BotListProps {
   readonly error?: string | null
   readonly onRetry?: () => void
   readonly onSelectBot?: (bot: BotDto) => void
+  readonly onEditBot?: (bot: BotDto) => void
+  readonly onArchiveBot?: (bot: BotDto) => void
+  readonly onUnarchiveBot?: (bot: BotDto) => void
+  readonly onDeleteBot?: (bot: BotDto) => void
   readonly emptyTitle?: string
   readonly emptyMessage?: string
   readonly className?: string
@@ -20,6 +24,10 @@ export function BotList({
   error = null,
   onRetry,
   onSelectBot,
+  onEditBot,
+  onArchiveBot,
+  onUnarchiveBot,
+  onDeleteBot,
   emptyTitle,
   emptyMessage,
   className = ''
@@ -89,7 +97,14 @@ export function BotList({
     >
       {bots.map((bot) => (
         <div key={bot.id} role="listitem" className="bot-grid-item">
-          <BotCard bot={bot} onSelect={onSelectBot} />
+          <BotCard
+            bot={bot}
+            onSelect={onSelectBot}
+            onEdit={onEditBot}
+            onArchive={onArchiveBot}
+            onUnarchive={onUnarchiveBot}
+            onDelete={onDeleteBot}
+          />
         </div>
       ))}
     </div>

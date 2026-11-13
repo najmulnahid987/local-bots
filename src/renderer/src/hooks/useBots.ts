@@ -12,6 +12,7 @@ import { BotBridgeError } from '../../../shared/bots'
 export interface UseBotsOptions {
   readonly status?: BotStatus
   readonly api?: BotApi
+  readonly enabled?: boolean
 }
 
 export interface UseBotsState {
@@ -52,6 +53,7 @@ function sanitizeErrorMessage(err: unknown): string {
 export function useBots(options?: UseBotsOptions): UseBotsState {
   const status = options?.status
   const apiOption = options?.api
+  const enabled = options?.enabled ?? true
 
   const [bots, setBots] = useState<readonly BotDto[]>([])
   const [isLoading, setIsLoading] = useState<boolean>(true)
@@ -89,6 +91,10 @@ export function useBots(options?: UseBotsOptions): UseBotsState {
 
   // Initial fetch and fetch when status filter changes
   useEffect(() => {
+    if (!enabled) {
+      return
+    }
+
     let isCurrent = true
     const currentReq = ++requestIdRef.current
 
@@ -117,9 +123,11 @@ export function useBots(options?: UseBotsOptions): UseBotsState {
     return () => {
       isCurrent = false
     }
-  }, [status, getEffectiveApi])
+  }, [status, getEffectiveApi, enabled])
 
   const refresh = useCallback(async (): Promise<void> => {
+    if (!enabled) return
+
     const currentReq = ++requestIdRef.current
     setIsRefreshing(true)
     setError(null)
@@ -141,7 +149,7 @@ export function useBots(options?: UseBotsOptions): UseBotsState {
         setIsRefreshing(false)
       }
     }
-  }, [status, getEffectiveApi])
+  }, [status, getEffectiveApi, enabled])
 
   const getBot = useCallback(
     async (botId: string): Promise<BotDto | null> => {
@@ -315,7 +323,7 @@ export function useBots(options?: UseBotsOptions): UseBotsState {
 
   return {
     bots,
-    isLoading,
+    isLoading: !enabled ? true : isLoading,
     isRefreshing,
     isMutating,
     error,

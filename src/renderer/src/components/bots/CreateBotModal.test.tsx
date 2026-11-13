@@ -199,4 +199,3 @@ describe('Renderer: CreateBotModal (Phase 6 Step 6.5)', () => {
     expect(nameInput.value).toBe('Persistent Name')
   })
 })
-

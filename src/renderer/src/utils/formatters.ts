@@ -17,3 +17,16 @@ export function formatCount(count: number): string {
   return new Intl.NumberFormat().format(count)
 }
 
+/**
+ * Formats an epoch timestamp into a compact, human-readable date and time string.
+ */
+export function formatTimestamp(timestamp: number): string {
+  if (!timestamp || !Number.isFinite(timestamp)) return ''
+  const date = new Date(timestamp)
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(date)
+}

@@ -168,6 +168,38 @@ export class BotRepository {
   }
 
   /**
+   * Retrieves a Bot strictly by Bot ID, resolving its authoritative parent Knowledge Base ID.
+   * Internal Main-process use only (e.g., authoritative scope resolution for RAG).
+   * Returns null if not found.
+   */
+  public getByIdOnly(botId: string): Bot | null {
+    this.validateUuid(botId, 'Bot')
+
+    try {
+      const stmt = this.db.prepare(`
+        SELECT id, knowledge_base_id, provider_connection_id, name, description,
+               system_prompt, model_id, status, tool_permissions_json, created_at, updated_at
+        FROM bots
+        WHERE id = ?
+      `)
+
+      const row = stmt.get(botId) as BotRow | undefined
+      if (!row) {
+        return null
+      }
+
+      return this.mapRowToBot(row)
+    } catch (err) {
+      if (err instanceof RepositoryError || err instanceof ValidationError) {
+        throw err
+      }
+      throw new RepositoryError(
+        `Failed to retrieve Bot by ID: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  /**
    * Lists only Bots belonging to the specified Knowledge Base.
    * Orders results by created_at DESC.
    */

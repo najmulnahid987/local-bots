@@ -772,7 +772,9 @@ describe('Renderer: Provider Management Settings UI (Phase 3 Step 3.8)', () => {
       fireEvent.click(refreshBtn)
     })
 
-    expect(mockProviderApi.listConnections).toHaveBeenCalledTimes(2)
+    await waitFor(() => {
+      expect(mockProviderApi.listConnections).toHaveBeenCalledTimes(2)
+    })
   })
 
   // 25. No credential references appear in rendered DOM

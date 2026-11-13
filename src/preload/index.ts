@@ -53,7 +53,24 @@ import {
   type UpdateBotRequest,
   type ListBotsRequest,
   type DeleteBotResultDto,
-  BotBridgeError
+  BotBridgeError,
+  CONVERSATION_IPC_CHANNELS,
+  type ConversationApi,
+  type ConversationDto,
+  type MessageDto,
+  type CreateConversationRequest,
+  type ListConversationsRequest,
+  type ListMessagesRequest,
+  type RenameConversationIpcRequest,
+  type DeleteConversationIpcRequest,
+  type SendMessageRequest,
+  type CancelGenerationIpcRequest,
+  type ResolveCitationRequest,
+  type ResolvedCitationTargetDto,
+  type PublicConversationTurnEvent,
+  type ConversationTurnResultDto,
+  type DeleteConversationResultDto,
+  ConversationBridgeError
 } from '../shared/ipc'
 
 /**
@@ -590,6 +607,289 @@ export function createBotsApi(ipc: typeof ipcRenderer): BotApi {
   }
 }
 
+/**
+ * Parses and normalizes any Conversation IPC error rejection into a structured ConversationBridgeError.
+ */
+export function normalizeConversationBridgeError(error: unknown): ConversationBridgeError {
+  if (error instanceof ConversationBridgeError) {
+    return error
+  }
+  const rawMsg = error instanceof Error ? error.message : String(error)
+  const jsonMatch = rawMsg.match(/\{[\s\S]*"code"[\s\S]*"message"[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        code?: string
+        message?: string
+        retryable?: boolean
+      }
+      if (parsed.code && parsed.message) {
+        return new ConversationBridgeError(parsed.message, parsed.code, Boolean(parsed.retryable))
+      }
+    } catch {
+      // Fall through to default sanitization
+    }
+  }
+
+  return new ConversationBridgeError(rawMsg, 'CONVERSATION_ERROR', false)
+}
+
+/**
+ * Creates the typed ConversationApi bridge wrapping ipcRenderer.
+ * Encapsulates MessageChannel port creation, event streaming, cleanup, and cancellation.
+ */
+export function createConversationApi(ipc: typeof ipcRenderer): ConversationApi {
+  return {
+    createConversation: async (request: CreateConversationRequest): Promise<ConversationDto> => {
+      try {
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.CREATE, request)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    listConversations: async (
+      request: ListConversationsRequest
+    ): Promise<readonly ConversationDto[]> => {
+      try {
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.LIST, request)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    listMessages: async (request: ListMessagesRequest | string): Promise<readonly MessageDto[]> => {
+      try {
+        const payload = typeof request === 'string' ? { conversationId: request } : request
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.GET_MESSAGES, payload)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    renameConversation: async (request: RenameConversationIpcRequest): Promise<ConversationDto> => {
+      try {
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.RENAME, request)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    deleteConversation: async (
+      request: DeleteConversationIpcRequest | string
+    ): Promise<DeleteConversationResultDto> => {
+      try {
+        const payload = typeof request === 'string' ? { conversationId: request } : request
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.DELETE, payload)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    sendMessage: async (
+      request: SendMessageRequest & { requestId?: string },
+      onEvent?: (event: PublicConversationTurnEvent) => void
+    ): Promise<ConversationTurnResultDto> => {
+      const requestId = request.requestId ?? crypto.randomUUID()
+      let port: MessagePort | null = null
+
+      const portPromise = new Promise<MessagePort>((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | null = null
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const onStreamPort = (event: any, data: unknown): void => {
+          const payload = data as { requestId?: string } | undefined
+          if (payload?.requestId === requestId && event.ports && event.ports[0]) {
+            if (timer) clearTimeout(timer)
+            ipc.removeListener(CONVERSATION_IPC_CHANNELS.STREAM_PORT, onStreamPort)
+            resolve(event.ports[0])
+          }
+        }
+        ipc.on(CONVERSATION_IPC_CHANNELS.STREAM_PORT, onStreamPort)
+
+        timer = setTimeout(() => {
+          ipc.removeListener(CONVERSATION_IPC_CHANNELS.STREAM_PORT, onStreamPort)
+          reject(
+            new ConversationBridgeError(
+              'Timeout waiting for stream port transfer',
+              'STREAM_TIMEOUT'
+            )
+          )
+        }, 10000)
+      })
+
+      try {
+        await ipc.invoke(CONVERSATION_IPC_CHANNELS.SEND_MESSAGE, {
+          requestId,
+          conversationId: request.conversationId,
+          content: request.content,
+          contentFormat: request.contentFormat
+        })
+        port = await portPromise
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+
+      return new Promise<ConversationTurnResultDto>((resolve, reject) => {
+        let isDone = false
+
+        port!.onmessage = (event: MessageEvent<PublicConversationTurnEvent>) => {
+          if (isDone) return
+          const chunk = event.data
+          try {
+            onEvent?.(chunk)
+          } catch {
+            // Callback execution error ignored
+          }
+
+          if (chunk.type === 'finish') {
+            isDone = true
+            try {
+              port?.close()
+            } catch {
+              // Ignore port close errors
+            }
+            resolve({
+              userMessage: chunk.userMessage,
+              assistantMessage: chunk.message,
+              finishReason: chunk.finishReason,
+              durationMs: chunk.durationMs,
+              usage: chunk.usage
+            })
+          } else if (chunk.type === 'error') {
+            isDone = true
+            try {
+              port?.close()
+            } catch {
+              // Ignore port close errors
+            }
+            reject(
+              new ConversationBridgeError(
+                chunk.error.message,
+                chunk.error.code,
+                chunk.error.retryable
+              )
+            )
+          }
+        }
+
+        if (typeof port!.start === 'function') {
+          port!.start()
+        }
+      })
+    },
+
+    retryLastUserMessage: async (
+      request: { conversationId: string; messageId?: string; requestId?: string },
+      onEvent?: (event: PublicConversationTurnEvent) => void
+    ): Promise<ConversationTurnResultDto> => {
+      const requestId = request.requestId ?? crypto.randomUUID()
+      let port: MessagePort | null = null
+
+      const portPromise = new Promise<MessagePort>((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | null = null
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const onStreamPort = (event: any, data: unknown): void => {
+          const payload = data as { requestId?: string } | undefined
+          if (payload?.requestId === requestId && event.ports && event.ports[0]) {
+            if (timer) clearTimeout(timer)
+            ipc.removeListener(CONVERSATION_IPC_CHANNELS.STREAM_PORT, onStreamPort)
+            resolve(event.ports[0])
+          }
+        }
+        ipc.on(CONVERSATION_IPC_CHANNELS.STREAM_PORT, onStreamPort)
+
+        timer = setTimeout(() => {
+          ipc.removeListener(CONVERSATION_IPC_CHANNELS.STREAM_PORT, onStreamPort)
+          reject(
+            new ConversationBridgeError(
+              'Timeout waiting for stream port transfer',
+              'STREAM_TIMEOUT'
+            )
+          )
+        }, 10000)
+      })
+
+      try {
+        await ipc.invoke(CONVERSATION_IPC_CHANNELS.RETRY_LAST_USER_MESSAGE, {
+          requestId,
+          conversationId: request.conversationId,
+          messageId: request.messageId
+        })
+        port = await portPromise
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+
+      return new Promise<ConversationTurnResultDto>((resolve, reject) => {
+        let isDone = false
+
+        port!.onmessage = (event: MessageEvent<PublicConversationTurnEvent>) => {
+          if (isDone) return
+          const chunk = event.data
+          try {
+            onEvent?.(chunk)
+          } catch {
+            // Callback execution error ignored
+          }
+
+          if (chunk.type === 'finish') {
+            isDone = true
+            try {
+              port?.close()
+            } catch {
+              // Ignore port close errors
+            }
+            resolve({
+              userMessage: chunk.userMessage,
+              assistantMessage: chunk.message,
+              finishReason: chunk.finishReason,
+              durationMs: chunk.durationMs,
+              usage: chunk.usage
+            })
+          } else if (chunk.type === 'error') {
+            isDone = true
+            try {
+              port?.close()
+            } catch {
+              // Ignore port close errors
+            }
+            reject(
+              new ConversationBridgeError(
+                chunk.error.message,
+                chunk.error.code,
+                chunk.error.retryable
+              )
+            )
+          }
+        }
+
+        if (typeof port!.start === 'function') {
+          port!.start()
+        }
+      })
+    },
+
+    cancelGeneration: async (request: CancelGenerationIpcRequest | string): Promise<void> => {
+      try {
+        const payload = typeof request === 'string' ? { requestId: request } : request
+        await ipc.invoke(CONVERSATION_IPC_CHANNELS.CANCEL_GENERATION, payload)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    resolveCitation: async (
+      request: ResolveCitationRequest
+    ): Promise<ResolvedCitationTargetDto> => {
+      try {
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.RESOLVE_CITATION, request)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    }
+  }
+}
+
 // Bounded, typed APIs exposed to the Renderer
 export const api = {
   ping: (request: PingRequest): Promise<PingResponse> => {
@@ -598,7 +898,9 @@ export const api = {
   providers: createProvidersApi(ipcRenderer),
   knowledgeBases: createKnowledgeBasesApi(ipcRenderer),
   knowledgeDocuments: createKnowledgeDocumentsApi(ipcRenderer),
-  bots: createBotsApi(ipcRenderer)
+  bots: createBotsApi(ipcRenderer),
+  conversation: createConversationApi(ipcRenderer),
+  conversations: createConversationApi(ipcRenderer)
 }
 
 // Expose safe, bounded APIs using contextBridge

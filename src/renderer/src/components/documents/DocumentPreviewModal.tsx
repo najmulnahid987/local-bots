@@ -1,5 +1,5 @@
-import { ReactElement, useEffect, useState } from 'react'
-import { X, FileText, Loader2, AlertCircle, BookOpen } from 'lucide-react'
+import { ReactElement, useEffect, useState, useRef } from 'react'
+import { X, FileText, Loader2, AlertCircle, BookOpen, Target, ExternalLink } from 'lucide-react'
 import type { DocumentPreviewDto } from '../../../../shared/knowledge-documents'
 import { formatBytes, formatCount } from '../../utils/formatters'
 
@@ -8,17 +8,26 @@ export interface DocumentPreviewModalProps {
   readonly sourceId: string | null
   readonly knowledgeBaseId: string
   readonly onClose: () => void
+  readonly targetChunkId?: string | null
+  readonly targetPageNumber?: number | null
+  readonly targetHeadingPath?: readonly string[] | null
+  readonly citationNumber?: number | null
 }
 
 export function DocumentPreviewModal({
   isOpen,
   sourceId,
   knowledgeBaseId,
-  onClose
+  onClose,
+  targetChunkId,
+  targetPageNumber,
+  targetHeadingPath,
+  citationNumber
 }: DocumentPreviewModalProps): ReactElement | null {
   const [preview, setPreview] = useState<DocumentPreviewDto | null>(null)
   const [loading, setLoading] = useState<boolean>(Boolean(isOpen && sourceId))
   const [error, setError] = useState<string | null>(null)
+  const targetedChunkRef = useRef<HTMLDivElement | null>(null)
 
   // Reset state during render when sourceId changes
   const [prevSourceId, setPrevSourceId] = useState<string | null>(sourceId)
@@ -60,7 +69,7 @@ export function DocumentPreviewModal({
         const data = await window.api.knowledgeDocuments.preview({
           knowledgeBaseId,
           sourceId,
-          maxChunks: 3
+          maxChunks: targetChunkId ? 10 : 3
         })
 
         if (!isCurrent) return
@@ -87,7 +96,16 @@ export function DocumentPreviewModal({
     return () => {
       isCurrent = false
     }
-  }, [isOpen, sourceId, knowledgeBaseId])
+  }, [isOpen, sourceId, knowledgeBaseId, targetChunkId])
+
+  // Scroll targeted chunk into view when preview data renders
+  useEffect(() => {
+    if (preview && targetedChunkRef.current) {
+      if (typeof targetedChunkRef.current.scrollIntoView === 'function') {
+        targetedChunkRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      }
+    }
+  }, [preview, targetChunkId])
 
   if (!isOpen) {
     return null
@@ -168,40 +186,80 @@ export function DocumentPreviewModal({
                 <p className="empty-state-text">No indexed chunks found for this document.</p>
               ) : (
                 <div className="document-preview-chunks-list">
-                  {preview.chunks.map((chunk) => (
-                    <div
-                      key={chunk.chunkId}
-                      className="document-preview-chunk-card"
-                      data-testid={`preview-chunk-${chunk.chunkIndex}`}
-                    >
-                      <div className="document-preview-chunk-header">
-                        <span className="chunk-badge">Chunk #{chunk.chunkIndex + 1}</span>
+                  {preview.chunks.map((chunk) => {
+                    const isTargetChunk = targetChunkId
+                      ? chunk.chunkId === targetChunkId
+                      : targetPageNumber !== null && targetPageNumber !== undefined
+                        ? chunk.pageNumber === targetPageNumber
+                        : targetHeadingPath && targetHeadingPath.length > 0 && chunk.headingPath
+                          ? chunk.headingPath.join(' > ') === targetHeadingPath.join(' > ')
+                          : false
 
-                        {chunk.pageNumber !== null && (
-                          <span className="chunk-page-badge" data-testid="chunk-page-number">
-                            <BookOpen size={12} className="inline-icon" aria-hidden="true" /> Page{' '}
-                            {chunk.pageNumber}
+                    return (
+                      <div
+                        key={chunk.chunkId}
+                        ref={isTargetChunk ? targetedChunkRef : null}
+                        className={`document-preview-chunk-card ${isTargetChunk ? 'is-cited-chunk' : ''}`}
+                        data-testid={`preview-chunk-${chunk.chunkIndex}`}
+                        style={
+                          isTargetChunk
+                            ? {
+                                border: '2px solid #3b82f6',
+                                backgroundColor: '#eff6ff'
+                              }
+                            : undefined
+                        }
+                      >
+                        <div className="document-preview-chunk-header">
+                          <span className="chunk-badge">Chunk #{chunk.chunkIndex + 1}</span>
+
+                          {isTargetChunk && (
+                            <span
+                              className="chunk-cited-badge"
+                              data-testid="chunk-cited-badge"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                backgroundColor: '#2563eb',
+                                color: '#ffffff',
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                fontWeight: 600
+                              }}
+                            >
+                              <Target size={12} aria-hidden="true" />
+                              Cited {citationNumber ? `[${citationNumber}]` : 'Location'}
+                            </span>
+                          )}
+
+                          {chunk.pageNumber !== null && (
+                            <span className="chunk-page-badge" data-testid="chunk-page-number">
+                              <BookOpen size={12} className="inline-icon" aria-hidden="true" /> Page{' '}
+                              {chunk.pageNumber}
+                            </span>
+                          )}
+
+                          {chunk.heading && (
+                            <span className="chunk-heading-badge" data-testid="chunk-heading">
+                              {chunk.headingPath && chunk.headingPath.length > 1
+                                ? chunk.headingPath.join(' > ')
+                                : chunk.heading}
+                            </span>
+                          )}
+
+                          <span className="chunk-token-count text-muted">
+                            ~{chunk.tokenCount} tokens
                           </span>
-                        )}
+                        </div>
 
-                        {chunk.heading && (
-                          <span className="chunk-heading-badge" data-testid="chunk-heading">
-                            {chunk.headingPath && chunk.headingPath.length > 1
-                              ? chunk.headingPath.join(' > ')
-                              : chunk.heading}
-                          </span>
-                        )}
-
-                        <span className="chunk-token-count text-muted">
-                          ~{chunk.tokenCount} tokens
-                        </span>
+                        <pre className="document-preview-chunk-text" data-testid="chunk-content">
+                          {chunk.content}
+                        </pre>
                       </div>
-
-                      <pre className="document-preview-chunk-text" data-testid="chunk-content">
-                        {chunk.content}
-                      </pre>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -209,7 +267,30 @@ export function DocumentPreviewModal({
         </div>
 
         {/* Footer */}
-        <div className="modal-footer">
+        <div
+          className="modal-footer"
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}
+        >
+          <a
+            href={`#/knowledge-bases/${knowledgeBaseId}/knowledge`}
+            className="btn btn-secondary btn-sm"
+            onClick={onClose}
+            data-testid="view-in-kb-link"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              textDecoration: 'none'
+            }}
+          >
+            <ExternalLink size={14} className="inline-icon" aria-hidden="true" />
+            <span>View in Knowledge Base</span>
+          </a>
+
           <button
             type="button"
             className="btn btn-secondary"

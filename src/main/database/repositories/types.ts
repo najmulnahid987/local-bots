@@ -511,3 +511,57 @@ export const createKnowledgeChunkSchema = z
     created_at: z.number().int().positive().optional()
   })
   .strict()
+
+/**
+ * Re-exports and repository contracts for Phase 7 conversations and messages.
+ */
+import type {
+  ConversationDto,
+  MessageDto,
+  CitationDto,
+  MessageRole,
+  MessageContentFormat,
+  MessageMetadataDto,
+  MessageTokenUsageDto
+} from '../../../shared/conversations'
+
+export type {
+  ConversationDto,
+  MessageDto,
+  CitationDto,
+  MessageRole,
+  MessageContentFormat,
+  MessageMetadataDto,
+  MessageTokenUsageDto
+}
+
+export type Conversation = ConversationDto
+export type Message = MessageDto
+
+export interface CreateConversationRepositoryInput {
+  botId: string
+  knowledgeBaseId: string
+  title?: string
+}
+
+export interface ListConversationsRepositoryOptions {
+  includeArchived?: boolean
+  limit?: number
+  offset?: number
+}
+
+export interface CreateMessageRepositoryInput {
+  conversationId: string
+  botId: string
+  knowledgeBaseId: string
+  role: MessageRole
+  content: string
+  contentFormat?: MessageContentFormat
+  metadata?: MessageMetadataDto
+  tokenUsage?: MessageTokenUsageDto | null
+}
+
+export interface ListMessagesRepositoryOptions {
+  limit?: number
+  offset?: number
+}

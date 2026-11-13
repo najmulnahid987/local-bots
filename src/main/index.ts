@@ -12,6 +12,8 @@ import {
   registerFailingDocumentIpcHandlers,
   registerBotIpcHandlers,
   registerFailingBotIpcHandlers,
+  registerConversationIpcHandlers,
+  registerFailingConversationIpcHandlers,
   isTrustedRendererUrl
 } from './ipc'
 import { databaseManager } from './database/connection'
@@ -21,10 +23,17 @@ import { ProviderConnectionRepository } from './database/repositories/provider-c
 import { KnowledgeBaseRepository } from './database/repositories/knowledge-base-repository'
 import { KnowledgeSourceRepository } from './database/repositories/knowledge-source-repository'
 import { BotRepository } from './database/repositories/bot-repository'
+import { ConversationRepository } from './database/repositories/conversation-repository'
+import { MessageRepository } from './database/repositories/message-repository'
 import { KnowledgeBaseManager } from './services/knowledge-base-manager'
 import { ActiveWorkspaceContext } from './services/active-workspace-context'
 import { BotManagerService } from './services/bot-manager'
 import { sanitizeBotErrorMessage } from './services/bot-errors'
+import { ConversationManagerService } from './services/conversation-manager'
+import { ConversationTurnService } from './services/conversation-turn-service'
+import { ConversationExecutionService } from './services/conversation-execution-service'
+import { ConversationPersistenceService } from './services/conversation-persistence-service'
+import { sanitizeConversationErrorMessage } from './ipc/conversation-validation'
 import {
   DocumentStorageManager,
   DocumentIngestionService,
@@ -312,10 +321,11 @@ app.whenReady().then(async () => {
   registerIpcHandlers(() => mainWindow)
 
   // Initialize ProviderManagerService and register provider IPC handlers
+  let providerManager: ProviderManagerService | null = null
   try {
     const userDataPath = app.getPath('userData')
     const vault = new CredentialVault({ vaultDir: join(userDataPath, 'credentials') })
-    const providerManager = new ProviderManagerService({
+    providerManager = new ProviderManagerService({
       credentialVault: vault,
       connectionRepo,
       registry: providerRegistry
@@ -429,6 +439,59 @@ app.whenReady().then(async () => {
       sanitizeBotErrorMessage(String(botError))
     )
     registerFailingBotIpcHandlers(() => mainWindow, 'Bot subsystem failed to initialize.')
+  }
+
+  // Initialize ConversationManagerService and ConversationTurnService, and register Conversation IPC handlers
+  try {
+    const botRepo = new BotRepository(db)
+    const conversationRepo = new ConversationRepository(db)
+    const messageRepo = new MessageRepository(db)
+
+    const conversationManager = new ConversationManagerService({
+      conversationRepo,
+      messageRepo,
+      botRepo,
+      activeContext: activeWorkspaceContext,
+      db
+    })
+
+    if (!providerManager) {
+      throw new Error('ProviderManagerService is not initialized.')
+    }
+
+    const executionService = new ConversationExecutionService(providerManager)
+
+    const persistenceService = new ConversationPersistenceService({
+      db,
+      conversationRepo,
+      messageRepo
+    })
+
+    const turnService = new ConversationTurnService({
+      db,
+      conversationRepo,
+      messageRepo,
+      activeWorkspaceContext,
+      executionService,
+      persistenceService
+    })
+
+    registerConversationIpcHandlers({
+      getMainWindow: () => mainWindow,
+      conversationManager,
+      turnService,
+      activeContext: activeWorkspaceContext
+    })
+    console.log('[CONVERSATION_SUBSYSTEM_INITIALIZED]')
+  } catch (convError) {
+    console.error(
+      '[CONVERSATION_SUBSYSTEM_INITIALIZATION_FAILED]',
+      sanitizeConversationErrorMessage(String(convError))
+    )
+    registerFailingConversationIpcHandlers(
+      () => mainWindow,
+      'Conversation subsystem failed to initialize.'
+    )
   }
 
   createWindow()

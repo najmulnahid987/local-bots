@@ -9,7 +9,8 @@ import { SettingsPage } from './pages/SettingsPage'
 import { KnowledgeBaseWorkspaceLayout } from './components/kb/KnowledgeBaseWorkspaceLayout'
 import { WorkspaceOverviewTab } from './pages/workspace/WorkspaceOverviewTab'
 import { WorkspaceKnowledgeTab } from './pages/workspace/WorkspaceKnowledgeTab'
-import { WorkspaceBotsTab } from './pages/workspace/WorkspaceBotsTab'
+import { WorkspaceBotsPage } from './pages/workspace/WorkspaceBotsPage'
+import { BotConversationsWorkspacePage } from './pages/workspace/BotConversationsWorkspacePage'
 import { WorkspaceActivityTab } from './pages/workspace/WorkspaceActivityTab'
 import { WorkspaceSettingsTab } from './pages/workspace/WorkspaceSettingsTab'
 
@@ -26,7 +27,8 @@ export default function App(): ReactElement {
               <Route index element={<Navigate to="overview" replace />} />
               <Route path="overview" element={<WorkspaceOverviewTab />} />
               <Route path="knowledge" element={<WorkspaceKnowledgeTab />} />
-              <Route path="bots" element={<WorkspaceBotsTab />} />
+              <Route path="bots" element={<WorkspaceBotsPage />} />
+              <Route path="bots/:botId/conversations" element={<BotConversationsWorkspacePage />} />
               <Route path="activity" element={<WorkspaceActivityTab />} />
               <Route path="settings" element={<WorkspaceSettingsTab />} />
             </Route>
