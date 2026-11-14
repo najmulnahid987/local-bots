@@ -1,5 +1,6 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { generateText, streamText, type ModelMessage } from 'ai'
+import { mapToolsToAiSdk, mapToolCalls } from '../../agents/ai-sdk-tool-mapper'
 import { providerRegistry } from '../provider-registry'
 import {
   type ConnectionTestResult,
@@ -277,6 +278,8 @@ export class GoogleAdapter implements ProviderAdapter {
 
     const resolvedModelId = this.resolveVendorModelId(options.modelId)
     const languageModel = google(resolvedModelId)
+    const aiTools =
+      options.tools && options.tools.length > 0 ? mapToolsToAiSdk(options.tools) : undefined
 
     // 5. Setup abort signal with generation timeout
     const controller = new AbortController()
@@ -301,6 +304,7 @@ export class GoogleAdapter implements ProviderAdapter {
         model: languageModel,
         system,
         messages: coreMessages,
+        tools: aiTools,
         temperature: options.temperature,
         maxOutputTokens: options.maxTokens,
         abortSignal: controller.signal
@@ -312,8 +316,11 @@ export class GoogleAdapter implements ProviderAdapter {
         totalTokens: result.usage.totalTokens ?? 0
       }
 
+      const toolCalls = mapToolCalls(result.toolCalls)
+
       return {
         text: result.text,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         finishReason: this.mapFinishReason(result.finishReason),
         usage
       }
@@ -377,6 +384,8 @@ export class GoogleAdapter implements ProviderAdapter {
 
     const resolvedModelId = this.resolveVendorModelId(options.modelId)
     const languageModel = google(resolvedModelId)
+    const aiTools =
+      options.tools && options.tools.length > 0 ? mapToolsToAiSdk(options.tools) : undefined
 
     // 5. Setup abort signal with generation timeout
     const controller = new AbortController()
@@ -401,6 +410,7 @@ export class GoogleAdapter implements ProviderAdapter {
         model: languageModel,
         system: systemInstruction,
         messages: coreMessages,
+        tools: aiTools,
         temperature: options.temperature,
         maxOutputTokens: options.maxTokens,
         abortSignal: controller.signal
@@ -411,6 +421,14 @@ export class GoogleAdapter implements ProviderAdapter {
           yield {
             type: 'text-delta',
             textDelta: chunk.text
+          }
+        } else if (chunk.type === 'tool-call') {
+          const mapped = mapToolCalls([chunk])
+          if (mapped.length > 0) {
+            yield {
+              type: 'tool-call',
+              toolCall: mapped[0]
+            }
           }
         } else if (chunk.type === 'finish') {
           const usage: TokenUsage = {
@@ -473,11 +491,14 @@ export class GoogleAdapter implements ProviderAdapter {
    */
   private assertSupportedCapabilities(options: GenerateTextOptions): void {
     if (options.tools && options.tools.length > 0) {
-      throw new ProviderAdapterError({
-        code: 'UNSUPPORTED_CAPABILITY',
-        message: 'Tool calling is not supported in this adapter step.',
-        retryable: false
-      })
+      const model = providerRegistry.getModel('google', options.modelId)
+      if (!model?.providerCapabilities?.tools) {
+        throw new ProviderAdapterError({
+          code: 'UNSUPPORTED_CAPABILITY',
+          message: `Model '${options.modelId}' does not support tool calling.`,
+          retryable: false
+        })
+      }
     }
 
     if (options.jsonSchema) {
@@ -529,7 +550,39 @@ export class GoogleAdapter implements ProviderAdapter {
         messages.push({ role: 'user', content: text })
       } else if (msg.role === 'assistant') {
         const text = typeof msg.content === 'string' ? msg.content : this.extractText(msg.content)
-        messages.push({ role: 'assistant', content: text })
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          const parts: Array<
+            | { type: 'text'; text: string }
+            | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
+          > = []
+          if (text.trim().length > 0) {
+            parts.push({ type: 'text', text })
+          }
+          for (const tc of msg.toolCalls) {
+            parts.push({
+              type: 'tool-call',
+              toolCallId: tc.id,
+              toolName: tc.name,
+              input: tc.arguments
+            })
+          }
+          messages.push({ role: 'assistant', content: parts } as ModelMessage)
+        } else {
+          messages.push({ role: 'assistant', content: text })
+        }
+      } else if (msg.role === 'tool') {
+        const text = typeof msg.content === 'string' ? msg.content : this.extractText(msg.content)
+        messages.push({
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: msg.toolCallId || 'call_0',
+              toolName: msg.name || 'tool',
+              output: { type: 'text', value: text }
+            }
+          ]
+        })
       }
     }
 
@@ -582,10 +635,7 @@ export class GoogleAdapter implements ProviderAdapter {
   /**
    * Queries Google Gemini models API to discover active models authorized for this API key.
    */
-  async discoverAvailableModels(
-    apiKey: string,
-    signal?: AbortSignal
-  ): Promise<readonly string[]> {
+  async discoverAvailableModels(apiKey: string, signal?: AbortSignal): Promise<readonly string[]> {
     if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
       return []
     }

@@ -75,13 +75,16 @@ export function parseAndLinkCitations(
   // 1. Strip fenced code blocks (``` ... ``` or ~~~ ... ~~~)
   const textWithoutFencedCode = assistantText.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ')
 
-  // 2. Strip inline code (`...`)
-  const sanitizedText = textWithoutFencedCode.replace(/`[^`\n]*`/g, ' ')
+  // 2. Strip CommonMark link reference definitions (e.g. [1]: https://example.com)
+  const textWithoutRefDefs = textWithoutFencedCode.replace(/^[ ]{0,3}\[\d+\]:\s+\S+.*$/gm, ' ')
 
-  // 3. Matches bracketed numeric sequences like [1], [2], [1, 2], [1, 3, 5]
-  // Negative lookahead (?!\s*[(:]) ensures markdown links like [1](https://...)
-  // and reference definitions like [1]: https://... are not treated as citations.
-  const bracketRegex = /\[([0-9]+(?:\s*,\s*[0-9]+)*)\](?!\s*[(:])/g
+  // 3. Strip inline code (`...`)
+  const sanitizedText = textWithoutRefDefs.replace(/`[^`\n]*`/g, ' ')
+
+  // 4. Matches bracketed numeric sequences like [1], [2], [1, 2], [1, 3, 5]
+  // Negative lookahead (?!\s*\() ensures markdown links like [1](https://...) are ignored,
+  // while trailing colons like [1]: in prose (e.g. "as shown below [1]:") are preserved.
+  const bracketRegex = /\[([0-9]+(?:\s*,\s*[0-9]+)*)\](?!\s*\()/g
   const seenNumbers = new Set<number>()
   const linkedCitations: CitationDto[] = []
 

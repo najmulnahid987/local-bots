@@ -210,14 +210,32 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
     },
     docUrl: 'https://platform.claude.com/docs/en/models/overview'
   }),
+  defineModel({
+    id: 'claude-research-preview',
+    providerId: 'anthropic',
+    displayName: 'Claude Research Preview',
+    description:
+      'Frontier research preview model for pure text reasoning. Function and tool calling disabled.',
+    availability: 'preview',
+    contextWindow: {
+      inputTokens: 1000000,
+      outputTokens: 128000
+    },
+    providerCapabilities: {
+      streaming: false,
+      tools: false,
+      imageInput: false,
+      structuredOutput: false
+    },
+    docUrl: 'https://platform.claude.com/docs/en/models/overview'
+  }),
 
   // --- Google Gemini Models ---
   defineModel({
     id: 'gemini-2.5-flash',
     providerId: 'google',
     displayName: 'Gemini 2.5 Flash',
-    description:
-      'Ultra-fast, cost-efficient multimodal flagship model with 1M context window.',
+    description: 'Ultra-fast, cost-efficient multimodal flagship model with 1M context window.',
     availability: 'stable',
     contextWindow: {
       inputTokens: 1048576,
@@ -361,6 +379,25 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
       tools: true,
       imageInput: true,
       structuredOutput: true
+    },
+    docUrl: 'https://ai.google.dev/gemini-api/docs/models'
+  }),
+  defineModel({
+    id: 'gemini-deep-research',
+    providerId: 'google',
+    displayName: 'Gemini Deep Research (Preview)',
+    description:
+      'Long-horizon autonomous synthesis and deep reasoning preview model. Tool calling disabled.',
+    availability: 'preview',
+    contextWindow: {
+      inputTokens: 1048576,
+      outputTokens: 65536
+    },
+    providerCapabilities: {
+      streaming: false,
+      tools: false,
+      imageInput: false,
+      structuredOutput: false
     },
     docUrl: 'https://ai.google.dev/gemini-api/docs/models'
   })

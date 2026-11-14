@@ -62,6 +62,7 @@ export * from './knowledge-bases'
 export * from './knowledge-documents'
 export * from './bots'
 export * from './conversations'
+export * from './agents'
 
 export interface PingRequest {
   requestId: string

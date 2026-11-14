@@ -19,10 +19,16 @@ export const BOT_IPC_CHANNELS = {
 export type BotIpcChannel = (typeof BOT_IPC_CHANNELS)[keyof typeof BOT_IPC_CHANNELS]
 
 /**
- * Canonical list of approved MVP read-only and analytical tools for Bots.
+ * Approved read-only and analytical tools for Bots.
+ * Includes canonical Phase 8 tools and historical legacy aliases for compatibility.
  */
 export const APPROVED_BOT_TOOLS = [
   'search_knowledge_base',
+  'read_knowledge_source',
+  'list_knowledge_sources',
+  'search_workspace_files',
+  'read_workspace_file',
+  'save_report',
   'read_knowledge_base_document',
   'list_knowledge_base_documents',
   'search_project_files',

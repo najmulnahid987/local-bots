@@ -917,7 +917,7 @@ describe('Phase 7 — Step 7.12: Final End-to-End RAG, Conversation, and Securit
 
     const stream = customTurnService.sendMessage(
       sessionA,
-      { conversationId: convAId, content: 'Run abort test' },
+      { conversationId: convAId, content: 'ALPHA-731 flight protocol specifications' },
       { abortSignal: controller.signal }
     )
 

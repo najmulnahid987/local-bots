@@ -16,6 +16,8 @@ export function isValidProviderId(value: unknown): value is ProviderId {
  */
 export type ModelAvailability = 'stable' | 'preview' | 'deprecated'
 
+import type { z } from 'zod'
+
 import {
   type ProviderNativeCapabilities,
   type ApplicationCapabilities,
@@ -162,15 +164,17 @@ export interface ChatMessage {
   readonly content: string | ReadonlyArray<MessageContentPart>
   readonly name?: string
   readonly toolCallId?: string
+  readonly toolCalls?: ReadonlyArray<ToolCall>
 }
 
 /**
- * Tool parameter schema following JSON Schema subset approved for LLM function calling.
+ * Tool parameter schema following JSON Schema subset approved for LLM function calling
+ * or a raw Zod schema.
  */
 export interface ToolDefinition {
   readonly name: string
   readonly description: string
-  readonly parameters: Record<string, unknown>
+  readonly parameters: Record<string, unknown> | z.ZodTypeAny
 }
 
 /**

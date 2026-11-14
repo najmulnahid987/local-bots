@@ -410,9 +410,7 @@ describe('RagPromptBuilder (Phase 7 Step 7.4)', () => {
 
     expect(result.citationCandidates).toEqual([])
     expect(result.citationMap.size).toBe(0)
-    expect(result.systemInstruction).toContain(
-      '## 3. Retrieval Status: No Relevant Documents Found'
-    )
+    expect(result.systemInstruction).toContain('Retrieval Status: No Relevant Documents Found')
     expect(result.messages[result.messages.length - 1].content).toBe('Unknown topic')
     expect(result.messages[result.messages.length - 1].content).not.toContain('<retrieved_context>')
   })
@@ -427,9 +425,7 @@ describe('RagPromptBuilder (Phase 7 Step 7.4)', () => {
 
     expect(result.retrievalStatus).toBe('RETRIEVAL_DISABLED')
     expect(result.citationCandidates).toEqual([])
-    expect(result.systemInstruction).toContain(
-      '## 3. Retrieval Status: Knowledge Base Search Disabled'
-    )
+    expect(result.systemInstruction).toContain('Retrieval Status: Knowledge Base Search Disabled')
     expect(result.systemInstruction).not.toContain('No matching documents were found in the Bot')
   })
 

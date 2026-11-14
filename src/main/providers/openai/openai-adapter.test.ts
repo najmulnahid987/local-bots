@@ -473,11 +473,11 @@ describe('OpenAIAdapter (Phase 3 Step 3.4)', () => {
     expect(chunk.error.code).toBe('OPERATION_ABORTED')
   })
 
-  // 20. Unsupported tool requests are rejected at this stage
+  // 20. Unsupported tool requests are rejected when model does not support tools
   it('20. rejects tool calling options with UNSUPPORTED_CAPABILITY', async () => {
     const adapter = new OpenAIAdapter()
     const options: GenerateTextOptions = {
-      modelId: 'gpt-6-luna',
+      modelId: 'gpt-6.1-terra', // gpt-6.1-terra has providerCapabilities.tools = false
       messages: [{ role: 'user', content: 'Search' }],
       tools: [
         {
@@ -495,7 +495,7 @@ describe('OpenAIAdapter (Phase 3 Step 3.4)', () => {
     } catch (e) {
       const err = e as ProviderAdapterError
       expect(err.error.code).toBe('UNSUPPORTED_CAPABILITY')
-      expect(err.error.message).toMatch(/tool calling is not supported/i)
+      expect(err.error.message).toMatch(/does not support tool calling/i)
     }
   })
 
@@ -612,5 +612,58 @@ describe('OpenAIAdapter (Phase 3 Step 3.4)', () => {
     expect(serializedError).not.toContain('Bearer')
     expect(serializedError).not.toContain('org-1234')
     expect(result.error?.message).toBe('OpenAI authentication failed. Please verify your API key.')
+  })
+
+  // 26. Executes generation with tools returning structured tool calls
+  it('26. executes generation with tools returning structured tool calls', async () => {
+    const customFetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          id: 'resp-tools-1',
+          status: 'completed',
+          output: [
+            {
+              id: 'call_kb_1',
+              type: 'function_call',
+              name: 'search_knowledge_base',
+              call_id: 'call_kb_1',
+              arguments: JSON.stringify({ query: 'quantum computing' })
+            }
+          ],
+          usage: {
+            total_tokens: 35,
+            input_tokens: 25,
+            output_tokens: 10
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }) as unknown as typeof fetch
+
+    const adapter = new OpenAIAdapter({ customFetch })
+    const result = await adapter.generateText(dummyApiKey, {
+      modelId: 'gpt-6-luna',
+      messages: [{ role: 'user', content: 'Search quantum computing' }],
+      tools: [
+        {
+          name: 'search_knowledge_base',
+          description: 'Search internal knowledge',
+          parameters: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query']
+          }
+        }
+      ]
+    })
+
+    expect(result.toolCalls).toBeDefined()
+    expect(result.toolCalls).toHaveLength(1)
+    expect(result.toolCalls![0].id).toBe('call_kb_1')
+    expect(result.toolCalls![0].name).toBe('search_knowledge_base')
+    expect(result.toolCalls![0].arguments).toEqual({ query: 'quantum computing' })
+    expect(result.finishReason).toBe('tool_calls')
+    expect(result.usage.promptTokens).toBe(25)
+    expect(result.usage.completionTokens).toBe(10)
   })
 })

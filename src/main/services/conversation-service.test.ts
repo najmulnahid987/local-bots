@@ -530,8 +530,16 @@ describe('ConversationService (Phase 7 Step 7.6A)', () => {
       expect(lastUserMsg.content).toBe('NonExistentZebraXylophone999')
     })
 
-    it('20. RETRIEVAL_DISABLED is handled correctly', () => {
-      // Create Bot without search_knowledge_base permission
+    it('20. RETRIEVAL_DISABLED is handled correctly when retrieval service returns disabled', () => {
+      // Mock ragService to simulate disabled retrieval
+      vi.spyOn(ragService, 'retrieve').mockReturnValueOnce({
+        status: 'RETRIEVAL_DISABLED',
+        chunks: [],
+        citations: [],
+        totalTokens: 0,
+        reason: 'Knowledge Base search disabled'
+      })
+
       const botNoSearch = botRepo.create({
         knowledgeBaseId: kbAId,
         name: 'No Search Bot',
@@ -556,6 +564,33 @@ describe('ConversationService (Phase 7 Step 7.6A)', () => {
       expect(turn.citationCandidates).toHaveLength(0)
       const lastUserMsg = turn.conversationMessages[turn.conversationMessages.length - 1]
       expect(lastUserMsg.content).toBe('Any documents here?')
+    })
+
+    it('20b. core conversation retrieval is mandatory and executes for bot with empty tool permissions', () => {
+      // Bot with empty tool permissions
+      const botNoSearch = botRepo.create({
+        knowledgeBaseId: kbAId,
+        name: 'Bot Empty Perms',
+        systemPrompt: 'Core retrieval bot',
+        modelId: 'gpt-6-luna',
+        providerConnectionId: defaultConnId,
+        toolPermissions: []
+      })
+      const convNoSearch = conversationRepo.create({
+        botId: botNoSearch.id,
+        knowledgeBaseId: kbAId,
+        title: 'Empty perms conv'
+      })
+
+      const turn = conversationService.prepareTurn(sessionA, {
+        botId: botNoSearch.id,
+        conversationId: convNoSearch.id,
+        question: 'Any documents here?'
+      })
+
+      // Mandatory core retrieval was performed (not disabled by empty tool permissions)
+      expect(turn.retrievalStatus).toBe('NO_RESULTS')
+      expect(turn.citationCandidates).toHaveLength(0)
     })
 
     it('21. Retrieval errors are not converted into NO_RESULTS', () => {

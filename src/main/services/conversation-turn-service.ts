@@ -13,12 +13,14 @@ import { ConversationService, ConversationServiceError } from './conversation-se
 import {
   ConversationExecutionService,
   ConversationExecutionError,
-  type TextDeltaEvent
+  type TextDeltaEvent,
+  type ConversationExecutionResult
 } from './conversation-execution-service'
 import {
   ConversationPersistenceService,
   ConversationPersistenceError
 } from './conversation-persistence-service'
+import { KnowledgeBaseOnlyPolicy } from './knowledge-base-only-policy'
 import type { TokenUsage } from '../providers/types'
 
 // ============================================================================
@@ -547,6 +549,64 @@ export class ConversationTurnService {
         throw new ConversationTurnError('Operation was aborted by client.', 'OPERATION_ABORTED')
       }
 
+      // Step 3.5: Knowledge Base Only Pre-Flight Guard:
+      // If retrieval produces NO_RESULTS, RETRIEVAL_DISABLED, or EMPTY_QUERY,
+      // DO NOT call the AI provider. Produce a deterministic application-owned refusal.
+      if (
+        preparedTurn.retrievalStatus === 'NO_RESULTS' ||
+        preparedTurn.retrievalStatus === 'RETRIEVAL_DISABLED' ||
+        preparedTurn.retrievalStatus === 'EMPTY_QUERY'
+      ) {
+        const refusalText =
+          preparedTurn.retrievalStatus === 'NO_RESULTS'
+            ? KnowledgeBaseOnlyPolicy.getNoResultsResponse()
+            : preparedTurn.retrievalStatus === 'RETRIEVAL_DISABLED'
+              ? KnowledgeBaseOnlyPolicy.getRetrievalDisabledResponse()
+              : KnowledgeBaseOnlyPolicy.getEmptyQueryResponse()
+
+        yield {
+          type: 'text_delta',
+          textDelta: refusalText
+        }
+
+        const syntheticResult: ConversationExecutionResult = {
+          assistantText: refusalText,
+          finishReason: 'stop',
+          durationMs: 0,
+          providerId: preparedTurn.providerId,
+          modelId: preparedTurn.modelId,
+          botId: preparedTurn.botId,
+          conversationId: preparedTurn.conversationId,
+          citationCandidates: [],
+          citationMap: new Map()
+        }
+
+        assistantMessage = this.persistenceService.persistAssistantMessage(
+          preparedTurn,
+          syntheticResult
+        )
+
+        completedSuccessfully = true
+        const finalResult: ConversationTurnResult = {
+          userMessage,
+          assistantMessage,
+          finishReason: 'stop',
+          durationMs: 0
+        }
+
+        resolveResult(finalResult)
+
+        yield {
+          type: 'finish',
+          finishReason: 'stop',
+          usage: undefined,
+          totalTextLength: refusalText.length,
+          durationMs: 0,
+          message: assistantMessage
+        }
+        return
+      }
+
       // Step 4: Execute provider generation
       const execStream = this.executionService.streamPreparedTurn(preparedTurn, {
         abortSignal: internalController.signal,
@@ -575,13 +635,26 @@ export class ConversationTurnService {
         }
       }
 
-      // Step 5: Obtain execution result and persist assistant message
+      // Step 5: Obtain execution result and validate grounding
       const executionResult = await execStream.getResult()
+
+      const validation = KnowledgeBaseOnlyPolicy.validateGroundedResponse(
+        executionResult.assistantText,
+        preparedTurn.citationMap,
+        preparedTurn.retrievalStatus
+      )
+
+      const effectiveResult: ConversationExecutionResult = validation.isValid
+        ? executionResult
+        : {
+            ...executionResult,
+            assistantText: validation.sanitizedContent
+          }
 
       try {
         assistantMessage = this.persistenceService.persistAssistantMessage(
           preparedTurn,
-          executionResult
+          effectiveResult
         )
       } catch (persistErr) {
         const turnError = new ConversationTurnError(
@@ -606,19 +679,19 @@ export class ConversationTurnService {
       const finalResult: ConversationTurnResult = {
         userMessage,
         assistantMessage,
-        finishReason: executionResult.finishReason,
-        durationMs: executionResult.durationMs,
-        usage: executionResult.usage
+        finishReason: effectiveResult.finishReason,
+        durationMs: effectiveResult.durationMs,
+        usage: effectiveResult.usage
       }
 
       resolveResult(finalResult)
 
       yield {
         type: 'finish',
-        finishReason: executionResult.finishReason,
-        usage: executionResult.usage,
-        totalTextLength: executionResult.assistantText.length,
-        durationMs: executionResult.durationMs,
+        finishReason: effectiveResult.finishReason,
+        usage: effectiveResult.usage,
+        totalTextLength: effectiveResult.assistantText.length,
+        durationMs: effectiveResult.durationMs,
         message: assistantMessage
       }
     } catch (err) {
@@ -676,6 +749,64 @@ export class ConversationTurnService {
         throw new ConversationTurnError('Operation was aborted by client.', 'OPERATION_ABORTED')
       }
 
+      // Step 1.5: Knowledge Base Only Pre-Flight Guard:
+      // If retrieval produces NO_RESULTS, RETRIEVAL_DISABLED, or EMPTY_QUERY,
+      // DO NOT call the AI provider. Produce a deterministic application-owned refusal.
+      if (
+        preparedTurn.retrievalStatus === 'NO_RESULTS' ||
+        preparedTurn.retrievalStatus === 'RETRIEVAL_DISABLED' ||
+        preparedTurn.retrievalStatus === 'EMPTY_QUERY'
+      ) {
+        const refusalText =
+          preparedTurn.retrievalStatus === 'NO_RESULTS'
+            ? KnowledgeBaseOnlyPolicy.getNoResultsResponse()
+            : preparedTurn.retrievalStatus === 'RETRIEVAL_DISABLED'
+              ? KnowledgeBaseOnlyPolicy.getRetrievalDisabledResponse()
+              : KnowledgeBaseOnlyPolicy.getEmptyQueryResponse()
+
+        yield {
+          type: 'text_delta',
+          textDelta: refusalText
+        }
+
+        const syntheticResult: ConversationExecutionResult = {
+          assistantText: refusalText,
+          finishReason: 'stop',
+          durationMs: 0,
+          providerId: preparedTurn.providerId,
+          modelId: preparedTurn.modelId,
+          botId: preparedTurn.botId,
+          conversationId: preparedTurn.conversationId,
+          citationCandidates: [],
+          citationMap: new Map()
+        }
+
+        assistantMessage = this.persistenceService.persistAssistantMessage(
+          preparedTurn,
+          syntheticResult
+        )
+
+        completedSuccessfully = true
+        const finalResult: ConversationTurnResult = {
+          userMessage,
+          assistantMessage,
+          finishReason: 'stop',
+          durationMs: 0
+        }
+
+        resolveResult(finalResult)
+
+        yield {
+          type: 'finish',
+          finishReason: 'stop',
+          usage: undefined,
+          totalTextLength: refusalText.length,
+          durationMs: 0,
+          message: assistantMessage
+        }
+        return
+      }
+
       // Step 2: Execute provider generation (user message is already persisted)
       const execStream = this.executionService.streamPreparedTurn(preparedTurn, {
         abortSignal: internalController.signal,
@@ -704,13 +835,26 @@ export class ConversationTurnService {
         }
       }
 
-      // Step 3: Obtain execution result and persist assistant message
+      // Step 3: Obtain execution result and validate grounding
       const executionResult = await execStream.getResult()
+
+      const validation = KnowledgeBaseOnlyPolicy.validateGroundedResponse(
+        executionResult.assistantText,
+        preparedTurn.citationMap,
+        preparedTurn.retrievalStatus
+      )
+
+      const effectiveResult: ConversationExecutionResult = validation.isValid
+        ? executionResult
+        : {
+            ...executionResult,
+            assistantText: validation.sanitizedContent
+          }
 
       try {
         assistantMessage = this.persistenceService.persistAssistantMessage(
           preparedTurn,
-          executionResult
+          effectiveResult
         )
       } catch (persistErr) {
         const turnError = new ConversationTurnError(
@@ -735,19 +879,19 @@ export class ConversationTurnService {
       const finalResult: ConversationTurnResult = {
         userMessage,
         assistantMessage,
-        finishReason: executionResult.finishReason,
-        durationMs: executionResult.durationMs,
-        usage: executionResult.usage
+        finishReason: effectiveResult.finishReason,
+        durationMs: effectiveResult.durationMs,
+        usage: effectiveResult.usage
       }
 
       resolveResult(finalResult)
 
       yield {
         type: 'finish',
-        finishReason: executionResult.finishReason,
-        usage: executionResult.usage,
-        totalTextLength: executionResult.assistantText.length,
-        durationMs: executionResult.durationMs,
+        finishReason: effectiveResult.finishReason,
+        usage: effectiveResult.usage,
+        totalTextLength: effectiveResult.assistantText.length,
+        durationMs: effectiveResult.durationMs,
         message: assistantMessage
       }
     } catch (err) {

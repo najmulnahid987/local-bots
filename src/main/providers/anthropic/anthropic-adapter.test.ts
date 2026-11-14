@@ -684,7 +684,7 @@ describe('AnthropicAdapter (Phase 3 Step 3.5)', () => {
 
     await expect(
       adapter.generateText(dummyApiKey, {
-        modelId: 'claude-sonnet-5-5',
+        modelId: 'claude-research-preview', // claude-research-preview has providerCapabilities.tools = false
         messages: [{ role: 'user', content: 'Call this tool' }],
         tools: [
           {
@@ -697,7 +697,7 @@ describe('AnthropicAdapter (Phase 3 Step 3.5)', () => {
     ).rejects.toMatchObject({
       error: {
         code: 'UNSUPPORTED_CAPABILITY',
-        message: expect.stringContaining('Tool calling is not supported')
+        message: expect.stringMatching(/does not support tool calling/i)
       }
     })
   })
@@ -791,5 +791,59 @@ describe('AnthropicAdapter (Phase 3 Step 3.5)', () => {
     expect(result.success).toBe(false)
     expect(result.error?.message).not.toContain(sensitiveKey)
     expect(JSON.stringify(result.error)).not.toContain(sensitiveKey)
+  })
+
+  // 34. Executes text generation with tools returning structured tool calls
+  it('34. executes text generation with tools returning structured tool calls', async () => {
+    const customFetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          id: 'msg-ant-tool-1',
+          type: 'message',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_kb_1',
+              name: 'read_knowledge_source',
+              input: { sourceId: 'src_doc_42' }
+            }
+          ],
+          model: 'claude-sonnet-5-5',
+          stop_reason: 'tool_use',
+          usage: {
+            input_tokens: 45,
+            output_tokens: 15
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }) as unknown as typeof fetch
+
+    const adapter = new AnthropicAdapter({ customFetch })
+    const result = await adapter.generateText(dummyApiKey, {
+      modelId: 'claude-sonnet-5-5',
+      messages: [{ role: 'user', content: 'Read source 42' }],
+      tools: [
+        {
+          name: 'read_knowledge_source',
+          description: 'Reads source content',
+          parameters: {
+            type: 'object',
+            properties: { sourceId: { type: 'string' } },
+            required: ['sourceId']
+          }
+        }
+      ]
+    })
+
+    expect(result.toolCalls).toBeDefined()
+    expect(result.toolCalls).toHaveLength(1)
+    expect(result.toolCalls![0].id).toBe('toolu_kb_1')
+    expect(result.toolCalls![0].name).toBe('read_knowledge_source')
+    expect(result.toolCalls![0].arguments).toEqual({ sourceId: 'src_doc_42' })
+    expect(result.finishReason).toBe('tool_calls')
+    expect(result.usage.promptTokens).toBe(45)
+    expect(result.usage.completionTokens).toBe(15)
   })
 })

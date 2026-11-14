@@ -157,6 +157,30 @@ describe('ConversationTurnService (Phase 7 Step 7.6B.3)', () => {
     activeContext = new ActiveWorkspaceContext({ kbRepo })
     ragService = new BotRagService({ db })
 
+    // By default, simulate successful retrieval with authentic sample citation
+    vi.spyOn(ragService, 'retrieve').mockReturnValue({
+      status: 'SUCCESS',
+      chunks: [
+        {
+          citationNumber: 1,
+          sourceId: sampleCitation.sourceId,
+          chunkId: sampleCitation.chunkId,
+          fileName: sampleCitation.fileName,
+          fileType: sampleCitation.fileType,
+          pageNumber: sampleCitation.pageNumber,
+          headingPath: sampleCitation.headingPath,
+          chunkIndex: sampleCitation.chunkIndex,
+          score: 1.0,
+          content: 'The safety protocol requires standard authentication procedures.',
+          tokenCount: 15,
+          isTruncated: false,
+          citation: sampleCitation
+        }
+      ],
+      citations: [sampleCitation],
+      totalTokens: 15
+    })
+
     const kbA = kbRepo.create({ name: 'KB Alpha' })
     const kbB = kbRepo.create({ name: 'KB Beta' })
     kbAId = kbA.id
@@ -959,7 +983,7 @@ describe('ConversationTurnService (Phase 7 Step 7.6B.3)', () => {
         executionService: {
           streamPreparedTurn: vi.fn(() =>
             createMockExecutionStream({
-              resultText: 'Recovered response'
+              resultText: 'Recovered response [1]'
             })
           )
         } as unknown as ConversationExecutionService,
@@ -977,7 +1001,7 @@ describe('ConversationTurnService (Phase 7 Step 7.6B.3)', () => {
 
       const result = await stream.getResult()
       expect(result.userMessage.id).toBe(userMsg.id)
-      expect(result.assistantMessage.content).toBe('Recovered response')
+      expect(result.assistantMessage.content).toBe('Recovered response [1]')
 
       const msgs = msgRepo.listByConversation(convAId, botAId, kbAId)
       expect(msgs).toHaveLength(2)

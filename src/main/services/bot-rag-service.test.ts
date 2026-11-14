@@ -310,7 +310,8 @@ describe('BotRagService (Phase 7 Step 7.3)', () => {
 
     const result = ragService.retrieve({
       botId: unprivilegedBot.id,
-      query: 'some query'
+      query: 'some query',
+      requireToolPermission: true
     })
 
     expect(result.status).toBe('RETRIEVAL_DISABLED')
@@ -322,7 +323,29 @@ describe('BotRagService (Phase 7 Step 7.3)', () => {
     searchSpy.mockRestore()
   })
 
-  it('10. other enabled tools do not implicitly authorize knowledge search', () => {
+  it('9b. unprivileged bot without search_knowledge_base permission executes mandatory core conversation retrieval when requireToolPermission is omitted', () => {
+    const unprivilegedBot = botRepo.create({
+      knowledgeBaseId: kbAId,
+      name: 'Unprivileged Bot',
+      modelId: 'gpt-4o',
+      toolPermissions: []
+    })
+
+    const searchSpy = vi.spyOn(sourceRepo, 'searchChunks')
+
+    const result = ragService.retrieve({
+      botId: unprivilegedBot.id,
+      query: 'some query'
+    })
+
+    // Mandatory core conversation grounding does not return RETRIEVAL_DISABLED
+    expect(result.status).not.toBe('RETRIEVAL_DISABLED')
+    expect(searchSpy).toHaveBeenCalledTimes(1)
+
+    searchSpy.mockRestore()
+  })
+
+  it('10. other enabled tools do not implicitly authorize knowledge search when requireToolPermission is true', () => {
     const analyticalBot = botRepo.create({
       knowledgeBaseId: kbAId,
       name: 'Analytical Bot',
@@ -334,7 +357,8 @@ describe('BotRagService (Phase 7 Step 7.3)', () => {
 
     const result = ragService.retrieve({
       botId: analyticalBot.id,
-      query: 'search term'
+      query: 'search term',
+      requireToolPermission: true
     })
 
     expect(result.status).toBe('RETRIEVAL_DISABLED')

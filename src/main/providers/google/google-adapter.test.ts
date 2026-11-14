@@ -744,7 +744,7 @@ describe('GoogleAdapter (Phase 3 Step 3.6)', () => {
 
     await expect(
       adapter.generateText(dummyApiKey, {
-        modelId: 'gemini-3.8-flash',
+        modelId: 'gemini-deep-research', // gemini-deep-research has providerCapabilities.tools = false
         messages: [{ role: 'user', content: 'Search' }],
         tools: [
           {
@@ -757,7 +757,7 @@ describe('GoogleAdapter (Phase 3 Step 3.6)', () => {
     ).rejects.toMatchObject({
       error: {
         code: 'UNSUPPORTED_CAPABILITY',
-        message: expect.stringContaining('Tool calling is not supported')
+        message: expect.stringMatching(/does not support tool calling/i)
       }
     })
   })
@@ -820,5 +820,61 @@ describe('GoogleAdapter (Phase 3 Step 3.6)', () => {
     expect(capturedUrl.startsWith(GOOGLE_OFFICIAL_BASE_URL)).toBe(true)
     expect(capturedUrl).not.toContain('gateway')
     expect(capturedUrl).not.toContain('proxy')
+  })
+
+  // 34. Executes generation with tools returning structured function calls
+  it('34. executes generation with tools returning structured function calls', async () => {
+    const customFetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                role: 'model',
+                parts: [
+                  {
+                    functionCall: {
+                      name: 'list_knowledge_sources',
+                      args: { limit: 10 }
+                    }
+                  }
+                ]
+              },
+              finishReason: 'STOP'
+            }
+          ],
+          usageMetadata: {
+            promptTokenCount: 20,
+            candidatesTokenCount: 12,
+            totalTokenCount: 32
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }) as unknown as typeof fetch
+
+    const adapter = new GoogleAdapter({ customFetch })
+    const result = await adapter.generateText(dummyApiKey, {
+      modelId: 'gemini-3.8-flash',
+      messages: [{ role: 'user', content: 'List sources' }],
+      tools: [
+        {
+          name: 'list_knowledge_sources',
+          description: 'List available knowledge sources',
+          parameters: {
+            type: 'object',
+            properties: { limit: { type: 'number' } }
+          }
+        }
+      ]
+    })
+
+    expect(result.toolCalls).toBeDefined()
+    expect(result.toolCalls).toHaveLength(1)
+    expect(result.toolCalls![0].name).toBe('list_knowledge_sources')
+    expect(result.toolCalls![0].arguments).toEqual({ limit: 10 })
+    expect(result.finishReason).toBe('tool_calls')
+    expect(result.usage.promptTokens).toBe(20)
+    expect(result.usage.completionTokens).toBe(12)
   })
 })

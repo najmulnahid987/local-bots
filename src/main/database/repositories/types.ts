@@ -41,10 +41,15 @@ export interface KnowledgeBaseListOptions {
 }
 
 /**
- * Approved MVP read-only and analytical tools.
+ * Approved read-only and analytical tools (canonical Phase 8 tools + legacy aliases).
  */
 export const APPROVED_TOOL_PERMISSIONS = [
   'search_knowledge_base',
+  'read_knowledge_source',
+  'list_knowledge_sources',
+  'search_workspace_files',
+  'read_workspace_file',
+  'save_report',
   'read_knowledge_base_document',
   'list_knowledge_base_documents',
   'search_project_files',
@@ -564,4 +569,56 @@ export interface CreateMessageRepositoryInput {
 export interface ListMessagesRepositoryOptions {
   limit?: number
   offset?: number
+}
+
+/**
+ * Re-exports and repository contracts for Phase 8 agent execution and tool events.
+ */
+import type {
+  AgentRunStatus,
+  DbAgentRunStatus,
+  AgentRunDto,
+  CanonicalBotTool,
+  ToolEventStatus,
+  ToolApprovalStatus,
+  ToolEventDto
+} from '../../../shared/agents'
+
+export type {
+  AgentRunStatus,
+  DbAgentRunStatus,
+  AgentRunDto,
+  CanonicalBotTool,
+  ToolEventStatus,
+  ToolApprovalStatus,
+  ToolEventDto
+}
+
+export type AgentRun = AgentRunDto
+export type ToolEvent = ToolEventDto
+
+export interface CreateAgentRunRepositoryInput {
+  readonly botId: string
+  readonly conversationId?: string | null
+  readonly selectedModel: string
+  readonly initialStatus?: AgentRunStatus
+}
+
+export interface ListAgentRunsRepositoryOptions {
+  readonly limit?: number
+  readonly offset?: number
+}
+
+export interface CreateToolEventRepositoryInput {
+  readonly agentRunId: string
+  readonly toolName: string
+  readonly sequenceNumber?: number
+  readonly argumentsSummary?: string
+  readonly initialStatus?: ToolEventStatus
+  readonly initialApprovalStatus?: ToolApprovalStatus
+}
+
+export interface UpdateToolEventSummariesInput {
+  readonly argumentsSummary?: string
+  readonly resultSummary?: string
 }

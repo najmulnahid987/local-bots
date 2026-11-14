@@ -60,6 +60,13 @@ export interface BotRagRetrievalOptions {
   readonly query: string
   readonly topK?: number
   readonly maxContextTokens?: number
+  /**
+   * If true, requires that the Bot explicitly has the 'search_knowledge_base'
+   * agent tool permission enabled.
+   * Defaults to false: core conversation grounding is mandatory for every active Bot
+   * within its parent Knowledge Base regardless of optional agent tool permissions.
+   */
+  readonly requireToolPermission?: boolean
 }
 
 /**
@@ -236,15 +243,17 @@ export class BotRagService {
       )
     }
 
-    // 7. Enforce Bot tool permissions
-    const hasSearchPermission = bot.toolPermissions.includes('search_knowledge_base')
-    if (!hasSearchPermission) {
-      return {
-        status: 'RETRIEVAL_DISABLED',
-        chunks: [],
-        citations: [],
-        totalTokens: 0,
-        reason: "Bot does not have 'search_knowledge_base' permission enabled."
+    // 7. Enforce Bot tool permissions only when explicitly required (explicit agent tool execution)
+    if (options.requireToolPermission) {
+      const hasSearchPermission = bot.toolPermissions.includes('search_knowledge_base')
+      if (!hasSearchPermission) {
+        return {
+          status: 'RETRIEVAL_DISABLED',
+          chunks: [],
+          citations: [],
+          totalTokens: 0,
+          reason: "Bot does not have 'search_knowledge_base' permission enabled."
+        }
       }
     }
 
