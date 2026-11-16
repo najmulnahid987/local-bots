@@ -15,6 +15,7 @@ export interface ConversationMessageListProps {
   readonly onNewConversation?: () => void
   readonly isArchived?: boolean
   readonly onCitationClick?: (citation: CitationDto) => void
+  readonly activeTaskElement?: ReactElement | null
 }
 
 export function ConversationMessageList({
@@ -26,7 +27,8 @@ export function ConversationMessageList({
   conversationId,
   onNewConversation,
   isArchived = false,
-  onCitationClick
+  onCitationClick,
+  activeTaskElement
 }: ConversationMessageListProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
@@ -52,14 +54,14 @@ export function ConversationMessageList({
     }
   }, [conversationId])
 
-  // Scroll to bottom as streaming text grows or messages arrive, only if user was near bottom
+  // Scroll to bottom as streaming text grows, messages arrive, or active task updates
   useEffect(() => {
     if (isNearBottomRef.current) {
       if (typeof bottomRef.current?.scrollIntoView === 'function') {
         bottomRef.current.scrollIntoView({ behavior: 'smooth' })
       }
     }
-  }, [messages.length, streamingText])
+  }, [messages.length, streamingText, activeTaskElement])
 
   if (isLoading && messages.length === 0) {
     return (
@@ -84,7 +86,7 @@ export function ConversationMessageList({
     )
   }
 
-  if (messages.length === 0 && !streamingText) {
+  if (messages.length === 0 && !streamingText && !activeTaskElement) {
     return (
       <div
         className="chat-messages-container"
@@ -131,7 +133,10 @@ export function ConversationMessageList({
         />
       ))}
 
-      {/* Temporary Assistant Streaming Bubble */}
+      {/* Active Agent Task Activity Timeline (when running, waiting approval, or completed/failed) */}
+      {activeTaskElement}
+
+      {/* Temporary Assistant Streaming Bubble (for normal chat generation) */}
       {streamingText ? (
         <div
           className="chat-message-row chat-message-assistant"

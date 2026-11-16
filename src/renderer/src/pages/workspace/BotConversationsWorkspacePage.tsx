@@ -10,11 +10,16 @@ import type {
 import { useConversations } from '../../hooks/useConversations'
 import { useConversationMessages } from '../../hooks/useConversationMessages'
 import { useConversationTurn } from '../../hooks/useConversationTurn'
+import { useAgentTask } from '../../hooks/useAgentTask'
+import { useAgentTaskEvents } from '../../hooks/useAgentTaskEvents'
+import { useAgentRuns } from '../../hooks/useAgentRuns'
 import { ConversationSidebar } from '../../components/chat/ConversationSidebar'
 import { ConversationMessageList } from '../../components/chat/ConversationMessageList'
 import { ConversationComposer } from '../../components/chat/ConversationComposer'
 import { ConversationEmptyState } from '../../components/chat/ConversationEmptyState'
 import { DocumentPreviewModal } from '../../components/documents/DocumentPreviewModal'
+import { TaskActivityTimeline } from '../../components/agents/TaskActivityTimeline'
+import { SaveReportApprovalModal } from '../../components/agents/SaveReportApprovalModal'
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -106,7 +111,13 @@ export function BotConversationsWorkspacePage(): ReactElement {
     enabled: Boolean(selectedConversationId)
   })
 
-  // Generation / Turn state for the selected conversation
+  // Historical Agent Runs for the selected conversation
+  const agentRuns = useAgentRuns({
+    conversationId: selectedConversationId,
+    enabled: Boolean(selectedConversationId)
+  })
+
+  // Generation / Turn state for the selected conversation (normal chat)
   const {
     isGenerating,
     isCancelling,
@@ -123,6 +134,47 @@ export function BotConversationsWorkspacePage(): ReactElement {
     }
   })
 
+  // Agent Task state for explicit task dispatch
+  const agentTask = useAgentTask({
+    conversationId: selectedConversationId,
+    botId: bot?.id,
+    onTaskCompleted: async () => {
+      await refreshMessages()
+      await refreshConversations()
+      await agentRuns.refresh()
+    },
+    onTaskCancelled: async () => {
+      setCancellationNotice('Agent task cancelled.')
+      await refreshMessages()
+      await refreshConversations()
+      await agentRuns.refresh()
+    }
+  })
+
+  const isTaskActive =
+    agentTask.status === 'running' ||
+    agentTask.status === 'queued' ||
+    agentTask.status === 'waiting_approval'
+
+  // Report approval modal state
+  const [activeApprovalTarget, setActiveApprovalTarget] = useState<{
+    agentRunId: string
+    approvalRequestId: string
+  } | null>(null)
+  const [isApprovalModalOpen, setIsApprovalModalOpen] = useState<boolean>(false)
+
+  // Real-time task event streaming
+  const agentTaskEvents = useAgentTaskEvents({
+    agentRunId: agentTask.activeRunId,
+    onApprovalRequested: (approval) => {
+      setActiveApprovalTarget({
+        agentRunId: approval.agentRunId,
+        approvalRequestId: approval.requestId
+      })
+      setIsApprovalModalOpen(true)
+    }
+  })
+
   // Citation preview and resolution state
   const [citationTarget, setCitationTarget] = useState<ResolvedCitationTargetDto | null>(null)
   const [citationError, setCitationError] = useState<string | null>(null)
@@ -135,30 +187,47 @@ export function BotConversationsWorkspacePage(): ReactElement {
     setCitationTarget(null)
     setCitationError(null)
     setCancellationNotice(null)
+    agentTask.reset()
+    setActiveApprovalTarget(null)
+    setIsApprovalModalOpen(false)
   }
 
   const handleDeleteConversation = useCallback(
     async (conversationId: string): Promise<DeleteConversationResultDto> => {
-      if (isGenerating && selectedConversationId === conversationId) {
+      if ((isGenerating || isTaskActive) && selectedConversationId === conversationId) {
         throw new Error(
-          'Cannot delete conversation while generation is in progress. Please stop generation first.'
+          'Cannot delete conversation while generation or task is in progress. Please stop it first.'
         )
       }
       return deleteConversation(conversationId)
     },
-    [isGenerating, selectedConversationId, deleteConversation]
+    [isGenerating, isTaskActive, selectedConversationId, deleteConversation]
   )
 
   const handleStopGeneration = useCallback(async (): Promise<void> => {
     try {
-      await cancelGeneration()
-      setCancellationNotice('Generation stopped.')
-      await refreshMessages()
-      await refreshConversations()
+      if (isGenerating) {
+        await cancelGeneration()
+        setCancellationNotice('Generation stopped.')
+        await refreshMessages()
+        await refreshConversations()
+      } else if (isTaskActive && agentTask.activeRunId) {
+        await agentTask.cancelTask()
+        setCancellationNotice('Agent task stopped.')
+        await refreshMessages()
+        await refreshConversations()
+      }
     } catch {
       // Handled safely
     }
-  }, [cancelGeneration, refreshMessages, refreshConversations])
+  }, [
+    isGenerating,
+    isTaskActive,
+    agentTask,
+    cancelGeneration,
+    refreshMessages,
+    refreshConversations
+  ])
 
   const isLastMessageUnansweredUser =
     messages.length > 0 && messages[messages.length - 1].role === 'user'
@@ -167,6 +236,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
     Boolean(turnError?.retryable) &&
     isLastMessageUnansweredUser &&
     !isGenerating &&
+    !isTaskActive &&
     Boolean(bot && bot.status !== 'archived')
 
   const handleRetry = useCallback(async (): Promise<void> => {
@@ -212,7 +282,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
         )
       }
     },
-    [selectedConversationId, messages]
+    [selectedConversationId, messages, setCitationError, setCitationTarget]
   )
 
   // 1. Invalid Identifier validation guard
@@ -282,6 +352,47 @@ export function BotConversationsWorkspacePage(): ReactElement {
     setCancellationNotice(null)
     await sendMessage(content)
   }
+
+  const handleDispatchTask = async (
+    taskPrompt: string,
+    workspaceAccessRequested?: boolean
+  ): Promise<void> => {
+    setCancellationNotice(null)
+    await agentTask.dispatchTask(taskPrompt, workspaceAccessRequested)
+  }
+
+  // Construct active or recent session task timeline element
+  const activeTaskElement = agentTask.activeRunId ? (
+    <div
+      style={{
+        marginBottom: '16px',
+        width: '100%'
+      }}
+      data-testid="active-task-timeline-container"
+    >
+      <TaskActivityTimeline
+        agentRunId={agentTask.activeRunId}
+        status={agentTaskEvents.runStatus ?? agentTask.status}
+        iteration={agentTaskEvents.iteration}
+        maxIterations={agentTaskEvents.maxIterations}
+        toolActivities={agentTaskEvents.toolActivities}
+        errorSummary={agentTaskEvents.error?.message ?? agentTask.error}
+        onStop={isTaskActive ? () => void agentTask.cancelTask() : undefined}
+        onReviewApproval={
+          agentTaskEvents.pendingApproval
+            ? () => {
+                setActiveApprovalTarget({
+                  agentRunId: agentTaskEvents.pendingApproval!.agentRunId,
+                  approvalRequestId: agentTaskEvents.pendingApproval!.requestId
+                })
+                setIsApprovalModalOpen(true)
+              }
+            : undefined
+        }
+        hasPendingApproval={Boolean(agentTaskEvents.pendingApproval)}
+      />
+    </div>
+  ) : null
 
   return (
     <div
@@ -391,7 +502,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
           onCreateConversation={createConversation}
           onRenameConversation={renameConversation}
           onDeleteConversation={handleDeleteConversation}
-          isGenerating={isGenerating}
+          isGenerating={isGenerating || isTaskActive}
           isLoading={conversationsLoading}
           isRefreshing={conversationsRefreshing}
           isMutating={conversationsMutating}
@@ -449,10 +560,13 @@ export function BotConversationsWorkspacePage(): ReactElement {
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
-                  onClick={() => void refreshMessages()}
+                  onClick={() => {
+                    void refreshMessages()
+                    void agentRuns.refresh()
+                  }}
                   disabled={messagesLoading}
                   data-testid="refresh-messages-btn"
-                  title="Refresh messages"
+                  title="Refresh messages and agent runs"
                   aria-label="Refresh messages"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                 >
@@ -538,7 +652,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
                       data-testid="retry-turn-btn"
                       aria-label="Retry generation"
                       onClick={() => void handleRetry()}
-                      disabled={isGenerating || isArchived}
+                      disabled={isGenerating || isTaskActive || isArchived}
                       style={{
                         display: 'inline-flex',
                         alignItems: 'center',
@@ -555,6 +669,18 @@ export function BotConversationsWorkspacePage(): ReactElement {
                 </div>
               )}
 
+              {/* Agent Task Error Alert */}
+              {agentTask.error && (
+                <div
+                  className="section-alert section-alert-error"
+                  role="alert"
+                  data-testid="agent-task-error-alert"
+                  style={{ margin: '8px 20px 0 20px', fontSize: '12px' }}
+                >
+                  <span>Agent Task Error: {agentTask.error}</span>
+                </div>
+              )}
+
               {/* Citation Resolution Error Alert */}
               {citationError && (
                 <div
@@ -567,7 +693,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
                 </div>
               )}
 
-              {/* Scrollable Message Timeline */}
+              {/* Scrollable Message Timeline with Active Agent Task Elements */}
               <ConversationMessageList
                 messages={messages}
                 isLoading={messagesLoading}
@@ -577,14 +703,18 @@ export function BotConversationsWorkspacePage(): ReactElement {
                 conversationId={selectedConversationId}
                 isArchived={isArchived}
                 onCitationClick={handleCitationClick}
+                activeTaskElement={activeTaskElement}
               />
 
               {/* Fixed Bottom Message Composer */}
               <ConversationComposer
+                bot={bot}
                 onSend={handleSendMessage}
+                onDispatchTask={handleDispatchTask}
                 onStop={handleStopGeneration}
                 isGenerating={isGenerating}
-                isCancelling={isCancelling}
+                isCancelling={isCancelling || agentTask.isCancelling}
+                isTaskRunning={isTaskActive}
                 disabled={isArchived}
                 placeholder={
                   isArchived
@@ -615,6 +745,21 @@ export function BotConversationsWorkspacePage(): ReactElement {
           targetHeadingPath={citationTarget.headingPath}
           citationNumber={citationTarget.citationNumber}
           onClose={() => setCitationTarget(null)}
+        />
+      )}
+
+      {/* Human-in-the-loop Report Save Approval Modal */}
+      {activeApprovalTarget && (
+        <SaveReportApprovalModal
+          isOpen={isApprovalModalOpen}
+          agentRunId={activeApprovalTarget.agentRunId}
+          approvalRequestId={activeApprovalTarget.approvalRequestId}
+          onClose={() => setIsApprovalModalOpen(false)}
+          onDecisionSubmitted={async () => {
+            setIsApprovalModalOpen(false)
+            await agentTaskEvents.refreshState()
+            await refreshMessages()
+          }}
         />
       )}
     </div>

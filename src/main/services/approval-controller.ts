@@ -254,6 +254,38 @@ export class ApprovalController {
   }
 
   /**
+   * Retrieves pending report details (including exact in-memory markdown content),
+   * verifying that the run and bot ownership match the active pending request.
+   */
+  public getPendingDetails(
+    requestId: string,
+    context: ApprovalDecisionContext
+  ): {
+    readonly title: string
+    readonly content: string
+    readonly contentSizeBytes: number
+    readonly createdAt: number
+    readonly expiresAt?: number
+  } | null {
+    const req = this.requests.get(requestId)
+    if (!req || req.dto.status !== 'pending') {
+      return null
+    }
+
+    if (req.dto.agentRunId !== context.agentRunId || req.dto.botId !== context.botId) {
+      return null
+    }
+
+    return {
+      title: req.dto.title,
+      content: req.rawContent,
+      contentSizeBytes: req.dto.contentSizeBytes,
+      createdAt: req.dto.createdAt,
+      expiresAt: req.dto.expiresAt
+    }
+  }
+
+  /**
    * Retrieves approved markdown content for saving, verifying run and bot ownership.
    */
   public getApprovedContent(

@@ -5,8 +5,10 @@ import type {
   KnowledgeBaseApi,
   KnowledgeDocumentApi,
   BotApi,
-  ConversationApi
+  ConversationApi,
+  BotMemoryApi
 } from '../shared/ipc'
+import type { AgentApi } from './index'
 
 export interface AppApi {
   ping(request: PingRequest): Promise<PingResponse>
@@ -14,8 +16,11 @@ export interface AppApi {
   knowledgeBases: KnowledgeBaseApi
   knowledgeDocuments?: KnowledgeDocumentApi
   bots?: BotApi
+  botMemories?: BotMemoryApi
+  memories?: BotMemoryApi
   conversation?: ConversationApi
   conversations?: ConversationApi
+  agents?: AgentApi
 }
 
 declare global {

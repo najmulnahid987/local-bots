@@ -187,6 +187,7 @@ export interface MessageMetadataDto {
   readonly citations?: readonly CitationDto[]
   readonly toolCalls?: readonly MessageToolCallDto[]
   readonly generation?: GenerationMetadataDto
+  readonly agentRunId?: string
 }
 
 /**
@@ -563,7 +564,8 @@ export const messageMetadataSchema = z
     modelId: z.string().trim().min(1).max(100).optional(),
     citations: z.array(citationDtoSchema).optional(),
     toolCalls: z.array(messageToolCallSchema).optional(),
-    generation: generationMetadataSchema.optional()
+    generation: generationMetadataSchema.optional(),
+    agentRunId: z.string().uuid().optional()
   })
   .strict()
 

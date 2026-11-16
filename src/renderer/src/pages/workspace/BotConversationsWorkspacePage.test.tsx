@@ -197,6 +197,22 @@ describe('Renderer: BotConversationsWorkspacePage & Navigation (Phase 7 Step 7.8
           headingPath: ['Financials', 'Executive Summary'],
           chunkIndex: 0
         }))
+      } as never,
+      agents: {
+        dispatchTask: vi.fn(async (req) => ({
+          accepted: true,
+          agentRunId: 'run-test-01',
+          status: 'queued' as const,
+          conversationId: req.conversationId,
+          botId: req.botId
+        })),
+        cancelTask: vi.fn(async () => ({ success: true, agentRunId: 'run-test-01' })),
+        getRun: vi.fn(),
+        listRuns: vi.fn(async () => ({ runs: [], total: 0 })),
+        listToolEvents: vi.fn(async () => ({ events: [], total: 0 })),
+        getApprovalDetails: vi.fn(),
+        respondToApproval: vi.fn(),
+        subscribeToTaskEvents: vi.fn(() => () => {})
       } as never
     }
   })
@@ -980,5 +996,125 @@ describe('Renderer: BotConversationsWorkspacePage & Navigation (Phase 7 Step 7.8
       expect(screen.queryByTestId('turn-error-alert')).toBeNull()
       expect(screen.queryByTestId('cancellation-notice')).toBeNull()
     })
+  })
+
+  it('24. dispatches agent task explicitly without triggering normal chat sendMessage', async () => {
+    renderPageWithRouter(`/knowledge-bases/${activeKbId}/bots/${activeBotId}/conversations`)
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`conversation-item-${sampleConv1.id}`)).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId(`conversation-item-${sampleConv1.id}`))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-mode-agent-btn')).toBeDefined()
+    })
+
+    // Switch to agent task mode
+    fireEvent.click(screen.getByTestId('composer-mode-agent-btn'))
+
+    const input = screen.getByTestId('message-input')
+    fireEvent.change(input, { target: { value: 'Audit fiscal contracts' } })
+
+    const dispatchBtn = screen.getByTestId('dispatch-task-btn')
+    fireEvent.click(dispatchBtn)
+
+    await waitFor(() => {
+      expect(window.api.agents!.dispatchTask).toHaveBeenCalledWith({
+        botId: activeBotId,
+        conversationId: sampleConv1.id,
+        taskPrompt: 'Audit fiscal contracts',
+        workspaceAccessRequested: false
+      })
+      expect(window.api.conversation!.sendMessage).not.toHaveBeenCalled()
+    })
+  })
+
+  it('25. renders active task activity timeline when an agent task is running', async () => {
+    renderPageWithRouter(`/knowledge-bases/${activeKbId}/bots/${activeBotId}/conversations`)
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`conversation-item-${sampleConv1.id}`)).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId(`conversation-item-${sampleConv1.id}`))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-mode-agent-btn')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByTestId('composer-mode-agent-btn'))
+    fireEvent.change(screen.getByTestId('message-input'), { target: { value: 'Run task' } })
+    fireEvent.click(screen.getByTestId('dispatch-task-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('active-task-timeline-container')).toBeDefined()
+      expect(screen.getByTestId('task-timeline-run-test-01')).toBeDefined()
+    })
+  })
+
+  it('26. renders distinct workspace file evidence and collapsible task activity on assistant message', async () => {
+    const taskMessage: MessageDto = {
+      id: 'msg-task-result',
+      conversationId: sampleConv1.id,
+      role: 'assistant',
+      content: 'I examined the workspace files and summarized the contracts.',
+      contentFormat: 'markdown',
+      metadata: {
+        agentRunId: 'run-test-01',
+        citations: [
+          {
+            citationNumber: 1,
+            sourceId: 'src-01',
+            chunkId: 'chunk-01',
+            fileName: 'q4_expenses.pdf',
+            fileType: 'pdf',
+            pageNumber: 2,
+            headingPath: ['Legal'],
+            chunkIndex: 0
+          }
+        ],
+        toolCalls: [
+          {
+            id: 'tc-01',
+            toolName: 'read_workspace_file',
+            status: 'completed',
+            argumentsSummary: '{"targetPath":"contracts/sla.md"}',
+            resultSummary: 'Read 25 lines.'
+          }
+        ]
+      },
+      tokenUsage: null,
+      createdAt: 1700000020000
+    }
+
+    mockMessagesList = [sampleMessage, taskMessage]
+
+    renderPageWithRouter(`/knowledge-bases/${activeKbId}/bots/${activeBotId}/conversations`)
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`conversation-item-${sampleConv1.id}`)).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId(`conversation-item-${sampleConv1.id}`))
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`message-item-${taskMessage.id}`)).toBeDefined()
+    })
+
+    // Knowledge base citations rendered
+    expect(screen.getByTestId(`citations-list-${taskMessage.id}`)).toBeDefined()
+
+    // Workspace evidence rendered distinctly
+    expect(screen.getByTestId(`workspace-evidence-${taskMessage.id}`)).toBeDefined()
+    expect(screen.getByText('contracts/sla.md')).toBeDefined()
+
+    // Collapsible task activity rendered
+    const toggleBtn = screen.getByTestId(`toggle-task-activity-${taskMessage.id}`)
+    expect(toggleBtn).toBeDefined()
+
+    // Click to expand tool execution cards
+    fireEvent.click(toggleBtn)
+
+    expect(screen.getByTestId(`task-activity-list-${taskMessage.id}`)).toBeDefined()
+    expect(screen.getByText('Read Workspace File')).toBeDefined()
   })
 })

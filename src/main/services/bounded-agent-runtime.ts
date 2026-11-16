@@ -96,13 +96,73 @@ export interface BoundedAgentRuntimeDependencies {
 }
 
 export interface BoundedAgentRunRequest {
+  readonly id?: string
   readonly botId: string
   readonly task: string
   readonly conversationId?: string | null
   readonly selectedModel?: string
   readonly maxIterations?: number
   readonly signal?: AbortSignal
+  readonly initialHistory?: readonly AgentMessage[]
 }
+
+export type AgentRuntimeEvent =
+  | {
+      readonly type: 'agent_run_started'
+      readonly agentRunId: string
+      readonly botId: string
+      readonly selectedModel: string
+    }
+  | {
+      readonly type: 'agent_iteration_started'
+      readonly agentRunId: string
+      readonly iteration: number
+      readonly maxIterations: number
+    }
+  | {
+      readonly type: 'tool_call_started'
+      readonly agentRunId: string
+      readonly toolEventId: string
+      readonly toolName: import('../../shared/agents').CanonicalBotTool
+      readonly argumentsSummary: string
+    }
+  | {
+      readonly type: 'tool_call_completed'
+      readonly agentRunId: string
+      readonly toolEventId: string
+      readonly toolName: import('../../shared/agents').CanonicalBotTool
+      readonly resultSummary: string
+    }
+  | {
+      readonly type: 'tool_call_failed'
+      readonly agentRunId: string
+      readonly toolEventId: string
+      readonly toolName: import('../../shared/agents').CanonicalBotTool
+      readonly errorMessage: string
+    }
+  | {
+      readonly type: 'agent_run_completed'
+      readonly agentRunId: string
+      readonly finalResponse: string
+      readonly iterations: number
+      readonly toolEventsCount: number
+      readonly citationsCount: number
+      readonly workspaceFilesCount: number
+    }
+  | {
+      readonly type: 'agent_run_failed'
+      readonly agentRunId: string
+      readonly error: {
+        readonly code: string
+        readonly message: string
+        readonly retryable?: boolean
+      }
+    }
+  | {
+      readonly type: 'agent_run_cancelled'
+      readonly agentRunId: string
+      readonly reason: string
+    }
 
 export interface BoundedAgentRunOptions {
   readonly toolTimeoutMs?: number
@@ -113,6 +173,7 @@ export interface BoundedAgentRunOptions {
   readonly modelContextLimit?: number
   readonly reservedOutputTokens?: number
   readonly safetyMarginTokens?: number
+  readonly onEvent?: (event: AgentRuntimeEvent) => void
 }
 
 export interface BoundedAgentRunResult {
@@ -310,6 +371,7 @@ export class BoundedAgentRuntime {
 
     // 5. Create persistent AgentRun in SQLite
     const agentRun = this.agentRunRepo.create({
+      id: request.id,
       botId: bot.id,
       conversationId: request.conversationId ?? null,
       selectedModel,
@@ -441,11 +503,21 @@ export class BoundedAgentRuntime {
     // 9. Initialize agent message history & provenance
     const systemPromptContent = buildSystemInstruction(bot.name, bot.systemPrompt, 'SUCCESS')
 
+    const initialMessages: AgentMessage[] = []
+    if (request.initialHistory && request.initialHistory.length > 0) {
+      for (const m of request.initialHistory) {
+        if (m.role !== 'system') {
+          initialMessages.push(m)
+        }
+      }
+    }
+
     const history: AgentMessage[] = [
       {
         role: 'system',
         content: systemPromptContent
       },
+      ...initialMessages,
       {
         role: 'user',
         content: trimmedTask
@@ -461,11 +533,25 @@ export class BoundedAgentRuntime {
     let loopError: BoundedAgentRuntimeError | undefined
 
     try {
+      options?.onEvent?.({
+        type: 'agent_run_started',
+        agentRunId: agentRun.id,
+        botId: bot.id,
+        selectedModel
+      })
+
       // 10. Execution Loop
       while (iterationCount < effectiveMaxIterations) {
         if (runAbortController.signal.aborted) {
           break
         }
+
+        options?.onEvent?.({
+          type: 'agent_iteration_started',
+          agentRunId: agentRun.id,
+          iteration: iterationCount + 1,
+          maxIterations: effectiveMaxIterations
+        })
 
         // Check context budget
         const estimatedTokens = this.estimateHistoryTokens(history)
@@ -649,6 +735,14 @@ export class BoundedAgentRuntime {
           this.toolEventRepo.updateStatus(toolEvent.id, 'running')
           activeToolEventId = toolEvent.id
 
+          options?.onEvent?.({
+            type: 'tool_call_started',
+            agentRunId: agentRun.id,
+            toolEventId: toolEvent.id,
+            toolName: toolEvent.toolName,
+            argumentsSummary: toolEvent.argumentsSummary
+          })
+
           // Execute tool with ToolRegistry
           const isSaveReport = normalizedName === 'save_report'
           const effectiveTimeoutMs = isSaveReport ? approvalTimeoutMs : toolTimeoutMs
@@ -671,6 +765,14 @@ export class BoundedAgentRuntime {
             // Mark tool completed
             this.toolEventRepo.markCompleted(toolEvent.id, execResult.resultSummary)
             activeToolEventId = undefined
+
+            options?.onEvent?.({
+              type: 'tool_call_completed',
+              agentRunId: agentRun.id,
+              toolEventId: toolEvent.id,
+              toolName: toolEvent.toolName,
+              resultSummary: execResult.resultSummary
+            })
 
             // Track provenance
             this.recordProvenance(
@@ -703,6 +805,14 @@ export class BoundedAgentRuntime {
 
             const safeMsg = sanitizeErrorForStorage(err)
             this.toolEventRepo.markFailed(toolEvent.id, safeMsg)
+
+            options?.onEvent?.({
+              type: 'tool_call_failed',
+              agentRunId: agentRun.id,
+              toolEventId: toolEvent.id,
+              toolName: toolEvent.toolName,
+              errorMessage: safeMsg
+            })
 
             // Map error to BoundedAgentRuntimeError
             let errorCode: BoundedAgentRuntimeErrorCode = 'TOOL_EXECUTION_FAILED'
@@ -748,6 +858,11 @@ export class BoundedAgentRuntime {
           }
         }
         this.agentRunRepo.markCancelled(agentRun.id)
+        options?.onEvent?.({
+          type: 'agent_run_cancelled',
+          agentRunId: agentRun.id,
+          reason: 'Agent run cancelled.'
+        })
         return {
           agentRunId: agentRun.id,
           botId: bot.id,
@@ -765,6 +880,14 @@ export class BoundedAgentRuntime {
       if (loopError) {
         const errorSummary = sanitizeErrorForStorage(loopError.message)
         this.agentRunRepo.markFailed(agentRun.id, errorSummary)
+        options?.onEvent?.({
+          type: 'agent_run_failed',
+          agentRunId: agentRun.id,
+          error: {
+            code: loopError.code,
+            message: errorSummary
+          }
+        })
         return {
           agentRunId: agentRun.id,
           botId: bot.id,
@@ -781,6 +904,15 @@ export class BoundedAgentRuntime {
 
       // Successful completion
       this.agentRunRepo.markCompleted(agentRun.id)
+      options?.onEvent?.({
+        type: 'agent_run_completed',
+        agentRunId: agentRun.id,
+        finalResponse: finalResponse ?? '',
+        iterations: iterationCount,
+        toolEventsCount: finalToolEvents.length,
+        citationsCount: validatedCitations.length,
+        workspaceFilesCount: uniqueWorkspaceFiles.length
+      })
       return {
         agentRunId: agentRun.id,
         botId: bot.id,

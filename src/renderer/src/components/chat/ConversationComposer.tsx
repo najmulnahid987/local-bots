@@ -1,29 +1,46 @@
 import { ReactElement, useState, useRef, KeyboardEvent } from 'react'
-import { Send, Loader2, Square } from 'lucide-react'
+import { Send, Loader2, Square, MessageSquare, Bot, Sparkles } from 'lucide-react'
+import type { BotDto } from '../../../../shared/bots'
+import { isBotToolEnabled } from '../../../../shared/agents'
 
 export interface ConversationComposerProps {
   readonly onSend: (content: string) => Promise<void>
+  readonly onDispatchTask?: (content: string, workspaceAccessRequested: boolean) => Promise<void>
   readonly onStop?: () => Promise<void>
   readonly isGenerating: boolean
+  readonly isTaskRunning?: boolean
   readonly isCancelling?: boolean
   readonly disabled?: boolean
   readonly placeholder?: string
+  readonly bot?: BotDto | null
 }
 
 export function ConversationComposer({
   onSend,
+  onDispatchTask,
   onStop,
   isGenerating,
+  isTaskRunning = false,
   isCancelling = false,
   disabled = false,
-  placeholder = 'Type a message... (Enter to send, Shift+Enter for newline)'
+  placeholder = 'Type a message... (Enter to send, Shift+Enter for newline)',
+  bot = null
 }: ConversationComposerProps): ReactElement {
   const [content, setContent] = useState<string>('')
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
+  const [mode, setMode] = useState<'chat' | 'agent'>('chat')
+  const [workspaceAccessRequested, setWorkspaceAccessRequested] = useState<boolean>(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
+  const isBusy = isGenerating || isTaskRunning || isSubmitting
   const isBlank = !content.trim()
-  const canSend = !disabled && !isGenerating && !isSubmitting && !isBlank
+  const canSend = !disabled && !isBusy && !isBlank
+
+  const hasWorkspaceTools = Boolean(
+    bot &&
+    (isBotToolEnabled(bot.enabledTools, 'search_workspace_files') ||
+      isBotToolEnabled(bot.enabledTools, 'read_workspace_file'))
+  )
 
   const handleSubmit = async (): Promise<void> => {
     if (!canSend) {
@@ -34,8 +51,13 @@ export function ConversationComposer({
     setIsSubmitting(true)
 
     try {
-      await onSend(trimmed)
-      // Only clear composer after send operation is accepted
+      if (mode === 'agent' && onDispatchTask) {
+        await onDispatchTask(trimmed, workspaceAccessRequested)
+      } else {
+        await onSend(trimmed)
+      }
+
+      // Only clear composer after send/dispatch operation is accepted
       setContent('')
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
@@ -63,6 +85,12 @@ export function ConversationComposer({
     }
   }
 
+  const activePlaceholder = disabled
+    ? 'Conversation input disabled'
+    : mode === 'agent'
+      ? `Assign an agent task to ${bot?.name ?? 'bot'}... (Enter to dispatch)`
+      : placeholder
+
   return (
     <div
       className="chat-composer-container"
@@ -76,6 +104,114 @@ export function ConversationComposer({
         gap: '8px'
       }}
     >
+      {/* Mode Selector Toggle (Chat vs Agent Task) */}
+      <div
+        className="composer-mode-selector"
+        data-testid="composer-mode-selector"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px'
+        }}
+      >
+        <button
+          type="button"
+          className={`btn btn-sm ${mode === 'chat' ? 'btn-primary' : 'btn-secondary'}`}
+          data-testid="composer-mode-chat-btn"
+          aria-pressed={mode === 'chat'}
+          onClick={() => setMode('chat')}
+          disabled={isBusy || disabled}
+          style={{
+            padding: '3px 10px',
+            fontSize: '11.5px',
+            borderRadius: '14px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}
+        >
+          <MessageSquare size={12} className="inline-icon" aria-hidden="true" />
+          <span>Chat</span>
+        </button>
+
+        <button
+          type="button"
+          className={`btn btn-sm ${mode === 'agent' ? 'btn-primary' : 'btn-secondary'}`}
+          data-testid="composer-mode-agent-btn"
+          aria-pressed={mode === 'agent'}
+          onClick={() => setMode('agent')}
+          disabled={isBusy || disabled}
+          style={{
+            padding: '3px 10px',
+            fontSize: '11.5px',
+            borderRadius: '14px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}
+        >
+          <Bot size={12} className="inline-icon" aria-hidden="true" />
+          <span>Agent Task</span>
+        </button>
+      </div>
+
+      {/* Agent Task Mode Option: Workspace Folder Authorization Toggle */}
+      {mode === 'agent' && (
+        <div
+          className="workspace-access-container"
+          data-testid="workspace-access-container"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            backgroundColor: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            fontSize: '12px'
+          }}
+        >
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              cursor: hasWorkspaceTools && !isBusy && !disabled ? 'pointer' : 'not-allowed',
+              color: hasWorkspaceTools ? '#1e293b' : '#94a3b8'
+            }}
+            data-testid="workspace-access-label"
+          >
+            <input
+              type="checkbox"
+              data-testid="workspace-access-checkbox"
+              checked={workspaceAccessRequested}
+              onChange={(e) => setWorkspaceAccessRequested(e.target.checked)}
+              disabled={!hasWorkspaceTools || isBusy || disabled}
+            />
+            <span style={{ fontWeight: 500 }}>Allow this task to inspect a selected folder</span>
+          </label>
+          {workspaceAccessRequested && hasWorkspaceTools ? (
+            <span
+              className="text-muted"
+              data-testid="workspace-access-notice"
+              style={{ fontSize: '11px', color: '#64748b', paddingLeft: '22px' }}
+            >
+              Opens native folder picker on your operating system. Access applies only to this agent
+              task.
+            </span>
+          ) : !hasWorkspaceTools ? (
+            <span
+              className="text-muted"
+              data-testid="workspace-tools-disabled-notice"
+              style={{ fontSize: '11px', color: '#94a3b8', paddingLeft: '22px' }}
+            >
+              (Bot has no workspace filesystem tools enabled in its configuration)
+            </span>
+          ) : null}
+        </div>
+      )}
+
+      {/* Input box */}
       <div
         className="chat-composer-box"
         style={{
@@ -94,12 +230,12 @@ export function ConversationComposer({
           ref={textareaRef}
           className="chat-composer-textarea"
           data-testid="message-input"
-          aria-label="Message composer input"
+          aria-label={mode === 'agent' ? 'Agent task composer input' : 'Message composer input'}
           value={content}
           onChange={(e) => handleInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={disabled || isGenerating || isSubmitting}
-          placeholder={disabled ? 'Conversation input disabled' : placeholder}
+          disabled={disabled || isBusy}
+          placeholder={activePlaceholder}
           rows={1}
           style={{
             flex: 1,
@@ -117,12 +253,12 @@ export function ConversationComposer({
           }}
         />
 
-        {isGenerating && onStop ? (
+        {(isGenerating || isTaskRunning) && onStop ? (
           <button
             type="button"
             className="btn btn-danger btn-sm chat-stop-btn"
             data-testid="stop-generation-btn"
-            aria-label="Stop generation"
+            aria-label={isTaskRunning ? 'Stop agent task' : 'Stop generation'}
             onClick={() => void onStop()}
             disabled={isCancelling}
             style={{
@@ -146,9 +282,9 @@ export function ConversationComposer({
         ) : (
           <button
             type="button"
-            className="btn btn-primary btn-sm chat-send-btn"
-            data-testid="send-message-btn"
-            aria-label="Send message"
+            className={`btn btn-sm ${mode === 'agent' ? 'btn-primary' : 'btn-primary'} chat-send-btn`}
+            data-testid={mode === 'agent' ? 'dispatch-task-btn' : 'send-message-btn'}
+            aria-label={mode === 'agent' ? 'Dispatch agent task' : 'Send message'}
             onClick={() => void handleSubmit()}
             disabled={!canSend}
             style={{
@@ -164,10 +300,12 @@ export function ConversationComposer({
           >
             {isSubmitting ? (
               <Loader2 size={14} className="spinner inline-icon" aria-hidden="true" />
+            ) : mode === 'agent' ? (
+              <Sparkles size={14} className="inline-icon" aria-hidden="true" />
             ) : (
               <Send size={14} className="inline-icon" aria-hidden="true" />
             )}
-            <span>Send</span>
+            <span>{mode === 'agent' ? 'Dispatch Task' : 'Send'}</span>
           </button>
         )}
       </div>
@@ -183,7 +321,11 @@ export function ConversationComposer({
           padding: '0 2px'
         }}
       >
-        <span>Press Enter to send, Shift+Enter for new line</span>
+        <span>
+          {mode === 'agent'
+            ? 'Press Enter to dispatch agent task, Shift+Enter for new line'
+            : 'Press Enter to send, Shift+Enter for new line'}
+        </span>
       </div>
     </div>
   )

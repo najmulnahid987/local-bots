@@ -598,6 +598,7 @@ export type AgentRun = AgentRunDto
 export type ToolEvent = ToolEventDto
 
 export interface CreateAgentRunRepositoryInput {
+  readonly id?: string
   readonly botId: string
   readonly conversationId?: string | null
   readonly selectedModel: string
@@ -621,4 +622,34 @@ export interface CreateToolEventRepositoryInput {
 export interface UpdateToolEventSummariesInput {
   readonly argumentsSummary?: string
   readonly resultSummary?: string
+}
+
+/**
+ * Repository contracts and domain types for Bot Memories.
+ */
+export interface BotMemory {
+  readonly id: string
+  readonly botId: string
+  readonly knowledgeBaseId: string
+  readonly memoryType: 'user_note' | 'pinned_instruction'
+  readonly content: string
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+export interface CreateBotMemoryRepositoryInput {
+  readonly id?: string
+  readonly botId: string
+  readonly knowledgeBaseId: string
+  readonly memoryType?: 'user_note' | 'pinned_instruction'
+  readonly content: string
+}
+
+export interface UpdateBotMemoryRepositoryInput {
+  readonly memoryType?: 'user_note' | 'pinned_instruction'
+  readonly content?: string
+}
+
+export interface ListBotMemoriesRepositoryOptions {
+  readonly memoryType?: 'user_note' | 'pinned_instruction'
 }

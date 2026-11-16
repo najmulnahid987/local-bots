@@ -14,6 +14,12 @@ import {
   registerFailingBotIpcHandlers,
   registerConversationIpcHandlers,
   registerFailingConversationIpcHandlers,
+  registerAgentIpcHandlers,
+  registerFailingAgentIpcHandlers,
+  registerBotMemoryIpcHandlers,
+  registerFailingBotMemoryIpcHandlers,
+  sanitizeBotMemoryErrorMessage,
+  sanitizeAgentErrorMessage,
   isTrustedRendererUrl
 } from './ipc'
 import { databaseManager } from './database/connection'
@@ -23,8 +29,24 @@ import { ProviderConnectionRepository } from './database/repositories/provider-c
 import { KnowledgeBaseRepository } from './database/repositories/knowledge-base-repository'
 import { KnowledgeSourceRepository } from './database/repositories/knowledge-source-repository'
 import { BotRepository } from './database/repositories/bot-repository'
+import { BotMemoryRepository } from './database/repositories/bot-memory-repository'
 import { ConversationRepository } from './database/repositories/conversation-repository'
 import { MessageRepository } from './database/repositories/message-repository'
+import { AgentRunRepository } from './database/repositories/agent-run-repository'
+import { ToolEventRepository } from './database/repositories/tool-event-repository'
+import { ToolRegistry } from './tools/tool-registry'
+import { SearchKnowledgeBaseTool } from './tools/knowledge-base/search-knowledge-base-tool'
+import { ReadKnowledgeSourceTool } from './tools/knowledge-base/read-knowledge-source-tool'
+import { ListKnowledgeSourcesTool } from './tools/knowledge-base/list-knowledge-sources-tool'
+import { SearchWorkspaceFilesTool } from './tools/workspace/search-workspace-files-tool'
+import { ReadWorkspaceFileTool } from './tools/workspace/read-workspace-file-tool'
+import { SaveReportTool } from './tools/report/save-report-tool'
+import { BotRagService } from './services/bot-rag-service'
+import { ApprovalController } from './services/approval-controller'
+import { WorkspaceFolderService } from './services/workspace-folder-service'
+import { AiSdkAgentModelStepExecutor } from './agents/ai-sdk-agent-model-step-executor'
+import { BoundedAgentRuntime } from './services/bounded-agent-runtime'
+import { AgentTaskService } from './services/agent-task-service'
 import { KnowledgeBaseManager } from './services/knowledge-base-manager'
 import { ActiveWorkspaceContext } from './services/active-workspace-context'
 import { BotManagerService } from './services/bot-manager'
@@ -322,9 +344,12 @@ app.whenReady().then(async () => {
 
   // Initialize ProviderManagerService and register provider IPC handlers
   let providerManager: ProviderManagerService | null = null
+  let vault: CredentialVault | null = null
+  let sourceRepo: KnowledgeSourceRepository | null = null
+  let turnService: ConversationTurnService | null = null
   try {
     const userDataPath = app.getPath('userData')
-    const vault = new CredentialVault({ vaultDir: join(userDataPath, 'credentials') })
+    vault = new CredentialVault({ vaultDir: join(userDataPath, 'credentials') })
     providerManager = new ProviderManagerService({
       credentialVault: vault,
       connectionRepo,
@@ -366,7 +391,7 @@ app.whenReady().then(async () => {
   // Initialize Document Ingestion and register Document IPC handlers
   try {
     const userDataPath = app.getPath('userData')
-    const sourceRepo = new KnowledgeSourceRepository(db)
+    sourceRepo = new KnowledgeSourceRepository(db)
     const storageManager = new DocumentStorageManager({ userDataPath })
     const ingestionService = new DocumentIngestionService({
       db,
@@ -441,6 +466,28 @@ app.whenReady().then(async () => {
     registerFailingBotIpcHandlers(() => mainWindow, 'Bot subsystem failed to initialize.')
   }
 
+  // Initialize BotMemoryRepository and register Bot Memory IPC handlers
+  try {
+    const botRepo = new BotRepository(db)
+    const botMemoryRepo = new BotMemoryRepository(db)
+    registerBotMemoryIpcHandlers({
+      getMainWindow: () => mainWindow,
+      botMemoryRepo,
+      botRepo,
+      activeContext: activeWorkspaceContext
+    })
+    console.log('[BOT_MEMORY_SUBSYSTEM_INITIALIZED]')
+  } catch (memError) {
+    console.error(
+      '[BOT_MEMORY_SUBSYSTEM_INITIALIZATION_FAILED]',
+      sanitizeBotMemoryErrorMessage(String(memError))
+    )
+    registerFailingBotMemoryIpcHandlers(
+      () => mainWindow,
+      'Bot memory subsystem failed to initialize.'
+    )
+  }
+
   // Initialize ConversationManagerService and ConversationTurnService, and register Conversation IPC handlers
   try {
     const botRepo = new BotRepository(db)
@@ -467,7 +514,7 @@ app.whenReady().then(async () => {
       messageRepo
     })
 
-    const turnService = new ConversationTurnService({
+    turnService = new ConversationTurnService({
       db,
       conversationRepo,
       messageRepo,
@@ -492,6 +539,96 @@ app.whenReady().then(async () => {
       () => mainWindow,
       'Conversation subsystem failed to initialize.'
     )
+  }
+
+  // Initialize Agent Subsystem and register Agent IPC handlers
+  try {
+    const userDataPath = app.getPath('userData')
+    if (!vault) {
+      vault = new CredentialVault({ vaultDir: join(userDataPath, 'credentials') })
+    }
+    const agentRunRepository = new AgentRunRepository(db)
+    const toolEventRepository = new ToolEventRepository(db)
+    const botRepo = new BotRepository(db)
+    const conversationRepo = new ConversationRepository(db)
+    const messageRepo = new MessageRepository(db)
+    const approvalController = new ApprovalController()
+    const workspaceFolderService = new WorkspaceFolderService()
+
+    const toolRegistry = new ToolRegistry({
+      botRepository: botRepo,
+      knowledgeBaseRepository: kbRepo
+    })
+
+    const botRagService = new BotRagService({
+      db,
+      botRepository: botRepo,
+      knowledgeBaseRepository: kbRepo,
+      knowledgeSourceRepository: sourceRepo ?? undefined
+    })
+
+    toolRegistry.register(new SearchKnowledgeBaseTool(botRagService))
+    if (sourceRepo) {
+      toolRegistry.register(new ReadKnowledgeSourceTool(sourceRepo))
+      toolRegistry.register(new ListKnowledgeSourcesTool(sourceRepo))
+    }
+    toolRegistry.register(new SearchWorkspaceFilesTool(workspaceFolderService))
+    toolRegistry.register(new ReadWorkspaceFileTool(workspaceFolderService))
+    toolRegistry.register(new SaveReportTool(approvalController, undefined, () => mainWindow))
+
+    const stepExecutor = new AiSdkAgentModelStepExecutor({
+      botRepository: botRepo,
+      connectionRepository: connectionRepo,
+      credentialVault: vault
+    })
+
+    const boundedAgentRuntime = new BoundedAgentRuntime({
+      botRepository: botRepo,
+      knowledgeBaseRepository: kbRepo,
+      agentRunRepository,
+      toolEventRepository,
+      toolRegistry,
+      stepExecutor,
+      approvalController,
+      workspaceFolderService,
+      conversationRepository: conversationRepo
+    })
+
+    const agentTaskService = new AgentTaskService({
+      botRepository: botRepo,
+      conversationRepository: conversationRepo,
+      messageRepository: messageRepo,
+      knowledgeBaseRepository: kbRepo,
+      providerConnectionRepository: connectionRepo,
+      credentialVault: vault,
+      boundedAgentRuntime,
+      toolRegistry,
+      approvalController,
+      workspaceFolderService,
+      activeWorkspaceContext,
+      turnService: turnService ?? undefined
+    })
+
+    registerAgentIpcHandlers({
+      getMainWindow: () => mainWindow,
+      agentTaskService,
+      agentRunRepository,
+      toolEventRepository,
+      botRepository: botRepo,
+      conversationRepository: conversationRepo,
+      approvalController,
+      workspaceFolderService,
+      activeContext: activeWorkspaceContext,
+      knowledgeBaseRepository: kbRepo,
+      providerConnectionRepository: connectionRepo
+    })
+    console.log('[AGENT_SUBSYSTEM_INITIALIZED]')
+  } catch (agentError) {
+    console.error(
+      '[AGENT_SUBSYSTEM_INITIALIZATION_FAILED]',
+      sanitizeAgentErrorMessage(String(agentError))
+    )
+    registerFailingAgentIpcHandlers(() => mainWindow, 'Agent subsystem failed to initialize.')
   }
 
   createWindow()

@@ -46,15 +46,19 @@ import {
   type WebFrameMainLike
 } from '../security'
 
-// IPC registry for ipcMain mock
-const mockIpcHandlers = new Map<
-  string,
-  (event: IpcSenderEventLike, ...args: unknown[]) => Promise<unknown>
->()
-
 // ipcRenderer listeners map
 type IpcListener = (event: unknown, ...args: unknown[]) => void
-const mockRendererListeners = new Map<string, IpcListener[]>()
+
+// IPC registry and listeners for Electron mocks hoisted before module imports
+const { mockIpcHandlers, mockRendererListeners } = vi.hoisted(() => {
+  return {
+    mockIpcHandlers: new Map<
+      string,
+      (event: IpcSenderEventLike, ...args: unknown[]) => Promise<unknown>
+    >(),
+    mockRendererListeners: new Map<string, Array<(event: unknown, ...args: unknown[]) => void>>()
+  }
+})
 
 vi.mock('electron', () => {
   return {

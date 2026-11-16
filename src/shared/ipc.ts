@@ -56,6 +56,8 @@ export type IpcChannel =
   | KbDocsIpcChannel
   | import('./bots').BotIpcChannel
   | import('./conversations').ConversationIpcChannel
+  | import('./agents').AgentIpcChannel
+  | import('./bot-memories').BotMemoryIpcChannel
 
 export * from './providers'
 export * from './knowledge-bases'
@@ -63,6 +65,7 @@ export * from './knowledge-documents'
 export * from './bots'
 export * from './conversations'
 export * from './agents'
+export * from './bot-memories'
 
 export interface PingRequest {
   requestId: string

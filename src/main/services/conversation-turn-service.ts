@@ -296,6 +296,33 @@ export class ConversationTurnService {
   }
 
   /**
+   * Acquires an in-memory lock for an agent task on a conversation.
+   * Throws CONCURRENT_TURN_ACTIVE if chat generation, an agent task, or deletion is in progress.
+   */
+  public acquireAgentTaskLock(conversationId: string): void {
+    if (this.activeTurns.has(conversationId)) {
+      throw new ConversationTurnError(
+        `A generation is already in progress for conversation '${conversationId}'.`,
+        'CONCURRENT_TURN_ACTIVE'
+      )
+    }
+    if (this.deletingConversations.has(conversationId)) {
+      throw new ConversationTurnError(
+        `Conversation '${conversationId}' is currently undergoing deletion.`,
+        'CONCURRENT_TURN_ACTIVE'
+      )
+    }
+    this.activeTurns.add(conversationId)
+  }
+
+  /**
+   * Releases an in-memory lock for an agent task on a conversation.
+   */
+  public releaseAgentTaskLock(conversationId: string): void {
+    this.activeTurns.delete(conversationId)
+  }
+
+  /**
    * Returns the number of currently active generation operations across all conversations.
    */
   public getActiveTurnCount(): number {

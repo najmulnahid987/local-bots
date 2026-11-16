@@ -71,7 +71,33 @@ import {
   type PublicConversationTurnEvent,
   type ConversationTurnResultDto,
   type DeleteConversationResultDto,
-  ConversationBridgeError
+  ConversationBridgeError,
+  AGENT_IPC_CHANNELS,
+  AgentBridgeError,
+  type DispatchAgentTaskRequest,
+  type DispatchAgentTaskResponse,
+  type CancelAgentTaskRequest,
+  type CancelAgentTaskResponse,
+  type GetAgentRunRequest,
+  type ListAgentRunsRequest,
+  type ListAgentRunsResponse,
+  type AgentRunDto,
+  type ListToolEventsRequest,
+  type ListToolEventsResponse,
+  type GetApprovalDetailsRequest,
+  type ApprovalDetailsDto,
+  type RespondToApprovalRequest,
+  type RespondToApprovalResponse,
+  type AgentStreamEvent,
+  BOT_MEMORY_IPC_CHANNELS,
+  BotMemoryBridgeError,
+  type BotMemoryApi,
+  type BotMemoryDto,
+  type CreateBotMemoryInput,
+  type UpdateBotMemoryInput,
+  type ListBotMemoriesInput,
+  type DeleteBotMemoryResultDto,
+  type BotMemoryCountDto
 } from '../shared/ipc'
 
 /**
@@ -901,6 +927,269 @@ export function createConversationApi(ipc: typeof ipcRenderer): ConversationApi 
   }
 }
 
+/**
+ * Parses and normalizes any IPC error rejection into a structured AgentBridgeError.
+ */
+export function normalizeAgentBridgeError(error: unknown): AgentBridgeError {
+  if (error instanceof AgentBridgeError) {
+    return error
+  }
+  const rawMsg = error instanceof Error ? error.message : String(error)
+  const jsonMatch = rawMsg.match(/\{[\s\S]*"code"[\s\S]*"message"[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        code?: string
+        message?: string
+        retryable?: boolean
+      }
+      if (parsed.code && parsed.message) {
+        return new AgentBridgeError(parsed.message, parsed.code, Boolean(parsed.retryable))
+      }
+    } catch {
+      // Fall through to default sanitization
+    }
+  }
+  return new AgentBridgeError(rawMsg, 'AGENT_BRIDGE_ERROR')
+}
+
+export interface AgentApi {
+  dispatchTask(request: DispatchAgentTaskRequest): Promise<DispatchAgentTaskResponse>
+  cancelTask(request: CancelAgentTaskRequest | string): Promise<CancelAgentTaskResponse>
+  getRun(request: GetAgentRunRequest | string): Promise<AgentRunDto>
+  listRuns(request: ListAgentRunsRequest | string): Promise<ListAgentRunsResponse>
+  listToolEvents(request: ListToolEventsRequest | string): Promise<ListToolEventsResponse>
+  getApprovalDetails(request: GetApprovalDetailsRequest): Promise<ApprovalDetailsDto>
+  respondToApproval(request: RespondToApprovalRequest): Promise<RespondToApprovalResponse>
+  subscribeToTaskEvents(agentRunId: string, onEvent: (event: AgentStreamEvent) => void): () => void
+}
+
+export function createAgentsApi(ipc: typeof ipcRenderer): AgentApi {
+  const eventSubscribers = new Map<string, Set<(event: AgentStreamEvent) => void>>()
+
+  // Listen for incoming stream ports transferred via AGENT_IPC_CHANNELS.STREAM_PORT
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onStreamPort = (event: any, data: unknown): void => {
+    const payload = data as { agentRunId?: string } | undefined
+    const port = event.ports && event.ports[0] ? (event.ports[0] as MessagePort) : null
+    if (payload?.agentRunId && port) {
+      const runId = payload.agentRunId
+      port.onmessage = (msgEvent: MessageEvent<AgentStreamEvent>): void => {
+        const streamEvent = msgEvent.data
+        const subscribers = eventSubscribers.get(runId)
+        if (subscribers) {
+          for (const subscriber of subscribers) {
+            try {
+              subscriber(streamEvent)
+            } catch {
+              // Ignore subscriber errors to protect message flow
+            }
+          }
+        }
+
+        const isTerminal =
+          streamEvent.type === 'agent_run_completed' ||
+          streamEvent.type === 'agent_run_failed' ||
+          streamEvent.type === 'agent_run_cancelled'
+
+        if (isTerminal) {
+          try {
+            port.close()
+          } catch {
+            // Ignore close errors
+          }
+          eventSubscribers.delete(runId)
+        }
+      }
+
+      if (typeof port.start === 'function') {
+        port.start()
+      }
+    }
+  }
+
+  ipc.on(AGENT_IPC_CHANNELS.STREAM_PORT, onStreamPort)
+
+  return {
+    dispatchTask: async (request: DispatchAgentTaskRequest): Promise<DispatchAgentTaskResponse> => {
+      try {
+        return await ipc.invoke(AGENT_IPC_CHANNELS.DISPATCH_TASK, request)
+      } catch (err) {
+        throw normalizeAgentBridgeError(err)
+      }
+    },
+
+    cancelTask: async (
+      request: CancelAgentTaskRequest | string
+    ): Promise<CancelAgentTaskResponse> => {
+      try {
+        const payload = typeof request === 'string' ? { agentRunId: request } : request
+        return await ipc.invoke(AGENT_IPC_CHANNELS.CANCEL_TASK, payload)
+      } catch (err) {
+        throw normalizeAgentBridgeError(err)
+      }
+    },
+
+    getRun: async (request: GetAgentRunRequest | string): Promise<AgentRunDto> => {
+      try {
+        const payload = typeof request === 'string' ? { agentRunId: request } : request
+        const res = (await ipc.invoke(AGENT_IPC_CHANNELS.GET_RUN, payload)) as {
+          run: AgentRunDto
+        }
+        return res.run
+      } catch (err) {
+        throw normalizeAgentBridgeError(err)
+      }
+    },
+
+    listRuns: async (request: ListAgentRunsRequest | string): Promise<ListAgentRunsResponse> => {
+      try {
+        const payload = typeof request === 'string' ? { conversationId: request } : request
+        return await ipc.invoke(AGENT_IPC_CHANNELS.LIST_RUNS, payload)
+      } catch (err) {
+        throw normalizeAgentBridgeError(err)
+      }
+    },
+
+    listToolEvents: async (
+      request: ListToolEventsRequest | string
+    ): Promise<ListToolEventsResponse> => {
+      try {
+        const payload = typeof request === 'string' ? { agentRunId: request } : request
+        return await ipc.invoke(AGENT_IPC_CHANNELS.LIST_TOOL_EVENTS, payload)
+      } catch (err) {
+        throw normalizeAgentBridgeError(err)
+      }
+    },
+
+    getApprovalDetails: async (request: GetApprovalDetailsRequest): Promise<ApprovalDetailsDto> => {
+      try {
+        return await ipc.invoke(AGENT_IPC_CHANNELS.GET_APPROVAL_DETAILS, request)
+      } catch (err) {
+        throw normalizeAgentBridgeError(err)
+      }
+    },
+
+    respondToApproval: async (
+      request: RespondToApprovalRequest
+    ): Promise<RespondToApprovalResponse> => {
+      try {
+        return await ipc.invoke(AGENT_IPC_CHANNELS.RESPOND_TO_APPROVAL, request)
+      } catch (err) {
+        throw normalizeAgentBridgeError(err)
+      }
+    },
+
+    subscribeToTaskEvents: (
+      agentRunId: string,
+      onEvent: (event: AgentStreamEvent) => void
+    ): (() => void) => {
+      let subscribers = eventSubscribers.get(agentRunId)
+      if (!subscribers) {
+        subscribers = new Set()
+        eventSubscribers.set(agentRunId, subscribers)
+      }
+      subscribers.add(onEvent)
+
+      return () => {
+        const current = eventSubscribers.get(agentRunId)
+        if (current) {
+          current.delete(onEvent)
+          if (current.size === 0) {
+            eventSubscribers.delete(agentRunId)
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Parses and normalizes any Bot Memory IPC error rejection into a structured BotMemoryBridgeError.
+ */
+export function normalizeBotMemoryBridgeError(error: unknown): BotMemoryBridgeError {
+  if (error instanceof BotMemoryBridgeError) {
+    return error
+  }
+  const rawMsg = error instanceof Error ? error.message : String(error)
+  const jsonMatch = rawMsg.match(/\{[\s\S]*"code"[\s\S]*"message"[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        code?: string
+        message?: string
+      }
+      if (parsed.code && parsed.message) {
+        return new BotMemoryBridgeError(parsed.message, parsed.code)
+      }
+    } catch {
+      // Fall through to default sanitization
+    }
+  }
+
+  return new BotMemoryBridgeError(rawMsg, 'BOT_MEMORY_ERROR')
+}
+
+/**
+ * Creates the typed BotMemoryApi bridge wrapping ipcRenderer.
+ * Dependency injection allows deterministic unit testing without native Electron handles.
+ */
+export function createBotMemoriesApi(ipc: typeof ipcRenderer): BotMemoryApi {
+  return {
+    create: async (input: CreateBotMemoryInput): Promise<BotMemoryDto> => {
+      try {
+        return await ipc.invoke(BOT_MEMORY_IPC_CHANNELS.CREATE, input)
+      } catch (err) {
+        throw normalizeBotMemoryBridgeError(err)
+      }
+    },
+
+    get: async (memoryId: string, botId: string): Promise<BotMemoryDto | null> => {
+      try {
+        return await ipc.invoke(BOT_MEMORY_IPC_CHANNELS.GET, { memoryId, botId })
+      } catch (err) {
+        throw normalizeBotMemoryBridgeError(err)
+      }
+    },
+
+    list: async (input: ListBotMemoriesInput): Promise<readonly BotMemoryDto[]> => {
+      try {
+        return await ipc.invoke(BOT_MEMORY_IPC_CHANNELS.LIST, input)
+      } catch (err) {
+        throw normalizeBotMemoryBridgeError(err)
+      }
+    },
+
+    update: async (
+      memoryId: string,
+      botId: string,
+      input: UpdateBotMemoryInput
+    ): Promise<BotMemoryDto> => {
+      try {
+        return await ipc.invoke(BOT_MEMORY_IPC_CHANNELS.UPDATE, { memoryId, botId, input })
+      } catch (err) {
+        throw normalizeBotMemoryBridgeError(err)
+      }
+    },
+
+    delete: async (memoryId: string, botId: string): Promise<DeleteBotMemoryResultDto> => {
+      try {
+        return await ipc.invoke(BOT_MEMORY_IPC_CHANNELS.DELETE, { memoryId, botId })
+      } catch (err) {
+        throw normalizeBotMemoryBridgeError(err)
+      }
+    },
+
+    count: async (botId: string): Promise<BotMemoryCountDto> => {
+      try {
+        return await ipc.invoke(BOT_MEMORY_IPC_CHANNELS.COUNT, { botId })
+      } catch (err) {
+        throw normalizeBotMemoryBridgeError(err)
+      }
+    }
+  }
+}
+
 // Bounded, typed APIs exposed to the Renderer
 export const api = {
   ping: (request: PingRequest): Promise<PingResponse> => {
@@ -910,8 +1199,11 @@ export const api = {
   knowledgeBases: createKnowledgeBasesApi(ipcRenderer),
   knowledgeDocuments: createKnowledgeDocumentsApi(ipcRenderer),
   bots: createBotsApi(ipcRenderer),
+  botMemories: createBotMemoriesApi(ipcRenderer),
+  memories: createBotMemoriesApi(ipcRenderer),
   conversation: createConversationApi(ipcRenderer),
-  conversations: createConversationApi(ipcRenderer)
+  conversations: createConversationApi(ipcRenderer),
+  agents: createAgentsApi(ipcRenderer)
 }
 
 // Expose safe, bounded APIs using contextBridge

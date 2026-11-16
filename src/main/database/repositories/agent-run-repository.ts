@@ -59,6 +59,9 @@ export class AgentRunRepository {
    * Creates a new agent run scoped authoritatively to a Bot and its parent Knowledge Base.
    */
   public create(input: CreateAgentRunRepositoryInput): AgentRunDto {
+    if (input.id !== undefined && input.id !== null) {
+      this.validateUuid(input.id, 'AgentRun')
+    }
     this.validateUuid(input.botId, 'Bot')
 
     if (input.conversationId !== undefined && input.conversationId !== null) {
@@ -112,7 +115,7 @@ export class AgentRunRepository {
         }
       }
 
-      const id = randomUUID()
+      const id = input.id ?? randomUUID()
       const now = Date.now()
       const dbStatus = toDbAgentRunStatus(initialAppStatus)
 
