@@ -7,7 +7,8 @@ import {
   Edit3,
   Archive,
   RotateCcw,
-  Trash2
+  Trash2,
+  Brain
 } from 'lucide-react'
 import type { BotDto } from '../../../../shared/bots'
 
@@ -19,6 +20,7 @@ export interface BotCardProps {
   readonly onArchive?: (bot: BotDto) => void
   readonly onUnarchive?: (bot: BotDto) => void
   readonly onDelete?: (bot: BotDto) => void
+  readonly onManageMemories?: (bot: BotDto) => void
   readonly className?: string
 }
 
@@ -43,6 +45,7 @@ export function BotCard({
   onArchive,
   onUnarchive,
   onDelete,
+  onManageMemories,
   className = ''
 }: BotCardProps): ReactElement {
   const isArchived = bot.status === 'archived'
@@ -60,7 +63,7 @@ export function BotCard({
     }
   }
 
-  const hasActions = Boolean(onEdit || onArchive || onUnarchive || onDelete)
+  const hasActions = Boolean(onEdit || onArchive || onUnarchive || onDelete || onManageMemories)
 
   return (
     <article
@@ -102,6 +105,22 @@ export function BotCard({
 
         {hasActions && (
           <div className="bot-card-actions" data-testid={`bot-card-actions-${bot.id}`}>
+            {onManageMemories && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                title="Manage Bot Memories"
+                aria-label={`Memories for ${bot.name}`}
+                data-testid={`bot-card-memories-btn-${bot.id}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onManageMemories(bot)
+                }}
+              >
+                <Brain size={13} aria-hidden="true" />
+                Memories
+              </button>
+            )}
             {onEdit && (
               <button
                 type="button"

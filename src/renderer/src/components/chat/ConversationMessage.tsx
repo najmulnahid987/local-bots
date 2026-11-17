@@ -1,5 +1,14 @@
 import { ReactElement, useState } from 'react'
-import { Bot, User, FileText, FolderSearch, Wrench, ChevronDown, ChevronRight } from 'lucide-react'
+import {
+  Bot,
+  User,
+  FileText,
+  FolderSearch,
+  Wrench,
+  ChevronDown,
+  ChevronRight,
+  Brain
+} from 'lucide-react'
 import type { MessageDto, CitationDto, MessageToolCallDto } from '../../../../shared/conversations'
 import type { CanonicalBotTool } from '../../../../shared/agents'
 import { formatTimestamp } from '../../utils/formatters'
@@ -10,6 +19,7 @@ export interface ConversationMessageProps {
   readonly message: MessageDto
   readonly botName?: string
   readonly onCitationClick?: (citation: CitationDto) => void
+  readonly onSaveAsMemory?: (content: string) => void
 }
 
 interface WorkspaceEvidenceItem {
@@ -53,7 +63,8 @@ function extractWorkspaceEvidence(
 export function ConversationMessage({
   message,
   botName = 'Assistant',
-  onCitationClick
+  onCitationClick,
+  onSaveAsMemory
 }: ConversationMessageProps): ReactElement {
   const [showTaskActivity, setShowTaskActivity] = useState<boolean>(false)
 
@@ -311,6 +322,39 @@ export function ConversationMessage({
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Action: Save Assistant Response/Findings as Bot Memory */}
+        {isAssistant && message.content && onSaveAsMemory && (
+          <div
+            style={{
+              marginTop: '8px',
+              display: 'flex',
+              justifyContent: 'flex-end'
+            }}
+          >
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              data-testid={`save-memory-btn-${message.id}`}
+              onClick={() => onSaveAsMemory(message.content)}
+              title="Save key findings from this response as Bot Memory"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontSize: '11px',
+                color: '#64748b',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                border: '1px solid transparent',
+                cursor: 'pointer'
+              }}
+            >
+              <Brain size={12} aria-hidden="true" />
+              <span>Save as Memory</span>
+            </button>
           </div>
         )}
       </div>

@@ -653,3 +653,33 @@ export interface UpdateBotMemoryRepositoryInput {
 export interface ListBotMemoriesRepositoryOptions {
   readonly memoryType?: 'user_note' | 'pinned_instruction'
 }
+
+/**
+ * Repository contracts and inputs for Import Recovery Journal.
+ */
+export interface CreateImportRecoveryJournalInput {
+  readonly id: string
+  readonly strategy: 'new' | 'merge' | 'replace'
+  readonly targetKnowledgeBaseId?: string | null
+  readonly targetKnowledgeBaseName: string
+  readonly archiveSha256: string
+  readonly archiveName: string
+  readonly state?: import('../../../shared/export-archive').ImportRecoveryState
+  readonly stagingDirName: string
+  readonly quarantineDirName?: string | null
+  readonly promotedFiles?: readonly string[]
+  readonly remapping?: Record<string, Record<string, string>>
+  readonly counts?: Record<string, number>
+  readonly errorMessage?: string | null
+}
+
+export interface UpdateImportRecoveryJournalInput {
+  readonly state?: import('../../../shared/export-archive').ImportRecoveryState
+  readonly strategy?: 'new' | 'merge' | 'replace'
+  readonly targetKnowledgeBaseId?: string | null
+  readonly quarantineDirName?: string | null
+  readonly promotedFiles?: readonly string[]
+  readonly remapping?: Record<string, Record<string, string>>
+  readonly counts?: Record<string, number>
+  readonly errorMessage?: string | null
+}

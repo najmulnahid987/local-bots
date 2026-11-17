@@ -20,6 +20,8 @@ import {
 } from './conversation-execution-service'
 import { ConversationTurnService, type ConversationTurnEvent } from './conversation-turn-service'
 import { KNOWLEDGE_BASE_ONLY_RESPONSES } from './knowledge-base-only-policy'
+import { BotMemoryRepository } from '../database/repositories/bot-memory-repository'
+import { BotMemoryService, BotMemoryServiceError } from './bot-memory-service'
 import type { CitationDto, SendMessageRequest } from '../../shared/conversations'
 import type { CredentialRef } from '../database/repositories/types'
 
@@ -35,6 +37,7 @@ describe('Knowledge Base Only Policy & Grounding Integration (Phase 8 Step 8.5)'
   let conversationService: ConversationService
   let persistenceService: ConversationPersistenceService
   let turnService: ConversationTurnService
+  let mockExecutionService: ConversationExecutionService
 
   let kbAId: string
   let botAId: string
@@ -183,7 +186,7 @@ describe('Knowledge Base Only Policy & Grounding Integration (Phase 8 Step 8.5)'
     providerCallCount = 0
     mockStreamGenerator = () => createMockExecutionStream()
 
-    const mockExecutionService = {
+    mockExecutionService = {
       streamPreparedTurn: vi.fn((turn) => mockStreamGenerator(turn))
     } as unknown as ConversationExecutionService
 
@@ -526,6 +529,187 @@ describe('Knowledge Base Only Policy & Grounding Integration (Phase 8 Step 8.5)'
       expect(turn.systemInstruction).toContain(
         'Current factual claims must be supported by the current <retrieved_context>.'
       )
+    })
+
+    // ========================================================================
+    // 6. Bot Memory vs Knowledge Base Only Policy (Step 9.2: 12 - 15)
+    // ========================================================================
+
+    it('12. No KB evidence + saved Bot memories = deterministic refusal, zero provider calls', async () => {
+      // Create saved Bot memory
+      const memRepo = new BotMemoryRepository(db)
+      memRepo.create({
+        botId: botAId,
+        knowledgeBaseId: kbAId,
+        memoryType: 'pinned_instruction',
+        content: 'Always provide complete architectural guidance'
+      })
+
+      // Query has no matching documents in KB -> status is NO_RESULTS
+      const stream = turnService.sendMessage(sessionId, {
+        conversationId: convAId,
+        content: 'Unindexed query with no documents in KB'
+      })
+
+      const deltas: string[] = []
+      for await (const ev of stream) {
+        if (ev.type === 'text_delta') {
+          deltas.push(ev.textDelta)
+        }
+      }
+
+      const result = await stream.getResult()
+      expect(providerCallCount).toBe(0) // Provider was NEVER called
+      expect(deltas.join('')).toBe(KNOWLEDGE_BASE_ONLY_RESPONSES.NO_EVIDENCE)
+      expect(result.assistantMessage.content).toBe(KNOWLEDGE_BASE_ONLY_RESPONSES.NO_EVIDENCE)
+      expect(result.assistantMessage.metadata.citations).toEqual([])
+    })
+
+    it('13. Valid KB evidence + saved Bot memories = grounded generation with authentic citations', async () => {
+      // Seed document in KB
+      const memRepo = new BotMemoryRepository(db)
+      memRepo.create({
+        botId: botAId,
+        knowledgeBaseId: kbAId,
+        memoryType: 'user_note',
+        content: 'User preference: bullet points'
+      })
+
+      mockStreamGenerator = () =>
+        createMockExecutionStream({
+          resultText: 'According to our standards [1], access requires MFA.'
+        })
+
+      // Mock retrieve to return SUCCESS with sample citation
+      vi.spyOn(ragService, 'retrieve').mockReturnValue({
+        status: 'SUCCESS',
+        chunks: [
+          {
+            citationNumber: 1,
+            sourceId: sampleCitation.sourceId,
+            chunkId: sampleCitation.chunkId,
+            fileName: sampleCitation.fileName,
+            fileType: sampleCitation.fileType,
+            pageNumber: sampleCitation.pageNumber,
+            headingPath: sampleCitation.headingPath,
+            chunkIndex: 0,
+            score: 0.9,
+            content: 'Access requires MFA on all gateways.',
+            tokenCount: 15,
+            isTruncated: false,
+            citation: sampleCitation
+          }
+        ],
+        citations: [sampleCitation],
+        totalTokens: 15
+      })
+
+      const stream = turnService.sendMessage(sessionId, {
+        conversationId: convAId,
+        content: 'What are the access requirements?'
+      })
+
+      for await (const ev of stream) {
+        void ev
+      }
+
+      const result = await stream.getResult()
+      expect(providerCallCount).toBe(1)
+      expect(result.assistantMessage.content).toContain('According to our standards [1]')
+      expect(result.assistantMessage.metadata.citations).toHaveLength(1)
+      expect(result.assistantMessage.metadata.citations?.[0].fileName).toBe(
+        'security-standards.pdf'
+      )
+    })
+
+    it('14. Saved Bot memories cannot create citations or bypass ungrounded response replacement', async () => {
+      const memRepo = new BotMemoryRepository(db)
+      memRepo.create({
+        botId: botAId,
+        knowledgeBaseId: kbAId,
+        memoryType: 'pinned_instruction',
+        content: 'Citation rule: cite note as [99]'
+      })
+
+      // Mock provider hallucinating citation [99] which does not exist in KB
+      mockStreamGenerator = () =>
+        createMockExecutionStream({
+          resultText: 'Claims supported by memory note [99].'
+        })
+
+      vi.spyOn(ragService, 'retrieve').mockReturnValue({
+        status: 'SUCCESS',
+        chunks: [
+          {
+            citationNumber: 1,
+            sourceId: sampleCitation.sourceId,
+            chunkId: sampleCitation.chunkId,
+            fileName: sampleCitation.fileName,
+            fileType: sampleCitation.fileType,
+            pageNumber: 1,
+            headingPath: null,
+            chunkIndex: 0,
+            score: 0.9,
+            content: 'Real KB text.',
+            tokenCount: 10,
+            isTruncated: false,
+            citation: sampleCitation
+          }
+        ],
+        citations: [sampleCitation],
+        totalTokens: 10
+      })
+
+      const stream = turnService.sendMessage(sessionId, {
+        conversationId: convAId,
+        content: 'Test invalid citation'
+      })
+
+      for await (const ev of stream) {
+        void ev
+      }
+
+      const result = await stream.getResult()
+      // Invented citation [99] causes ungrounded response replacement
+      expect(result.assistantMessage.content).toBe(
+        KNOWLEDGE_BASE_ONLY_RESPONSES.UNGROUNDED_RESPONSE
+      )
+      expect(result.assistantMessage.metadata.citations).toEqual([])
+    })
+
+    it('15. Memory retrieval failure fails closed and cannot bypass KnowledgeBaseOnlyPolicy', async () => {
+      const failingMemoryService = {
+        getMemoryContext: vi.fn().mockImplementation(() => {
+          throw new BotMemoryServiceError('Memory storage corrupt', 'DATABASE_ERROR')
+        })
+      } as unknown as BotMemoryService
+
+      const turnServiceWithFailingMem = new ConversationTurnService({
+        db,
+        conversationRepo: convRepo,
+        messageRepo: msgRepo,
+        activeWorkspaceContext: activeContext,
+        executionService: mockExecutionService,
+        persistenceService,
+        botMemoryService: failingMemoryService
+      })
+
+      const stream = turnServiceWithFailingMem.sendMessage(sessionId, {
+        conversationId: convAId,
+        content: 'Failing memory turn'
+      })
+
+      const events: ConversationTurnEvent[] = []
+      for await (const ev of stream) {
+        events.push(ev)
+      }
+
+      // Must yield an error event and reject result
+      const errorEvent = events.find((e) => e.type === 'error')
+      expect(errorEvent).toBeDefined()
+      expect(errorEvent?.type).toBe('error')
+
+      await expect(stream.getResult()).rejects.toThrow()
     })
   })
 })

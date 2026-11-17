@@ -13,6 +13,7 @@ export interface BotListProps {
   readonly onArchiveBot?: (bot: BotDto) => void
   readonly onUnarchiveBot?: (bot: BotDto) => void
   readonly onDeleteBot?: (bot: BotDto) => void
+  readonly onManageMemoriesBot?: (bot: BotDto) => void
   readonly emptyTitle?: string
   readonly emptyMessage?: string
   readonly className?: string
@@ -28,6 +29,7 @@ export function BotList({
   onArchiveBot,
   onUnarchiveBot,
   onDeleteBot,
+  onManageMemoriesBot,
   emptyTitle,
   emptyMessage,
   className = ''
@@ -104,6 +106,7 @@ export function BotList({
             onArchive={onArchiveBot}
             onUnarchive={onUnarchiveBot}
             onDelete={onDeleteBot}
+            onManageMemories={onManageMemoriesBot}
           />
         </div>
       ))}

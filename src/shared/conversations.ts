@@ -15,6 +15,7 @@ export const CONVERSATION_IPC_CHANNELS = {
   GET_MESSAGES: 'conversation:get-messages',
   RENAME: 'conversation:rename',
   DELETE: 'conversation:delete',
+  GET_DELETION_PREVIEW: 'conversation:get-deletion-preview',
   SEND_MESSAGE: 'conversation:send-message',
   RETRY_LAST_USER_MESSAGE: 'conversation:retry-last-user-message',
   CANCEL_GENERATION: 'conversation:cancel-generation',
@@ -340,6 +341,7 @@ export interface ConversationApi {
   deleteConversation(
     request: DeleteConversationIpcRequest | string
   ): Promise<DeleteConversationResultDto>
+  getDeletionPreview?(conversationId: string): Promise<import('./deletion').DeletionPreviewDto>
   sendMessage(
     request: SendMessageRequest & { requestId?: string },
     onEvent?: (event: PublicConversationTurnEvent) => void

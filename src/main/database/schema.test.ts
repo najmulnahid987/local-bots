@@ -48,8 +48,8 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     expect(migrationRow.applied_at).toBeGreaterThan(0)
   })
 
-  // Test B — Verify all 11 core tables exist
-  it('Test B: creates all 11 core application relational tables', () => {
+  // Test B — Verify all 13 core tables exist
+  it('Test B: creates all 13 core application relational tables', () => {
     runMigrations(db, migrations)
 
     const expectedTables = [
@@ -58,6 +58,8 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'bot_memories',
       'bots',
       'conversations',
+      'deletion_recovery_journal',
+      'import_recovery_journal',
       'knowledge_bases',
       'knowledge_chunks',
       'knowledge_sources',
@@ -77,8 +79,8 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     expect(actualTables).toEqual(expectedTables)
   })
 
-  // Test C — Verify all 19 indexes exist
-  it('Test C: creates all 19 explicit performance indexes', () => {
+  // Test C — Verify all 26 indexes exist
+  it('Test C: creates all 26 explicit performance indexes', () => {
     runMigrations(db, migrations)
 
     const expectedIndexes = [
@@ -92,6 +94,12 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'idx_conversations_bot',
       'idx_conversations_kb',
       'idx_conversations_updated',
+      'idx_deletion_recovery_journal_created_at',
+      'idx_deletion_recovery_journal_entity',
+      'idx_deletion_recovery_journal_state',
+      'idx_import_recovery_journal_created_at',
+      'idx_import_recovery_journal_state',
+      'idx_import_recovery_journal_target_kb',
       'idx_knowledge_bases_created_at',
       'idx_knowledge_chunks_kb',
       'idx_knowledge_chunks_source',
@@ -939,13 +947,13 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       expect(setting).toBeDefined()
       expect(setting.value).toBe('My Persistent Workspace')
 
-      // Verify all 11 tables still exist
+      // Verify all 13 tables still exist
       const tableCount = db2
         .prepare(
           "SELECT count(*) as c FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations' AND name NOT LIKE 'knowledge_fts%'"
         )
         .get() as { c: number }
-      expect(tableCount.c).toBe(11)
+      expect(tableCount.c).toBe(13)
 
       manager.close()
     } finally {

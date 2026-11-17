@@ -52,6 +52,7 @@ const REQUIRED_APPLICATION_TABLES: readonly string[] = [
   'bot_memories',
   'bots',
   'conversations',
+  'import_recovery_journal',
   'knowledge_bases',
   'knowledge_chunks',
   'knowledge_sources',

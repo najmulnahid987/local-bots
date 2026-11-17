@@ -30,6 +30,20 @@ export type BotMemoryType = (typeof BOT_MEMORY_TYPES)[number]
 export const MAX_BOT_MEMORY_CONTENT_LENGTH = 10_000
 
 /**
+ * Dedicated maximum token budget for Bot memories in prompt construction (1,500 tokens).
+ */
+export const MAX_BOT_MEMORY_CONTEXT_TOKENS = 1500
+
+/**
+ * Standard project token estimator: ~4 characters per token (Math.ceil(length / 4)).
+ * Pure, side-effect-free, and consistent across Main and Renderer layers.
+ */
+export function estimateTokenCount(text: string): number {
+  if (!text || text.length === 0) return 0
+  return Math.ceil(text.length / 4)
+}
+
+/**
  * Structured bridge error thrown by the Bot Memories Preload bridge.
  */
 export class BotMemoryBridgeError extends Error {

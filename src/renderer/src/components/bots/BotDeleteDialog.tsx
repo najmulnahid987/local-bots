@@ -1,14 +1,15 @@
-import { ReactElement, useState, FormEvent, KeyboardEvent } from 'react'
+import { ReactElement, useState, useEffect, FormEvent, KeyboardEvent } from 'react'
 import { X, Loader2, Trash2, AlertTriangle, ShieldCheck } from 'lucide-react'
 import type { BotDto, DeleteBotResultDto } from '../../../../shared/bots'
 import { BotBridgeError } from '../../../../shared/bots'
+import type { DeletionPreviewDto } from '../../../../shared/deletion'
 
 export interface BotDeleteDialogProps {
   readonly isOpen: boolean
   readonly bot: BotDto | null
   readonly onClose: () => void
   readonly onSuccess?: (result: DeleteBotResultDto) => void
-  readonly onDelete?: (botId: string) => Promise<DeleteBotResultDto>
+  readonly onDelete?: (botId: string, confirmName?: string) => Promise<DeleteBotResultDto>
 }
 
 function sanitizeErrorMessage(err: unknown): string {
@@ -35,31 +36,78 @@ export function BotDeleteDialog({
   const [confirmName, setConfirmName] = useState<string>('')
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [preview, setPreview] = useState<DeletionPreviewDto | null>(null)
+  const [isLoadingPreview, setIsLoadingPreview] = useState<boolean>(false)
+
+  useEffect(() => {
+    if (!isOpen || !bot) return
+
+    let isCancelled = false
+    const loadPreview = async (): Promise<void> => {
+      setIsLoadingPreview(true)
+      try {
+        if (window.api?.deletion?.getPreview) {
+          const res = await window.api.deletion.getPreview('bot', bot.id)
+          if (!isCancelled) setPreview(res)
+        } else if (window.api?.bots?.getDeletionPreview) {
+          const res = await window.api.bots.getDeletionPreview(bot.id)
+          if (!isCancelled) setPreview(res)
+        }
+      } catch {
+        // Fall back gracefully
+      } finally {
+        if (!isCancelled) setIsLoadingPreview(false)
+      }
+    }
+
+    void loadPreview()
+    return () => {
+      isCancelled = true
+    }
+  }, [isOpen, bot])
 
   if (!isOpen || !bot) return null
 
   const isConfirmed = confirmName.trim() === bot.name.trim()
+  const isOperationBlocked = preview?.isBlocked ?? false
+
+  const handleClose = (): void => {
+    if (isSubmitting) return
+    setConfirmName('')
+    setErrorMessage(null)
+    setPreview(null)
+    onClose()
+  }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key === 'Escape' && !isSubmitting) {
-      onClose()
+      handleClose()
     }
   }
 
   const handleDelete = async (e: FormEvent): Promise<void> => {
     e.preventDefault()
-    if (!isConfirmed || isSubmitting) return
+    if (!isConfirmed || isSubmitting || isOperationBlocked) return
 
     setIsSubmitting(true)
     setErrorMessage(null)
 
     try {
-      const executeDelete = onDelete ?? window.api?.bots?.delete
-      if (!executeDelete) {
+      let result: DeleteBotResultDto
+      if (onDelete) {
+        result = await onDelete(bot.id)
+      } else if (window.api?.deletion?.deleteEntity) {
+        const res = await window.api.deletion.deleteEntity({
+          entityType: 'bot',
+          entityId: bot.id,
+          confirmName
+        })
+        result = { success: res.success, botId: res.entityId }
+      } else if (window.api?.bots?.delete) {
+        result = await window.api.bots.delete(bot.id)
+      } else {
         throw new BotBridgeError('Bot API is unavailable', 'API_UNAVAILABLE')
       }
-
-      const result = await executeDelete(bot.id)
 
       if (result.success) {
         if (onSuccess) {
@@ -101,7 +149,7 @@ export function BotDeleteDialog({
           <button
             type="button"
             className="modal-close-button"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={isSubmitting}
             aria-label="Close dialog"
             data-testid="close-delete-bot-dialog-btn"
@@ -125,6 +173,36 @@ export function BotDeleteDialog({
               </div>
             )}
 
+            {isLoadingPreview && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  fontSize: '12px',
+                  color: 'var(--color-text-secondary)',
+                  marginBottom: '14px'
+                }}
+              >
+                <Loader2 size={14} className="spinner inline-icon" aria-hidden="true" />
+                <span>Analyzing Bot dependencies...</span>
+              </div>
+            )}
+
+            {preview?.isBlocked && (
+              <div
+                className="form-alert form-alert-error"
+                role="alert"
+                data-testid="delete-bot-blocked-alert"
+                style={{ marginBottom: '14px' }}
+              >
+                <span>
+                  {preview.blockReason ??
+                    'Cannot delete Bot while active operations or generations are running.'}
+                </span>
+              </div>
+            )}
+
             {/* Permanent CASCADE Deletion Warning Box */}
             <div className="removal-warning-box" style={{ marginBottom: '14px' }}>
               <AlertTriangle size={24} className="warning-box-icon" aria-hidden="true" />
@@ -137,10 +215,34 @@ export function BotDeleteDialog({
                   will be permanently deleted:
                 </p>
                 <ul className="delete-scope-list" style={{ color: '#991b1b', marginTop: '6px' }}>
-                  <li>All conversation threads associated with this Bot.</li>
-                  <li>All user prompts and assistant message histories.</li>
-                  <li>All autonomous agent execution runs and recorded tool invocation events.</li>
-                  <li>All persistent Bot memories and task state.</li>
+                  <li>
+                    All conversation threads associated with this Bot
+                    {preview?.dependentCounts.conversations !== undefined
+                      ? ` (${preview.dependentCounts.conversations} threads)`
+                      : ''}
+                    .
+                  </li>
+                  <li>
+                    All user prompts and assistant message histories
+                    {preview?.dependentCounts.messages !== undefined
+                      ? ` (${preview.dependentCounts.messages} messages)`
+                      : ''}
+                    .
+                  </li>
+                  <li>
+                    All autonomous agent execution runs and recorded tool invocation events
+                    {preview?.dependentCounts.agentRuns !== undefined
+                      ? ` (${preview.dependentCounts.agentRuns} runs, ${preview.dependentCounts.toolEvents ?? 0} events)`
+                      : ''}
+                    .
+                  </li>
+                  <li>
+                    All persistent Bot memories and task state
+                    {preview?.dependentCounts.memories !== undefined
+                      ? ` (${preview.dependentCounts.memories} memories)`
+                      : ''}
+                    .
+                  </li>
                 </ul>
               </div>
             </div>
@@ -207,7 +309,7 @@ export function BotDeleteDialog({
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={onClose}
+              onClick={handleClose}
               disabled={isSubmitting}
               data-testid="delete-bot-cancel-btn"
             >
@@ -216,7 +318,7 @@ export function BotDeleteDialog({
             <button
               type="submit"
               className="btn btn-danger"
-              disabled={!isConfirmed || isSubmitting}
+              disabled={!isConfirmed || isSubmitting || isOperationBlocked}
               data-testid="delete-bot-confirm-btn"
             >
               {isSubmitting ? (

@@ -5,6 +5,7 @@ import {
   updateKnowledgeBaseRequestSchema,
   knowledgeBaseListRequestSchema
 } from '../../shared/knowledge-bases'
+import { executeImportRequestSchema, cancelImportRequestSchema } from '../../shared/export-archive'
 
 /**
  * Strips raw filesystem paths or internal storage references from error strings.
@@ -60,6 +61,22 @@ export const knowledgeBaseOverviewIpcSchema = z
   .strict()
 
 export const knowledgeBaseListIpcSchema = knowledgeBaseListRequestSchema
+
+export const knowledgeBaseExportIpcSchema = z
+  .object({
+    id: knowledgeBaseIdSchema.optional(),
+    knowledgeBaseId: knowledgeBaseIdSchema.optional()
+  })
+  .strict()
+  .refine((data) => Boolean(data.id || data.knowledgeBaseId), {
+    message: 'Either id or knowledgeBaseId must be provided for export.'
+  })
+  .transform((data) => ({
+    knowledgeBaseId: (data.knowledgeBaseId ?? data.id)!
+  }))
+
+export const knowledgeBaseImportExecuteIpcSchema = executeImportRequestSchema
+export const knowledgeBaseImportCancelIpcSchema = cancelImportRequestSchema
 
 /**
  * Validates a raw IPC payload using a strict Zod schema.

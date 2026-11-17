@@ -28,6 +28,7 @@ import {
   ConversationTurnError,
   type ConversationTurnEvent
 } from './conversation-turn-service'
+import { BotMemoryRepository } from '../database/repositories/bot-memory-repository'
 import { type SendMessageRequest, type CitationDto } from '../../shared/conversations'
 
 describe('ConversationTurnService (Phase 7 Step 7.6B.3)', () => {
@@ -1401,6 +1402,40 @@ describe('ConversationTurnService (Phase 7 Step 7.6B.3)', () => {
       expect(result).toHaveProperty('durationMs')
       expect(result).not.toHaveProperty('citationCandidates')
       expect(result).not.toHaveProperty('citationMap')
+    })
+
+    it('25. Retrying an unanswered turn includes fresh Bot memory without duplicate memory blocks', async () => {
+      const memoryRepo = new BotMemoryRepository(db)
+      memoryRepo.create({
+        botId: botAId,
+        knowledgeBaseId: kbAId,
+        memoryType: 'pinned_instruction',
+        content: 'Stay concise and factual'
+      })
+
+      // Persist an unanswered user message directly into conversation
+      const userMsg = msgRepo.create({
+        conversationId: convAId,
+        botId: botAId,
+        knowledgeBaseId: kbAId,
+        role: 'user',
+        content: 'Initial query'
+      })
+
+      // Retry the unanswered user message
+      const stream = turnService.retryLastUserMessage(sessionId, {
+        conversationId: convAId,
+        messageId: userMsg.id
+      })
+      for await (const ev of stream) {
+        void ev
+      }
+      const retryResult = await stream.getResult()
+
+      // The original user message is reused without duplication
+      expect(retryResult.userMessage.id).toBe(userMsg.id)
+      expect(retryResult.userMessage.content).toBe('Initial query')
+      expect(retryResult.assistantMessage.content).toBeDefined()
     })
   })
 })

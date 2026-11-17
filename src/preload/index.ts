@@ -31,6 +31,12 @@ import {
   type UpdateKnowledgeBaseRequest,
   type KnowledgeBaseListRequest,
   type DeleteKnowledgeBaseResult,
+  type ExportKnowledgeBaseResultDto,
+  type ImportPreviewResultDto,
+  type ExecuteImportRequest,
+  type ExecuteImportResultDto,
+  type CancelImportRequest,
+  type CancelImportResultDto,
   KnowledgeBaseBridgeError,
   type KnowledgeDocumentApi,
   type KnowledgeSourceDto,
@@ -97,7 +103,25 @@ import {
   type UpdateBotMemoryInput,
   type ListBotMemoriesInput,
   type DeleteBotMemoryResultDto,
-  type BotMemoryCountDto
+  type BotMemoryCountDto,
+  DIAGNOSTICS_IPC_CHANNELS,
+  DiagnosticsBridgeError,
+  type DiagnosticsApi,
+  type DatabaseHealthDto,
+  type DiagnosticsExportResultDto,
+  DELETION_IPC_CHANNELS,
+  DeletionBridgeError,
+  type DeletionApi,
+  type DeletableEntityType,
+  type DeletionPreviewDto,
+  type DeleteEntityRequest,
+  type DeleteEntityResultDto,
+  PRIVACY_IPC_CHANNELS,
+  PrivacyBridgeError,
+  type PrivacyApi,
+  type LocalStorageInfoDto,
+  type OpenStorageFolderResponse,
+  type StorageTarget
 } from '../shared/ipc'
 
 /**
@@ -397,9 +421,49 @@ export function createKnowledgeBasesApi(ipc: typeof ipcRenderer): KnowledgeBaseA
       }
     },
 
+    getDeletionPreview: async (id: string): Promise<DeletionPreviewDto> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.GET_DELETION_PREVIEW, { id })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
     getOverview: async (id: string): Promise<KnowledgeBaseOverviewDto> => {
       try {
         return await ipc.invoke(KB_IPC_CHANNELS.GET_OVERVIEW, { id })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    export: async (id: string): Promise<ExportKnowledgeBaseResultDto> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.EXPORT, { id })
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    importSelectAndPreview: async (): Promise<ImportPreviewResultDto> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.IMPORT_SELECT_AND_PREVIEW)
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    importExecute: async (request: ExecuteImportRequest): Promise<ExecuteImportResultDto> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.IMPORT_EXECUTE, request)
+      } catch (err) {
+        throw normalizeKnowledgeBaseBridgeError(err)
+      }
+    },
+
+    importCancel: async (request: CancelImportRequest): Promise<CancelImportResultDto> => {
+      try {
+        return await ipc.invoke(KB_IPC_CHANNELS.IMPORT_CANCEL, request)
       } catch (err) {
         throw normalizeKnowledgeBaseBridgeError(err)
       }
@@ -534,6 +598,15 @@ export function createKnowledgeDocumentsApi(ipc: typeof ipcRenderer): KnowledgeD
       } catch (err) {
         throw normalizeKnowledgeDocumentBridgeError(err)
       }
+    },
+
+    getDeletionPreview: async (request: { id: string } | string): Promise<DeletionPreviewDto> => {
+      try {
+        const id = typeof request === 'string' ? request : request.id
+        return await ipc.invoke(KB_DOCS_IPC_CHANNELS.GET_DELETION_PREVIEW, { id })
+      } catch (err) {
+        throw normalizeKnowledgeDocumentBridgeError(err)
+      }
     }
   }
 }
@@ -621,6 +694,14 @@ export function createBotsApi(ipc: typeof ipcRenderer): BotApi {
     delete: async (botId: string): Promise<DeleteBotResultDto> => {
       try {
         return await ipc.invoke(BOT_IPC_CHANNELS.DELETE, { id: botId })
+      } catch (err) {
+        throw normalizeBotBridgeError(err)
+      }
+    },
+
+    getDeletionPreview: async (id: string): Promise<DeletionPreviewDto> => {
+      try {
+        return await ipc.invoke(BOT_IPC_CHANNELS.GET_DELETION_PREVIEW, { id })
       } catch (err) {
         throw normalizeBotBridgeError(err)
       }
@@ -718,6 +799,14 @@ export function createConversationApi(ipc: typeof ipcRenderer): ConversationApi 
       try {
         const payload = typeof request === 'string' ? { conversationId: request } : request
         return await ipc.invoke(CONVERSATION_IPC_CHANNELS.DELETE, payload)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    getDeletionPreview: async (id: string): Promise<DeletionPreviewDto> => {
+      try {
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.GET_DELETION_PREVIEW, { id })
       } catch (err) {
         throw normalizeConversationBridgeError(err)
       }
@@ -1190,6 +1279,166 @@ export function createBotMemoriesApi(ipc: typeof ipcRenderer): BotMemoryApi {
   }
 }
 
+/**
+ * Parses and normalizes any IPC error rejection into a structured DiagnosticsBridgeError.
+ */
+export function normalizeDiagnosticsBridgeError(error: unknown): DiagnosticsBridgeError {
+  if (error instanceof DiagnosticsBridgeError) {
+    return error
+  }
+  const rawMsg = error instanceof Error ? error.message : String(error)
+  const jsonMatch = rawMsg.match(/\{[\s\S]*"code"[\s\S]*"message"[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        code?: string
+        message?: string
+      }
+      if (parsed.code && parsed.message) {
+        return new DiagnosticsBridgeError(parsed.message, parsed.code)
+      }
+    } catch {
+      // Fall through to default sanitization
+    }
+  }
+
+  return new DiagnosticsBridgeError(rawMsg, 'DIAGNOSTICS_ERROR')
+}
+
+/**
+ * Creates the typed DiagnosticsApi bridge wrapping ipcRenderer.
+ * Dependency injection allows deterministic unit testing without native Electron handles.
+ */
+export function createDiagnosticsApi(ipc: typeof ipcRenderer): DiagnosticsApi {
+  return {
+    getDatabaseHealth: async (): Promise<DatabaseHealthDto> => {
+      try {
+        return await ipc.invoke(DIAGNOSTICS_IPC_CHANNELS.GET_DATABASE_HEALTH)
+      } catch (err) {
+        throw normalizeDiagnosticsBridgeError(err)
+      }
+    },
+
+    runIntegrityCheck: async (): Promise<DatabaseHealthDto> => {
+      try {
+        return await ipc.invoke(DIAGNOSTICS_IPC_CHANNELS.RUN_INTEGRITY_CHECK)
+      } catch (err) {
+        throw normalizeDiagnosticsBridgeError(err)
+      }
+    },
+
+    exportDiagnostics: async (): Promise<DiagnosticsExportResultDto> => {
+      try {
+        return await ipc.invoke(DIAGNOSTICS_IPC_CHANNELS.EXPORT_DIAGNOSTICS)
+      } catch (err) {
+        throw normalizeDiagnosticsBridgeError(err)
+      }
+    }
+  }
+}
+
+/**
+ * Parses and normalizes any Deletion IPC error rejection into a structured DeletionBridgeError.
+ */
+export function normalizeDeletionBridgeError(error: unknown): DeletionBridgeError {
+  if (error instanceof DeletionBridgeError) {
+    return error
+  }
+  const rawMsg = error instanceof Error ? error.message : String(error)
+  const jsonMatch = rawMsg.match(/\{[\s\S]*"code"[\s\S]*"message"[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        code?: string
+        message?: string
+      }
+      if (parsed.code && parsed.message) {
+        return new DeletionBridgeError(parsed.message, parsed.code)
+      }
+    } catch {
+      // Fall through to default sanitization
+    }
+  }
+
+  return new DeletionBridgeError(rawMsg, 'DELETION_ERROR')
+}
+
+/**
+ * Creates the typed DeletionApi bridge wrapping ipcRenderer.
+ * Dependency injection allows deterministic unit testing without native Electron handles.
+ */
+export function createDeletionApi(ipc: typeof ipcRenderer): DeletionApi {
+  return {
+    getPreview: async (
+      entityType: DeletableEntityType,
+      entityId: string
+    ): Promise<DeletionPreviewDto> => {
+      try {
+        return await ipc.invoke(DELETION_IPC_CHANNELS.GET_PREVIEW, { entityType, entityId })
+      } catch (err) {
+        throw normalizeDeletionBridgeError(err)
+      }
+    },
+
+    deleteEntity: async (request: DeleteEntityRequest): Promise<DeleteEntityResultDto> => {
+      try {
+        return await ipc.invoke(DELETION_IPC_CHANNELS.DELETE_ENTITY, request)
+      } catch (err) {
+        throw normalizeDeletionBridgeError(err)
+      }
+    }
+  }
+}
+
+/**
+ * Normalizes any error thrown during Privacy IPC invocations into a structured PrivacyBridgeError.
+ */
+export function normalizePrivacyBridgeError(error: unknown): PrivacyBridgeError {
+  if (error instanceof PrivacyBridgeError) {
+    return error
+  }
+  const rawMsg = error instanceof Error ? error.message : String(error)
+  const jsonMatch = rawMsg.match(/\{[\s\S]*"code"[\s\S]*"message"[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        code?: string
+        message?: string
+      }
+      if (parsed.code && parsed.message) {
+        return new PrivacyBridgeError(parsed.message, parsed.code)
+      }
+    } catch {
+      // Fall through to default sanitization
+    }
+  }
+
+  return new PrivacyBridgeError(rawMsg, 'PRIVACY_ERROR')
+}
+
+/**
+ * Creates the typed PrivacyApi bridge wrapping ipcRenderer.
+ */
+export function createPrivacyApi(ipc: typeof ipcRenderer): PrivacyApi {
+  return {
+    getStorageInfo: async (): Promise<LocalStorageInfoDto> => {
+      try {
+        return await ipc.invoke(PRIVACY_IPC_CHANNELS.GET_STORAGE_INFO)
+      } catch (err) {
+        throw normalizePrivacyBridgeError(err)
+      }
+    },
+
+    openStorageFolder: async (target: StorageTarget): Promise<OpenStorageFolderResponse> => {
+      try {
+        return await ipc.invoke(PRIVACY_IPC_CHANNELS.OPEN_STORAGE_FOLDER, { target })
+      } catch (err) {
+        throw normalizePrivacyBridgeError(err)
+      }
+    }
+  }
+}
+
 // Bounded, typed APIs exposed to the Renderer
 export const api = {
   ping: (request: PingRequest): Promise<PingResponse> => {
@@ -1203,7 +1452,10 @@ export const api = {
   memories: createBotMemoriesApi(ipcRenderer),
   conversation: createConversationApi(ipcRenderer),
   conversations: createConversationApi(ipcRenderer),
-  agents: createAgentsApi(ipcRenderer)
+  agents: createAgentsApi(ipcRenderer),
+  diagnostics: createDiagnosticsApi(ipcRenderer),
+  deletion: createDeletionApi(ipcRenderer),
+  privacy: createPrivacyApi(ipcRenderer)
 }
 
 // Expose safe, bounded APIs using contextBridge

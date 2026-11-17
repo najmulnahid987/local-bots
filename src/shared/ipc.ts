@@ -32,7 +32,12 @@ export const KB_IPC_CHANNELS = {
   ARCHIVE: 'kb:archive',
   UNARCHIVE: 'kb:unarchive',
   DELETE: 'kb:delete',
-  GET_OVERVIEW: 'kb:get-overview'
+  GET_DELETION_PREVIEW: 'kb:get-deletion-preview',
+  GET_OVERVIEW: 'kb:get-overview',
+  EXPORT: 'kb:export',
+  IMPORT_SELECT_AND_PREVIEW: 'kb:import:select-and-preview',
+  IMPORT_EXECUTE: 'kb:import:execute',
+  IMPORT_CANCEL: 'kb:import:cancel'
 } as const
 
 export type KbIpcChannel = (typeof KB_IPC_CHANNELS)[keyof typeof KB_IPC_CHANNELS]
@@ -44,7 +49,8 @@ export const KB_DOCS_IPC_CHANNELS = {
   PREVIEW: 'kb:docs:preview',
   SEARCH: 'kb:docs:search',
   REINDEX: 'kb:docs:reindex',
-  DELETE: 'kb:docs:delete'
+  DELETE: 'kb:docs:delete',
+  GET_DELETION_PREVIEW: 'kb:docs:get-deletion-preview'
 } as const
 
 export type KbDocsIpcChannel = (typeof KB_DOCS_IPC_CHANNELS)[keyof typeof KB_DOCS_IPC_CHANNELS]
@@ -54,10 +60,13 @@ export type IpcChannel =
   | ProviderIpcChannel
   | KbIpcChannel
   | KbDocsIpcChannel
+  | import('./diagnostics').DiagnosticsIpcChannel
+  | import('./deletion').DeletionIpcChannel
   | import('./bots').BotIpcChannel
   | import('./conversations').ConversationIpcChannel
   | import('./agents').AgentIpcChannel
   | import('./bot-memories').BotMemoryIpcChannel
+  | import('./privacy').PrivacyIpcChannel
 
 export * from './providers'
 export * from './knowledge-bases'
@@ -66,6 +75,10 @@ export * from './bots'
 export * from './conversations'
 export * from './agents'
 export * from './bot-memories'
+export * from './export-archive'
+export * from './diagnostics'
+export * from './deletion'
+export * from './privacy'
 
 export interface PingRequest {
   requestId: string

@@ -134,6 +134,9 @@ export interface KnowledgeDocumentApi {
   search(request: SearchKnowledgeDocumentsRequest): Promise<readonly DocumentSearchResultDto[]>
   reindex(request: ReindexDocumentRequest): Promise<ReindexDocumentResultDto>
   delete(request: DeleteDocumentRequest): Promise<DeleteDocumentResultDto>
+  getDeletionPreview?(
+    request: { id: string } | string
+  ): Promise<import('./deletion').DeletionPreviewDto>
 }
 
 /**

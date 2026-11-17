@@ -1,9 +1,11 @@
-import { ReactElement, useEffect } from 'react'
-import { AlertTriangle, Trash2, X, Loader2 } from 'lucide-react'
+import { ReactElement, useState, useEffect } from 'react'
+import { AlertTriangle, Trash2, X, Loader2, Info } from 'lucide-react'
+import type { DeletionPreviewDto } from '../../../../shared/deletion'
 
 export interface DocumentDeleteConfirmModalProps {
   readonly isOpen: boolean
   readonly documentName: string
+  readonly sourceId?: string
   readonly isDeleting: boolean
   readonly onConfirm: () => void
   readonly onCancel: () => void
@@ -12,10 +14,41 @@ export interface DocumentDeleteConfirmModalProps {
 export function DocumentDeleteConfirmModal({
   isOpen,
   documentName,
+  sourceId,
   isDeleting,
   onConfirm,
   onCancel
 }: DocumentDeleteConfirmModalProps): ReactElement | null {
+  const [preview, setPreview] = useState<DeletionPreviewDto | null>(null)
+  const [isLoadingPreview, setIsLoadingPreview] = useState<boolean>(false)
+
+  useEffect(() => {
+    if (!isOpen || !sourceId) return
+
+    let isCancelled = false
+    const loadPreview = async (): Promise<void> => {
+      setIsLoadingPreview(true)
+      try {
+        if (window.api?.deletion?.getPreview) {
+          const res = await window.api.deletion.getPreview('knowledge_source', sourceId)
+          if (!isCancelled) setPreview(res)
+        } else if (window.api?.knowledgeDocuments?.getDeletionPreview) {
+          const res = await window.api.knowledgeDocuments.getDeletionPreview(sourceId)
+          if (!isCancelled) setPreview(res)
+        }
+      } catch {
+        // Fall back gracefully to static dialog
+      } finally {
+        if (!isCancelled) setIsLoadingPreview(false)
+      }
+    }
+
+    void loadPreview()
+    return () => {
+      isCancelled = true
+    }
+  }, [isOpen, sourceId])
+
   useEffect(() => {
     if (!isOpen) return
 
@@ -32,6 +65,8 @@ export function DocumentDeleteConfirmModal({
   if (!isOpen) {
     return null
   }
+
+  const isOperationBlocked = preview?.isBlocked ?? false
 
   return (
     <div
@@ -69,10 +104,45 @@ export function DocumentDeleteConfirmModal({
             Are you sure you want to permanently delete{' '}
             <strong data-testid="delete-document-name">&ldquo;{documentName}&rdquo;</strong>?
           </p>
+
+          {isLoadingPreview && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '12px',
+                color: 'var(--color-text-secondary)',
+                marginTop: '8px',
+                marginBottom: '8px'
+              }}
+              data-testid="loading-document-preview"
+            >
+              <Loader2 size={14} className="spinner inline-icon" aria-hidden="true" />
+              <span>Analyzing document dependencies...</span>
+            </div>
+          )}
+
+          {preview?.dependentCounts?.chunks !== undefined && (
+            <div
+              style={{
+                fontSize: '12px',
+                color: 'var(--color-text-secondary)',
+                marginBottom: '10px'
+              }}
+              data-testid="document-chunks-count"
+            >
+              Extracted search chunks to delete:{' '}
+              <strong style={{ color: 'var(--color-text-primary)' }}>
+                {preview.dependentCounts.chunks}
+              </strong>
+            </div>
+          )}
+
           <div
             className="section-alert section-alert-warning"
             role="note"
-            style={{ marginTop: '12px' }}
+            style={{ marginTop: '10px' }}
           >
             <span>
               This operation safely removes the original managed file, all indexed text chunks, and
@@ -80,6 +150,32 @@ export function DocumentDeleteConfirmModal({
               to this content.
             </span>
           </div>
+
+          <div
+            className="section-alert section-alert-info"
+            role="status"
+            style={{ marginTop: '10px' }}
+            data-testid="document-citation-safety-alert"
+          >
+            <Info size={16} className="inline-icon text-accent" aria-hidden="true" />
+            <span>
+              Historical conversation messages citing this document will remain, but citations
+              referencing it will safely indicate the source file was removed.
+            </span>
+          </div>
+
+          {preview?.isBlocked && (
+            <div
+              className="section-alert section-alert-error"
+              role="alert"
+              data-testid="delete-document-blocked-alert"
+              style={{ marginTop: '10px' }}
+            >
+              <span>
+                {preview.blockReason ?? 'Cannot delete document while indexing is in progress.'}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -97,7 +193,7 @@ export function DocumentDeleteConfirmModal({
             type="button"
             className="btn btn-danger"
             onClick={onConfirm}
-            disabled={isDeleting}
+            disabled={isDeleting || isOperationBlocked}
             data-testid="btn-confirm-delete"
           >
             {isDeleting ? (

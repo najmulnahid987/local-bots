@@ -6,6 +6,7 @@ import {
   waitFor,
   fireEvent,
   cleanup,
+  act,
   type RenderResult
 } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
@@ -213,6 +214,22 @@ describe('Renderer: BotConversationsWorkspacePage & Navigation (Phase 7 Step 7.8
         getApprovalDetails: vi.fn(),
         respondToApproval: vi.fn(),
         subscribeToTaskEvents: vi.fn(() => () => {})
+      } as never,
+      botMemories: {
+        list: vi.fn(async () => []),
+        get: vi.fn(),
+        create: vi.fn(async (input) => ({
+          id: 'mem-101',
+          botId: input.botId,
+          knowledgeBaseId: activeKbId,
+          memoryType: input.memoryType ?? 'user_note',
+          content: input.content,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        })),
+        update: vi.fn(),
+        delete: vi.fn(),
+        count: vi.fn(async () => 0)
       } as never
     }
   })
@@ -1116,5 +1133,88 @@ describe('Renderer: BotConversationsWorkspacePage & Navigation (Phase 7 Step 7.8
 
     expect(screen.getByTestId(`task-activity-list-${taskMessage.id}`)).toBeDefined()
     expect(screen.getByText('Read Workspace File')).toBeDefined()
+  })
+
+  it('27. toggles between Chat and Memories views in the workspace', async () => {
+    renderPageWithRouter(`/knowledge-bases/${activeKbId}/bots/${activeBotId}/conversations`)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tab-view-chat')).toBeDefined()
+      expect(screen.getByTestId('tab-view-memories')).toBeDefined()
+    })
+
+    // Initially in Chat view
+    expect(screen.getByTestId('tab-view-chat').getAttribute('aria-selected')).toBe('true')
+    expect(screen.queryByTestId('bot-memories-view-container')).toBeNull()
+
+    // Switch to Memories view
+    fireEvent.click(screen.getByTestId('tab-view-memories'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('bot-memories-view-container')).toBeDefined()
+      expect(screen.getByTestId('bot-memory-section')).toBeDefined()
+    })
+
+    // Switch back to Chat view
+    fireEvent.click(screen.getByTestId('tab-view-chat'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('bot-memories-view-container')).toBeNull()
+      expect(screen.getByTestId('bot-conversations-layout')).toBeDefined()
+    })
+  })
+
+  it('28. opens TaskSummaryMemoryProposalModal from assistant message save action and saves memory', async () => {
+    const assistantMessage: MessageDto = {
+      id: 'msg-assist-finding',
+      conversationId: sampleConv1.id,
+      role: 'assistant',
+      content: 'Key finding: Q4 gross margins improved to 68%.',
+      contentFormat: 'markdown',
+      metadata: {},
+      tokenUsage: null,
+      createdAt: 1700000010000
+    }
+
+    mockMessagesList = [sampleMessage, assistantMessage]
+
+    renderPageWithRouter(`/knowledge-bases/${activeKbId}/bots/${activeBotId}/conversations`)
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`conversation-item-${sampleConv1.id}`)).toBeDefined()
+    })
+    fireEvent.click(screen.getByTestId(`conversation-item-${sampleConv1.id}`))
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`message-item-${assistantMessage.id}`)).toBeDefined()
+      expect(screen.getByTestId(`save-memory-btn-${assistantMessage.id}`)).toBeDefined()
+    })
+
+    // Click "Save as Memory" on the assistant message
+    fireEvent.click(screen.getByTestId(`save-memory-btn-${assistantMessage.id}`))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-summary-memory-modal')).toBeDefined()
+    })
+
+    // Verify proposed content is pre-populated
+    const textarea = screen.getByTestId('textarea-task-summary-content') as HTMLTextAreaElement
+    expect(textarea.value).toBe('Key finding: Q4 gross margins improved to 68%.')
+
+    // Click save
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-save-task-summary'))
+    })
+
+    expect(window.api.botMemories!.create).toHaveBeenCalledWith({
+      botId: activeBotId,
+      memoryType: 'user_note',
+      content: 'Key finding: Q4 gross margins improved to 68%.'
+    })
+
+    // Success notification rendered
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-save-success-notification')).toBeDefined()
+    })
   })
 })

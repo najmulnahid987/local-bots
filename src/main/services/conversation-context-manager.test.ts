@@ -891,4 +891,124 @@ describe('ConversationContextManager (Phase 7 Step 7.5)', () => {
     expect(res1.availableInputTokens).toBe(res2.availableInputTokens)
     expect(res1.includedMessageCount).toBe(res2.includedMessageCount)
   })
+
+  // ==========================================================================
+  // Bot Memory Context Budgeting Tests (Step 9.2: 41 - 46)
+  // ==========================================================================
+
+  it('41. Memory context is included when provided and fits within available budget', () => {
+    const memoryText = '<bot_memories>\nHeader\n\n- [User Note]: Code style\n</bot_memories>'
+    const result = ConversationContextManager.selectContext({
+      bot: defaultBot,
+      history: [createTestMessage('user', 'Hello'), createTestMessage('assistant', 'Hi')],
+      question: 'Question',
+      retrievalResult: createMockRetrieval([]),
+      modelContextLimit: 8000,
+      memoryContext: memoryText
+    })
+
+    const userMsg = result.promptResult.messages[result.promptResult.messages.length - 1].content
+    expect(userMsg).toContain(memoryText)
+    expect(result.includedMessageCount).toBe(2)
+    expect(result.memoryOmittedDueToContextLimit).toBeFalsy()
+  })
+
+  it('42. When budget is tight, older history turns are trimmed first to preserve memory context', () => {
+    const memoryText =
+      '<bot_memories>\nHeader\n\n- [Pinned Instruction]: High priority context\n</bot_memories>'
+    const history = [
+      createTestMessage('user', 'X'.repeat(400)), // Turn 0: ~100 tokens
+      createTestMessage('assistant', 'X'.repeat(400)),
+      createTestMessage('user', 'Y'.repeat(400)), // Turn 1: ~100 tokens
+      createTestMessage('assistant', 'Y'.repeat(400))
+    ]
+
+    // Set limit where Turn 1 (200 tokens) + memory (~100 tokens) + system/q (~415 tokens) = ~715 tokens fits,
+    // but both turns (~915 tokens) cannot fit.
+    const result = ConversationContextManager.selectContext({
+      bot: defaultBot,
+      history,
+      question: 'Current question',
+      retrievalResult: createMockRetrieval([]),
+      modelContextLimit: 1100,
+      reservedOutputTokens: 250,
+      safetyMarginTokens: 50, // available = 800 tokens
+      memoryContext: memoryText
+    })
+
+    // Turn 0 was trimmed, Turn 1 was preserved
+    expect(result.historyTrimmingOccurred).toBe(true)
+    expect(result.includedMessageCount).toBe(2)
+    expect(result.excludedMessageCount).toBe(2)
+
+    // Memory was preserved!
+    const userMsg = result.promptResult.messages[result.promptResult.messages.length - 1].content
+    expect(userMsg).toContain(memoryText)
+    expect(result.memoryOmittedDueToContextLimit).toBeFalsy()
+  })
+
+  it('43. When space is tight with zero history turns, memory is omitted to protect system prompt and question', () => {
+    // Memory context that consumes ~250 tokens
+    const memoryText =
+      '<bot_memories>\nHeader\n\n- [User Note]: ' + 'M'.repeat(1000) + '\n</bot_memories>'
+    const history = [
+      createTestMessage('user', 'Old user'),
+      createTestMessage('assistant', 'Old assistant')
+    ]
+
+    // Limit where bare system prompt (~400 tokens) + question (~10 tokens) = ~415 tokens fits within available (500 tokens),
+    // but with memory (~665 tokens) it exceeds 500 tokens.
+    const result = ConversationContextManager.selectContext({
+      bot: defaultBot,
+      history,
+      question: 'Important user question',
+      retrievalResult: createMockRetrieval([]),
+      modelContextLimit: 800,
+      reservedOutputTokens: 250,
+      safetyMarginTokens: 50, // available = 500 tokens
+      memoryContext: memoryText
+    })
+
+    // Both history turns were trimmed, and memory context was safely omitted to protect system prompt & question
+    expect(result.includedMessageCount).toBe(0)
+    expect(result.historyTrimmingOccurred).toBe(true)
+    expect(result.memoryOmittedDueToContextLimit).toBe(true)
+
+    const userMsg = result.promptResult.messages[result.promptResult.messages.length - 1].content
+    expect(userMsg).not.toContain('<bot_memories>')
+    expect(userMsg).toBe('Important user question')
+    expect(result.fitsWithinBudget).toBe(true)
+  })
+
+  it('44. Total estimated input tokens never exceed availableInputTokens with memory', () => {
+    const memoryText = '<bot_memories>\nHeader\n\n- [User Note]: Some memory\n</bot_memories>'
+    const result = ConversationContextManager.selectContext({
+      bot: defaultBot,
+      history: [createTestMessage('user', 'Hi'), createTestMessage('assistant', 'Hello')],
+      question: 'Short query',
+      retrievalResult: createMockRetrieval([]),
+      modelContextLimit: 6000,
+      reservedOutputTokens: 2000,
+      safetyMarginTokens: 500,
+      memoryContext: memoryText
+    })
+
+    expect(result.estimatedInputTokens).toBeLessThanOrEqual(result.availableInputTokens)
+  })
+
+  it('45. Extremely tight budget exceeding system prompt and question still throws CONTEXT_LENGTH_EXCEEDED', () => {
+    const memoryText = '<bot_memories>\nHeader\n\n- [User Note]: Memory\n</bot_memories>'
+    expect(() =>
+      ConversationContextManager.selectContext({
+        bot: defaultBot,
+        history: [],
+        question: 'Q',
+        retrievalResult: createMockRetrieval([]),
+        modelContextLimit: 300,
+        reservedOutputTokens: 256,
+        safetyMarginTokens: 40, // available = 4 tokens, system prompt alone is ~120 tokens
+        memoryContext: memoryText
+      })
+    ).toThrowError(/Mandatory prompt components/)
+  })
 })

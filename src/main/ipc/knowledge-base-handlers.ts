@@ -3,9 +3,15 @@ import {
   KB_IPC_CHANNELS,
   type KnowledgeBaseDto,
   type KnowledgeBaseOverviewDto,
-  type DeleteKnowledgeBaseResult
+  type DeleteKnowledgeBaseResult,
+  type ExportKnowledgeBaseResultDto,
+  type ImportPreviewResultDto,
+  type ExecuteImportResultDto,
+  type CancelImportResultDto
 } from '../../shared/ipc'
 import { KnowledgeBaseManager } from '../services/knowledge-base-manager'
+import type { BackupExportManager } from '../services/backup-export-manager'
+import type { BackupImportManager } from '../services/backup-import-manager'
 import { validateIpcSender, type BrowserWindowLike, type IpcSenderEventLike } from '../security'
 import {
   validateKnowledgeBaseIpcPayload,
@@ -17,7 +23,10 @@ import {
   knowledgeBaseUnarchiveIpcSchema,
   knowledgeBaseDeleteIpcSchema,
   knowledgeBaseListIpcSchema,
-  knowledgeBaseOverviewIpcSchema
+  knowledgeBaseOverviewIpcSchema,
+  knowledgeBaseExportIpcSchema,
+  knowledgeBaseImportExecuteIpcSchema,
+  knowledgeBaseImportCancelIpcSchema
 } from './knowledge-base-validation'
 
 export interface KnowledgeBaseErrorDto {
@@ -70,8 +79,24 @@ export function formatKnowledgeBaseIpcError(err: unknown): Error {
  */
 export function registerKnowledgeBaseIpcHandlers(
   getMainWindow: () => BrowserWindowLike | BrowserWindow | null,
-  kbManager: KnowledgeBaseManager
+  kbManager: KnowledgeBaseManager,
+  exportManager?: BackupExportManager | (() => BackupExportManager | undefined),
+  importManager?: BackupImportManager | (() => BackupImportManager | undefined)
 ): void {
+  const resolveExportManager = (): BackupExportManager | undefined => {
+    if (typeof exportManager === 'function') {
+      return exportManager()
+    }
+    return exportManager
+  }
+
+  const resolveImportManager = (): BackupImportManager | undefined => {
+    if (typeof importManager === 'function') {
+      return importManager()
+    }
+    return importManager
+  }
+
   const assertAuthorizedSender = (event: IpcSenderEventLike): BrowserWindowLike => {
     const mainWindow = getMainWindow()
     if (!validateIpcSender(event, mainWindow)) {
@@ -207,6 +232,87 @@ export function registerKnowledgeBaseIpcHandlers(
       }
     }
   )
+
+  // 9. Export
+  ipcMain.removeHandler(KB_IPC_CHANNELS.EXPORT)
+  ipcMain.handle(
+    KB_IPC_CHANNELS.EXPORT,
+    async (event, rawPayload: unknown): Promise<ExportKnowledgeBaseResultDto> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateKnowledgeBaseIpcPayload(knowledgeBaseExportIpcSchema, rawPayload)
+        const manager = resolveExportManager()
+        if (!manager) {
+          throw new Error('Export subsystem is not initialized.')
+        }
+        return await manager.exportKnowledgeBase(payload.knowledgeBaseId)
+      } catch (err) {
+        throw formatKnowledgeBaseIpcError(err)
+      }
+    }
+  )
+
+  // 10. Import: Select and Preview
+  ipcMain.removeHandler(KB_IPC_CHANNELS.IMPORT_SELECT_AND_PREVIEW)
+  ipcMain.handle(
+    KB_IPC_CHANNELS.IMPORT_SELECT_AND_PREVIEW,
+    async (event): Promise<ImportPreviewResultDto> => {
+      try {
+        assertAuthorizedSender(event)
+        const manager = resolveImportManager()
+        if (!manager) {
+          throw new Error('Import subsystem is not initialized.')
+        }
+        return await manager.selectAndPreviewArchive()
+      } catch (err) {
+        throw formatKnowledgeBaseIpcError(err)
+      }
+    }
+  )
+
+  // 11. Import: Execute
+  ipcMain.removeHandler(KB_IPC_CHANNELS.IMPORT_EXECUTE)
+  ipcMain.handle(
+    KB_IPC_CHANNELS.IMPORT_EXECUTE,
+    async (event, rawPayload: unknown): Promise<ExecuteImportResultDto> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateKnowledgeBaseIpcPayload(
+          knowledgeBaseImportExecuteIpcSchema,
+          rawPayload
+        )
+        const manager = resolveImportManager()
+        if (!manager) {
+          throw new Error('Import subsystem is not initialized.')
+        }
+        return await manager.executeImport(payload)
+      } catch (err) {
+        throw formatKnowledgeBaseIpcError(err)
+      }
+    }
+  )
+
+  // 12. Import: Cancel
+  ipcMain.removeHandler(KB_IPC_CHANNELS.IMPORT_CANCEL)
+  ipcMain.handle(
+    KB_IPC_CHANNELS.IMPORT_CANCEL,
+    async (event, rawPayload: unknown): Promise<CancelImportResultDto> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateKnowledgeBaseIpcPayload(
+          knowledgeBaseImportCancelIpcSchema,
+          rawPayload
+        )
+        const manager = resolveImportManager()
+        if (!manager) {
+          throw new Error('Import subsystem is not initialized.')
+        }
+        return await manager.cancelImport(payload)
+      } catch (err) {
+        throw formatKnowledgeBaseIpcError(err)
+      }
+    }
+  )
 }
 
 /**
@@ -239,16 +345,7 @@ export function registerFailingKnowledgeBaseIpcHandlers(
     )
   }
 
-  const allChannels = [
-    KB_IPC_CHANNELS.LIST,
-    KB_IPC_CHANNELS.GET_BY_ID,
-    KB_IPC_CHANNELS.CREATE,
-    KB_IPC_CHANNELS.UPDATE,
-    KB_IPC_CHANNELS.ARCHIVE,
-    KB_IPC_CHANNELS.UNARCHIVE,
-    KB_IPC_CHANNELS.DELETE,
-    KB_IPC_CHANNELS.GET_OVERVIEW
-  ]
+  const allChannels = Object.values(KB_IPC_CHANNELS)
 
   for (const channel of allChannels) {
     ipcMain.removeHandler(channel)

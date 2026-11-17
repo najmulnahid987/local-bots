@@ -1,6 +1,18 @@
 import { ReactElement, useState, useEffect, useCallback } from 'react'
-import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Bot, AlertCircle, Loader2, Cpu, RotateCw, RotateCcw, X } from 'lucide-react'
+import { useParams, Link, useSearchParams } from 'react-router-dom'
+import {
+  ArrowLeft,
+  Bot,
+  AlertCircle,
+  Loader2,
+  Cpu,
+  RotateCw,
+  RotateCcw,
+  X,
+  Brain,
+  MessageSquare,
+  CheckCircle2
+} from 'lucide-react'
 import type { BotDto } from '../../../../shared/bots'
 import type {
   CitationDto,
@@ -20,6 +32,8 @@ import { ConversationEmptyState } from '../../components/chat/ConversationEmptyS
 import { DocumentPreviewModal } from '../../components/documents/DocumentPreviewModal'
 import { TaskActivityTimeline } from '../../components/agents/TaskActivityTimeline'
 import { SaveReportApprovalModal } from '../../components/agents/SaveReportApprovalModal'
+import { BotMemorySection } from '../../components/bots/memory/BotMemorySection'
+import { TaskSummaryMemoryProposalModal } from '../../components/agents/TaskSummaryMemoryProposalModal'
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -179,6 +193,39 @@ export function BotConversationsWorkspacePage(): ReactElement {
   const [citationTarget, setCitationTarget] = useState<ResolvedCitationTargetDto | null>(null)
   const [citationError, setCitationError] = useState<string | null>(null)
   const [cancellationNotice, setCancellationNotice] = useState<string | null>(null)
+
+  // View mode tab state (Chat vs Memories)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const viewParam = searchParams.get('tab') ?? searchParams.get('view')
+  const viewMode = viewParam === 'memories' ? 'memories' : 'chat'
+
+  const handleSetViewMode = useCallback(
+    (mode: 'chat' | 'memories') => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev)
+        if (mode === 'memories') {
+          next.set('tab', 'memories')
+        } else {
+          next.delete('tab')
+          next.delete('view')
+        }
+        return next
+      })
+    },
+    [setSearchParams]
+  )
+
+  // Task summary proposal modal state
+  const [taskSummaryModal, setTaskSummaryModal] = useState<{
+    isOpen: boolean
+    content: string
+    taskTitle?: string
+  }>({
+    isOpen: false,
+    content: '',
+    taskTitle: undefined
+  })
+  const [memoryNotification, setMemoryNotification] = useState<string | null>(null)
 
   // Clear citation and notice state when switching conversations
   const [prevConvId, setPrevConvId] = useState<string | null>(selectedConversationId)
@@ -390,6 +437,18 @@ export function BotConversationsWorkspacePage(): ReactElement {
             : undefined
         }
         hasPendingApproval={Boolean(agentTaskEvents.pendingApproval)}
+        onSaveAsMemory={
+          (agentTaskEvents.runStatus ?? agentTask.status) === 'completed'
+            ? () => {
+                const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+                setTaskSummaryModal({
+                  isOpen: true,
+                  content: lastAssistant?.content ?? 'Task completed successfully with findings.',
+                  taskTitle: 'Completed Agent Task'
+                })
+              }
+            : undefined
+        }
       />
     </div>
   ) : null
@@ -461,7 +520,110 @@ export function BotConversationsWorkspacePage(): ReactElement {
             </p>
           </div>
         </div>
+
+        {/* View Switcher: Chat vs Memories */}
+        <div
+          className="tab-group"
+          role="tablist"
+          aria-label="Bot workspace views"
+          style={{
+            display: 'inline-flex',
+            backgroundColor: '#f1f5f9',
+            padding: '3px',
+            borderRadius: '8px',
+            gap: '2px'
+          }}
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'chat'}
+            onClick={() => handleSetViewMode('chat')}
+            className={`tab-btn ${viewMode === 'chat' ? 'active' : ''}`}
+            data-testid="tab-view-chat"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '5px 12px',
+              fontSize: '12.5px',
+              fontWeight: viewMode === 'chat' ? 600 : 500,
+              borderRadius: '6px',
+              border: 'none',
+              backgroundColor: viewMode === 'chat' ? '#ffffff' : 'transparent',
+              color: viewMode === 'chat' ? '#0f172a' : '#64748b',
+              boxShadow: viewMode === 'chat' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <MessageSquare size={13} aria-hidden="true" />
+            <span>Chat</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'memories'}
+            onClick={() => handleSetViewMode('memories')}
+            className={`tab-btn ${viewMode === 'memories' ? 'active' : ''}`}
+            data-testid="tab-view-memories"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '5px 12px',
+              fontSize: '12.5px',
+              fontWeight: viewMode === 'memories' ? 600 : 500,
+              borderRadius: '6px',
+              border: 'none',
+              backgroundColor: viewMode === 'memories' ? '#ffffff' : 'transparent',
+              color: viewMode === 'memories' ? '#4f46e5' : '#64748b',
+              boxShadow: viewMode === 'memories' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <Brain size={13} aria-hidden="true" />
+            <span>Memories</span>
+          </button>
+        </div>
       </div>
+
+      {/* Memory Notification Banner */}
+      {memoryNotification && (
+        <div
+          className="section-alert section-alert-success"
+          role="status"
+          data-testid="memory-save-success-notification"
+          style={{
+            margin: '8px 20px 0 20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+            backgroundColor: '#f0fdf4',
+            border: '1px solid #bbf7d0',
+            color: '#166534',
+            padding: '8px 14px',
+            borderRadius: '6px',
+            fontSize: '12.5px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <CheckCircle2 size={16} style={{ color: '#16a34a' }} aria-hidden="true" />
+            <span>{memoryNotification}</span>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary btn-xs"
+            onClick={() => handleSetViewMode('memories')}
+            data-testid="btn-view-saved-memory"
+            style={{ padding: '2px 8px', fontSize: '11px' }}
+          >
+            View Memories
+          </button>
+        </div>
+      )}
 
       {/* Archived Notice Banner */}
       {isArchived && (
@@ -482,12 +644,26 @@ export function BotConversationsWorkspacePage(): ReactElement {
         </div>
       )}
 
+      {/* Bot Memories Workspace View */}
+      {viewMode === 'memories' && (
+        <div
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            backgroundColor: '#ffffff'
+          }}
+          data-testid="bot-memories-view-container"
+        >
+          <BotMemorySection bot={bot} isArchived={isArchived} />
+        </div>
+      )}
+
       {/* Main Two-Panel Chat Workspace */}
       <div
         className="chat-workspace-body"
         data-testid="bot-conversations-layout"
         style={{
-          display: 'flex',
+          display: viewMode === 'chat' ? 'flex' : 'none',
           flex: 1,
           overflow: 'hidden',
           backgroundColor: '#f8fafc'
@@ -704,6 +880,13 @@ export function BotConversationsWorkspacePage(): ReactElement {
                 isArchived={isArchived}
                 onCitationClick={handleCitationClick}
                 activeTaskElement={activeTaskElement}
+                onSaveAsMemory={(content) =>
+                  setTaskSummaryModal({
+                    isOpen: true,
+                    content,
+                    taskTitle: 'Assistant Response'
+                  })
+                }
               />
 
               {/* Fixed Bottom Message Composer */}
@@ -762,6 +945,20 @@ export function BotConversationsWorkspacePage(): ReactElement {
           }}
         />
       )}
+
+      {/* Task Summary / Findings Memory Proposal Modal */}
+      <TaskSummaryMemoryProposalModal
+        isOpen={taskSummaryModal.isOpen}
+        botId={bot.id}
+        botName={bot.name}
+        defaultContent={taskSummaryModal.content}
+        taskTitle={taskSummaryModal.taskTitle}
+        onClose={() => setTaskSummaryModal({ isOpen: false, content: '', taskTitle: undefined })}
+        onSaveSuccess={() => {
+          setMemoryNotification('Task findings saved to Bot Memory.')
+          setTimeout(() => setMemoryNotification(null), 4000)
+        }}
+      />
     </div>
   )
 }

@@ -54,6 +54,12 @@ export function WorkspaceBotsPage(): ReactElement {
     }
   }
 
+  const handleManageMemories = (bot: BotDto): void => {
+    if (knowledgeBase) {
+      navigate(`/knowledge-bases/${knowledgeBase.id}/bots/${bot.id}/conversations?tab=memories`)
+    }
+  }
+
   return (
     <div className="workspace-tab-panel" data-testid="workspace-bots-tab">
       {/* Tab Panel Header */}
@@ -197,6 +203,7 @@ export function WorkspaceBotsPage(): ReactElement {
         onArchiveBot={(bot) => setArchivingBot(bot)}
         onUnarchiveBot={(bot) => setUnarchivingBot(bot)}
         onDeleteBot={(bot) => setDeletingBot(bot)}
+        onManageMemoriesBot={handleManageMemories}
         emptyTitle={
           filter === 'archived'
             ? 'No archived Bots in this Knowledge Base'

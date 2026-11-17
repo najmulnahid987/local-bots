@@ -1,4 +1,12 @@
 import { z } from 'zod'
+import type {
+  ExportKnowledgeBaseResultDto,
+  ImportPreviewResultDto,
+  ExecuteImportRequest,
+  ExecuteImportResultDto,
+  CancelImportRequest,
+  CancelImportResultDto
+} from './export-archive'
 
 /**
  * Public, renderer-safe Data Transfer Object representing a Knowledge Base.
@@ -152,7 +160,12 @@ export interface KnowledgeBaseApi {
   archive(id: string): Promise<KnowledgeBaseDto | null>
   unarchive(id: string): Promise<KnowledgeBaseDto | null>
   delete(id: string): Promise<DeleteKnowledgeBaseResult>
+  getDeletionPreview?(id: string): Promise<import('./deletion').DeletionPreviewDto>
   getOverview(id: string): Promise<KnowledgeBaseOverviewDto>
+  export?(id: string): Promise<ExportKnowledgeBaseResultDto>
+  importSelectAndPreview?(): Promise<ImportPreviewResultDto>
+  importExecute?(request: ExecuteImportRequest): Promise<ExecuteImportResultDto>
+  importCancel?(request: CancelImportRequest): Promise<CancelImportResultDto>
   activateWorkspace?(id: string): Promise<KnowledgeBaseDto>
   deactivateWorkspace?(): Promise<{ success: boolean }>
 }

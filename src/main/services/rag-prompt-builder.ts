@@ -7,6 +7,7 @@ import {
 } from './bot-rag-service'
 import { estimateTokenCount } from '../documents/chunking/semantic-chunker'
 import { KnowledgeBaseOnlyPolicy } from './knowledge-base-only-policy'
+import type { BotMemoryContextSelectionResult } from './bot-memory-service'
 
 // ============================================================================
 // Error Types
@@ -44,6 +45,7 @@ export interface RagPromptBuilderInput {
   readonly history: readonly HistoryMessageInput[]
   readonly question: string
   readonly retrievalResult: BotRagRetrievalResult
+  readonly memoryContext?: BotMemoryContextSelectionResult | string
 }
 
 export interface PromptTokenEstimates {
@@ -51,6 +53,7 @@ export interface PromptTokenEstimates {
   readonly historyTokens: number
   readonly contextTokens: number
   readonly questionTokens: number
+  readonly memoryTokens?: number
   readonly totalEstimatedTokens: number
 }
 
@@ -253,7 +256,7 @@ export class RagPromptBuilder {
       }
     }
 
-    // 4. Format retrieved context and current user message
+    // 4. Format retrieved context, saved bot memory, and current user message
     let formattedContext = ''
     let citationCandidates: readonly CitationDto[] = []
     const citationMap = new Map<number, CitationDto>()
@@ -266,10 +269,32 @@ export class RagPromptBuilder {
       }
     }
 
-    let userContent = trimmedQuestion
-    if (formattedContext.length > 0) {
-      userContent = `${formattedContext}\n\n${trimmedQuestion}`
+    let formattedMemories = ''
+    if (input.memoryContext !== undefined && input.memoryContext !== null) {
+      if (typeof input.memoryContext === 'string') {
+        formattedMemories = input.memoryContext.trim()
+      } else if (
+        typeof input.memoryContext === 'object' &&
+        typeof input.memoryContext.formattedText === 'string'
+      ) {
+        formattedMemories = input.memoryContext.formattedText.trim()
+      } else {
+        throw new RagPromptBuilderError(
+          'memoryContext must be a string or BotMemoryContextSelectionResult object.',
+          'INVALID_INPUT'
+        )
+      }
     }
+
+    const userMessageParts: string[] = []
+    if (formattedMemories.length > 0) {
+      userMessageParts.push(formattedMemories)
+    }
+    if (formattedContext.length > 0) {
+      userMessageParts.push(formattedContext)
+    }
+    userMessageParts.push(trimmedQuestion)
+    const userContent = userMessageParts.join('\n\n')
 
     const finalUserMessage: ChatMessageDto = {
       role: 'user',
@@ -290,14 +315,17 @@ export class RagPromptBuilder {
       0
     )
     const contextTokens = estimateTokenCount(formattedContext)
+    const memoryTokens = estimateTokenCount(formattedMemories)
     const questionTokens = estimateTokenCount(trimmedQuestion)
-    const totalEstimatedTokens = systemTokens + historyTokens + contextTokens + questionTokens
+    const totalEstimatedTokens =
+      systemTokens + historyTokens + contextTokens + questionTokens + memoryTokens
 
     const tokenEstimates: PromptTokenEstimates = {
       systemTokens,
       historyTokens,
       contextTokens,
       questionTokens,
+      memoryTokens,
       totalEstimatedTokens
     }
 

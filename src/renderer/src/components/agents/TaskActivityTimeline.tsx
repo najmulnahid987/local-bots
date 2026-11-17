@@ -9,7 +9,8 @@ import {
   XCircle,
   AlertCircle,
   Clock,
-  ShieldAlert
+  ShieldAlert,
+  Brain
 } from 'lucide-react'
 import type { AgentRunStatus } from '../../../../shared/agents'
 import { ToolExecutionCard } from './ToolExecutionCard'
@@ -29,6 +30,7 @@ export interface TaskActivityTimelineProps {
   readonly onStop?: () => void
   readonly onReviewApproval?: () => void
   readonly hasPendingApproval?: boolean
+  readonly onSaveAsMemory?: () => void
 }
 
 function formatDuration(startedAt?: number, completedAt?: number | null): string | null {
@@ -54,7 +56,8 @@ export function TaskActivityTimeline({
   defaultExpanded = true,
   onStop,
   onReviewApproval,
-  hasPendingApproval = false
+  hasPendingApproval = false,
+  onSaveAsMemory
 }: TaskActivityTimelineProps): ReactElement {
   const [isExpanded, setIsExpanded] = useState<boolean>(defaultExpanded)
 
@@ -354,6 +357,55 @@ export function TaskActivityTimeline({
           }}
         >
           <strong>Error:</strong> {errorSummary}
+        </div>
+      )}
+
+      {/* Task Completed Action Banner (for saving key findings as Bot Memory) */}
+      {status === 'completed' && onSaveAsMemory && (
+        <div
+          className="timeline-completed-memory-banner"
+          data-testid={`timeline-save-memory-banner-${agentRunId}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 14px',
+            backgroundColor: '#f5f3ff',
+            borderBottom: isExpanded ? '1px solid #ede9fe' : 'none',
+            fontSize: '12.5px',
+            color: '#6d28d9'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Brain size={15} style={{ flexShrink: 0 }} aria-hidden="true" />
+            <span>
+              <strong>Task completed.</strong> Save key findings to this Bot&apos;s persistent
+              memory?
+            </span>
+          </div>
+
+          <button
+            type="button"
+            className="btn btn-secondary btn-xs"
+            data-testid={`save-task-memory-btn-${agentRunId}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              onSaveAsMemory()
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '3px 10px',
+              fontSize: '11.5px',
+              color: '#6d28d9',
+              borderColor: '#ddd6fe',
+              backgroundColor: '#ffffff'
+            }}
+          >
+            <Brain size={12} aria-hidden="true" />
+            <span>Save as Bot Memory</span>
+          </button>
         </div>
       )}
 

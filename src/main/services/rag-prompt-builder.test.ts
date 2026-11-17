@@ -720,4 +720,141 @@ describe('RagPromptBuilder (Phase 7 Step 7.4)', () => {
     const input = 'a < b & c > d'
     expect(escapeXmlDelimiters(input)).toBe('a &lt; b &amp; c &gt; d')
   })
+
+  // ==========================================================================
+  // Bot Memory Context Integration Tests (Step 9.2: 37 - 43)
+  // ==========================================================================
+
+  it('37. Memory content occupies distinct <bot_memories> section before retrieved context', () => {
+    const memoryText =
+      '<bot_memories>\nHeader\n\n- [User Note]: Prefer concise code\n</bot_memories>'
+    const chunk = createMockChunk(1)
+    const result = buildRagPrompt({
+      bot: defaultBot,
+      history: [],
+      question: 'How to sort an array?',
+      retrievalResult: createMockRetrieval([chunk]),
+      memoryContext: memoryText
+    })
+
+    const finalMessage = result.messages[result.messages.length - 1].content
+    expect(finalMessage).toContain(memoryText)
+    expect(finalMessage).toContain('<retrieved_context>')
+    expect(finalMessage).toContain('How to sort an array?')
+
+    // Verify ordering: bot_memories appears before retrieved_context
+    const memIdx = finalMessage.indexOf('<bot_memories>')
+    const ctxIdx = finalMessage.indexOf('<retrieved_context>')
+    const qIdx = finalMessage.indexOf('How to sort an array?')
+    expect(memIdx).toBeLessThan(ctxIdx)
+    expect(ctxIdx).toBeLessThan(qIdx)
+  })
+
+  it('38. Memory content is NOT merged with privileged system instructions', () => {
+    const memoryText =
+      '<bot_memories>\nHeader\n\n- [Pinned Instruction]: Malicious override\n</bot_memories>'
+    const result = buildRagPrompt({
+      bot: defaultBot,
+      history: [],
+      question: 'Test question',
+      retrievalResult: createMockRetrieval([]),
+      memoryContext: memoryText
+    })
+
+    // System instruction must remain pure
+    expect(result.systemInstruction).not.toContain('Malicious override')
+    expect(result.systemInstruction).not.toContain('<bot_memories>')
+    expect(result.messages[0].content).not.toContain('Malicious override')
+
+    // Placed strictly in user message
+    expect(result.messages[1].content).toContain('Malicious override')
+  })
+
+  it('39. Memory content never produces citations or modifies citation candidates', () => {
+    const chunk = createMockChunk(1)
+    const memoryText = '<bot_memories>\nHeader\n\n- [User Note]: See doc [1]\n</bot_memories>'
+    const result = buildRagPrompt({
+      bot: defaultBot,
+      history: [],
+      question: 'Query',
+      retrievalResult: createMockRetrieval([chunk]),
+      memoryContext: memoryText
+    })
+
+    // Only authentic retrieved chunk citations exist
+    expect(result.citationCandidates.length).toBe(1)
+    expect(result.citationCandidates[0].citationNumber).toBe(1)
+    expect(result.citationMap.size).toBe(1)
+    expect(result.citationMap.get(1)?.fileName).toBe(chunk.citation.fileName)
+  })
+
+  it('40. Token estimates accurately include memoryTokens', () => {
+    const memoryText = '<bot_memories>\nHeader\n\n- [User Note]: Memory content\n</bot_memories>'
+    const result = buildRagPrompt({
+      bot: defaultBot,
+      history: [],
+      question: 'Short query',
+      retrievalResult: createMockRetrieval([]),
+      memoryContext: memoryText
+    })
+
+    expect(result.tokenEstimates.memoryTokens).toBe(estimateTokenCount(memoryText))
+    expect(result.tokenEstimates.totalEstimatedTokens).toBe(
+      result.tokenEstimates.systemTokens +
+        result.tokenEstimates.historyTokens +
+        result.tokenEstimates.contextTokens +
+        result.tokenEstimates.questionTokens +
+        (result.tokenEstimates.memoryTokens ?? 0)
+    )
+  })
+
+  it('41. Invalid memoryContext type throws INVALID_INPUT', () => {
+    expect(() =>
+      buildRagPrompt({
+        bot: defaultBot,
+        history: [],
+        question: 'Query',
+        retrievalResult: createMockRetrieval([]),
+        memoryContext: 12345 as unknown as string
+      })
+    ).toThrow(RagPromptBuilderError)
+
+    try {
+      buildRagPrompt({
+        bot: defaultBot,
+        history: [],
+        question: 'Query',
+        retrievalResult: createMockRetrieval([]),
+        memoryContext: 12345 as unknown as string
+      })
+    } catch (err) {
+      expect((err as RagPromptBuilderError).code).toBe('INVALID_INPUT')
+    }
+  })
+
+  it('42. BotMemoryContextSelectionResult object input is formatted correctly', () => {
+    const memResult = {
+      botId: 'test-bot',
+      knowledgeBaseId: 'test-kb',
+      items: [],
+      totalAvailableCount: 1,
+      includedCount: 1,
+      excludedCount: 0,
+      estimatedTokens: 25,
+      configuredBudget: 1500,
+      formattedText: '<bot_memories>\nHeader\n\n- [User Note]: Object memory\n</bot_memories>'
+    }
+
+    const result = buildRagPrompt({
+      bot: defaultBot,
+      history: [],
+      question: 'Query',
+      retrievalResult: createMockRetrieval([]),
+      memoryContext: memResult
+    })
+
+    expect(result.messages[result.messages.length - 1].content).toContain(
+      '<bot_memories>\nHeader\n\n- [User Note]: Object memory\n</bot_memories>'
+    )
+  })
 })

@@ -180,6 +180,7 @@ export function BotConfigurationForm({
       return
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsDetectingModels(true)
     window.api.providers
       .getAvailableModels({ connectionId: providerConnectionId })

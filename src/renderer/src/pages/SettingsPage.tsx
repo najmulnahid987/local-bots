@@ -1,5 +1,7 @@
 import { ReactElement } from 'react'
 import { ProviderConnectionsSection } from '../components/settings/ProviderConnectionsSection'
+import { DatabaseHealthSection } from '../components/settings/DatabaseHealthSection'
+import { PrivacyTransparencySection } from '../components/settings/PrivacyTransparencySection'
 
 export function SettingsPage(): ReactElement {
   return (
@@ -10,6 +12,8 @@ export function SettingsPage(): ReactElement {
       </header>
 
       <ProviderConnectionsSection />
+      <DatabaseHealthSection />
+      <PrivacyTransparencySection />
     </div>
   )
 }

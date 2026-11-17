@@ -16,6 +16,7 @@ export interface ConversationMessageListProps {
   readonly isArchived?: boolean
   readonly onCitationClick?: (citation: CitationDto) => void
   readonly activeTaskElement?: ReactElement | null
+  readonly onSaveAsMemory?: (content: string) => void
 }
 
 export function ConversationMessageList({
@@ -28,7 +29,8 @@ export function ConversationMessageList({
   onNewConversation,
   isArchived = false,
   onCitationClick,
-  activeTaskElement
+  activeTaskElement,
+  onSaveAsMemory
 }: ConversationMessageListProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
@@ -130,6 +132,7 @@ export function ConversationMessageList({
           message={message}
           botName={botName}
           onCitationClick={onCitationClick}
+          onSaveAsMemory={onSaveAsMemory}
         />
       ))}
 

@@ -19,6 +19,8 @@ import type { ModelDescriptor } from '../providers/types'
 import { ActiveWorkspaceContext } from './active-workspace-context'
 import { BotRagService, BotRagServiceError } from './bot-rag-service'
 import { ConversationService, type PrepareTurnRequest } from './conversation-service'
+import { BotMemoryRepository } from '../database/repositories/bot-memory-repository'
+import { BotMemoryService, BotMemoryServiceError } from './bot-memory-service'
 
 describe('ConversationService (Phase 7 Step 7.6A)', () => {
   let tempDir: string
@@ -102,6 +104,7 @@ describe('ConversationService (Phase 7 Step 7.6A)', () => {
       knowledgeBaseRepository: kbRepo,
       knowledgeSourceRepository: sourceRepo
     })
+    const botMemoryRepo = new BotMemoryRepository(db)
 
     conversationService = new ConversationService({
       activeWorkspaceContext: activeContext,
@@ -110,7 +113,8 @@ describe('ConversationService (Phase 7 Step 7.6A)', () => {
       messageRepo,
       providerConnectionRepo: providerConnRepo,
       registry: new ProviderRegistry(INITIAL_PROVIDERS, INITIAL_MODELS),
-      botRagService: ragService
+      botRagService: ragService,
+      botMemoryRepo
     })
 
     // Setup active provider connection (OpenAI)
@@ -993,6 +997,145 @@ describe('ConversationService (Phase 7 Step 7.6A)', () => {
           code: 'CONVERSATION_NOT_FOUND'
         })
       )
+    })
+
+    // ========================================================================
+    // Bot Memory Context Integration (Step 9.2: 41 - 45)
+    // ========================================================================
+
+    it('41. Authoritative Bot memory is included in prepared turn for active Bot', () => {
+      const memoryRepo = new BotMemoryRepository(db)
+      memoryRepo.create({
+        botId: botAId,
+        knowledgeBaseId: kbAId,
+        memoryType: 'pinned_instruction',
+        content: 'Pinned memory for Bot A only'
+      })
+
+      const turn = conversationService.prepareTurn(sessionA, {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'What are my preferences?'
+      })
+
+      expect(turn.memoryContext).toBeDefined()
+      expect(turn.memoryContext?.includedCount).toBe(1)
+      expect(turn.memoryContext?.items[0].content).toBe('Pinned memory for Bot A only')
+
+      const finalMsg = turn.messages[turn.messages.length - 1].content
+      expect(finalMsg).toContain('<bot_memories>')
+      expect(finalMsg).toContain('Pinned memory for Bot A only')
+    })
+
+    it('42. Sibling Bot memory is NOT included in prepared turn', () => {
+      const memoryRepo = new BotMemoryRepository(db)
+      // Create sibling Bot in kbA
+      const botA2 = botRepo.create({
+        knowledgeBaseId: kbAId,
+        name: 'Sibling Bot A2',
+        modelId: 'test-model',
+        providerConnectionId: defaultConnId
+      })
+      memoryRepo.create({
+        botId: botA2.id,
+        knowledgeBaseId: kbAId,
+        memoryType: 'pinned_instruction',
+        content: 'Confidential sibling Bot A2 memory'
+      })
+
+      const turn = conversationService.prepareTurn(sessionA, {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'Preferences check'
+      })
+
+      const finalMsg = turn.messages[turn.messages.length - 1].content
+      expect(finalMsg).not.toContain('Confidential sibling Bot A2 memory')
+      expect(turn.memoryContext?.includedCount).toBe(0)
+    })
+
+    it('43. Memory from another Knowledge Base is NOT included when switching bots/KBs', () => {
+      const memoryRepo = new BotMemoryRepository(db)
+      memoryRepo.create({
+        botId: botBId,
+        knowledgeBaseId: kbBId,
+        memoryType: 'user_note',
+        content: 'Beta KB secret memory'
+      })
+
+      // Prepare turn for Bot A in KB A
+      const turnA = conversationService.prepareTurn(sessionA, {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'Check KB A'
+      })
+
+      // Prepare turn for Bot B in KB B
+      const turnB = conversationService.prepareTurn(sessionB, {
+        botId: botBId,
+        conversationId: convBId,
+        question: 'Check KB B'
+      })
+
+      expect(turnA.messages[turnA.messages.length - 1].content).not.toContain(
+        'Beta KB secret memory'
+      )
+      expect(turnB.messages[turnB.messages.length - 1].content).toContain('Beta KB secret memory')
+    })
+
+    it('44. Memory retrieval error fails closed with RETRIEVAL_ERROR', () => {
+      const failingMemoryService = {
+        getMemoryContext: vi.fn().mockImplementation(() => {
+          throw new BotMemoryServiceError('Disk I/O failure', 'DATABASE_ERROR')
+        })
+      } as unknown as BotMemoryService
+
+      const convServiceWithFailingMem = new ConversationService({
+        db,
+        botRepo,
+        conversationRepo,
+        messageRepo,
+        providerConnectionRepo: providerConnRepo,
+        activeWorkspaceContext: activeContext,
+        botRagService: ragService,
+        botMemoryService: failingMemoryService
+      })
+
+      expect(() =>
+        convServiceWithFailingMem.prepareTurn(sessionA, {
+          botId: botAId,
+          conversationId: convAId,
+          question: 'Will fail'
+        })
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'RETRIEVAL_ERROR'
+        })
+      )
+    })
+
+    it('45. Prepared turn includes memoryContext selection metadata', () => {
+      const memoryRepo = new BotMemoryRepository(db)
+      memoryRepo.create({
+        botId: botAId,
+        knowledgeBaseId: kbAId,
+        memoryType: 'user_note',
+        content: 'User preference note'
+      })
+
+      const turn = conversationService.prepareTurn(sessionA, {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'Test metadata'
+      })
+
+      expect(turn.memoryContext).toBeDefined()
+      expect(turn.memoryContext?.botId).toBe(botAId)
+      expect(turn.memoryContext?.knowledgeBaseId).toBe(kbAId)
+      expect(turn.memoryContext?.totalAvailableCount).toBe(1)
+      expect(turn.memoryContext?.includedCount).toBe(1)
+      expect(turn.memoryContext?.excludedCount).toBe(0)
+      expect(turn.memoryContext?.configuredBudget).toBe(1500)
     })
   })
 })

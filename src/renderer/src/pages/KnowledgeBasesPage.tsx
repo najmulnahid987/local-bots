@@ -8,7 +8,8 @@ import {
   AlertCircle,
   CheckCircle2,
   AlertTriangle,
-  FolderOpen
+  FolderOpen,
+  Upload
 } from 'lucide-react'
 import { useKnowledgeBases } from '../contexts/KnowledgeBaseContext'
 import { KnowledgeBaseCard } from '../components/kb/KnowledgeBaseCard'
@@ -16,6 +17,7 @@ import { CreateKnowledgeBaseModal } from '../components/kb/CreateKnowledgeBaseMo
 import { EditKnowledgeBaseModal } from '../components/kb/EditKnowledgeBaseModal'
 import { ArchiveKnowledgeBaseDialog } from '../components/kb/ArchiveKnowledgeBaseDialog'
 import { DeleteKnowledgeBaseModal } from '../components/kb/DeleteKnowledgeBaseModal'
+import { ImportKnowledgeBaseModal } from '../components/kb/ImportKnowledgeBaseModal'
 import type { KnowledgeBaseDto, DeleteKnowledgeBaseResult } from '../../../shared/knowledge-bases'
 
 type FilterStatus = 'all' | 'active' | 'archived'
@@ -61,6 +63,7 @@ export function KnowledgeBasesPage(): ReactElement {
 
   // Dialog State
   const [isCreateOpen, setIsCreateOpen] = useState<boolean>(false)
+  const [isImportOpen, setIsImportOpen] = useState<boolean>(false)
   const [editingKb, setEditingKb] = useState<KnowledgeBaseDto | null>(null)
   const [archivingKb, setArchivingKb] = useState<KnowledgeBaseDto | null>(null)
   const [deletingKb, setDeletingKb] = useState<KnowledgeBaseDto | null>(null)
@@ -131,7 +134,15 @@ export function KnowledgeBasesPage(): ReactElement {
               Organize your documents and shared knowledge in independent workspaces.
             </p>
           </div>
-          <div className="section-actions">
+          <div className="section-actions" style={{ display: 'flex', gap: '8px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setIsImportOpen(true)}
+              data-testid="btn-open-import-kb"
+            >
+              <Upload size={16} className="inline-icon" aria-hidden="true" /> Import Archive
+            </button>
             <button
               type="button"
               className="btn btn-primary"
@@ -380,6 +391,17 @@ export function KnowledgeBasesPage(): ReactElement {
           setNotification({
             type: 'success',
             message: `Knowledge Base "${created.name}" created successfully.`
+          })
+        }}
+      />
+
+      <ImportKnowledgeBaseModal
+        isOpen={isImportOpen}
+        onClose={() => setIsImportOpen(false)}
+        onImportSuccess={(result) => {
+          setNotification({
+            type: 'success',
+            message: `Knowledge Base "${result.knowledgeBaseName}" imported successfully.`
           })
         }}
       />

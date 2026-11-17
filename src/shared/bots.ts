@@ -12,6 +12,7 @@ export const BOT_IPC_CHANNELS = {
   ARCHIVE: 'bot:archive',
   UNARCHIVE: 'bot:unarchive',
   DELETE: 'bot:delete',
+  GET_DELETION_PREVIEW: 'bot:get-deletion-preview',
   ACTIVATE_WORKSPACE: 'bot:activate-workspace',
   DEACTIVATE_WORKSPACE: 'bot:deactivate-workspace'
 } as const
@@ -126,6 +127,7 @@ export interface BotApi {
   archive(botId: string): Promise<BotDto>
   unarchive(botId: string): Promise<BotDto>
   delete(botId: string): Promise<DeleteBotResultDto>
+  getDeletionPreview?(botId: string): Promise<import('./deletion').DeletionPreviewDto>
   activateWorkspace(knowledgeBaseId: string): Promise<KnowledgeBaseDto>
   deactivateWorkspace(): Promise<{ success: boolean }>
 }

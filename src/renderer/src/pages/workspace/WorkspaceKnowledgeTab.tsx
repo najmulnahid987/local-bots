@@ -255,6 +255,7 @@ export function WorkspaceKnowledgeTab(): ReactElement {
       <DocumentDeleteConfirmModal
         isOpen={documentToDelete !== null}
         documentName={documentToDelete?.originalFileName || ''}
+        sourceId={documentToDelete?.id}
         isDeleting={deletingId !== null}
         onConfirm={handleConfirmDelete}
         onCancel={() => setDocumentToDelete(null)}

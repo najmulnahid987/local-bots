@@ -23,6 +23,12 @@ import {
   DEFAULT_RESERVED_OUTPUT_TOKENS,
   type ConversationContextResult
 } from './conversation-context-manager'
+import {
+  BotMemoryService,
+  BotMemoryServiceError,
+  type BotMemoryContextSelectionResult
+} from './bot-memory-service'
+import { BotMemoryRepository } from '../database/repositories/bot-memory-repository'
 import type { PromptTokenEstimates } from './rag-prompt-builder'
 import type { CitationDto, ConversationDto, MessageDto } from '../../shared/conversations'
 import type { ChatMessageDto } from '../../shared/providers'
@@ -117,6 +123,7 @@ export interface PreparedConversationTurn {
   readonly includedMessageCount: number
   readonly excludedMessageCount: number
   readonly historyTrimmingOccurred: boolean
+  readonly memoryContext?: BotMemoryContextSelectionResult
 }
 
 // ============================================================================
@@ -132,6 +139,8 @@ export interface ConversationServiceDependencies {
   readonly kbRepo?: KnowledgeBaseRepository
   readonly registry?: ProviderRegistry
   readonly botRagService?: BotRagService
+  readonly botMemoryService?: BotMemoryService
+  readonly botMemoryRepo?: BotMemoryRepository
   readonly db?: Database.Database
 }
 
@@ -152,6 +161,7 @@ export class ConversationService {
   private readonly providerConnectionRepo: ProviderConnectionRepository
   private readonly registry: ProviderRegistry
   private readonly botRagService: BotRagService
+  private readonly botMemoryService?: BotMemoryService
 
   constructor(deps: ConversationServiceDependencies) {
     if (!deps || typeof deps !== 'object') {
@@ -172,6 +182,13 @@ export class ConversationService {
         deps.providerConnectionRepo ?? new ProviderConnectionRepository(deps.db)
       this.registry = deps.registry ?? providerRegistry
       this.botRagService = deps.botRagService ?? new BotRagService({ db: deps.db })
+      this.botMemoryService =
+        deps.botMemoryService ??
+        new BotMemoryService({
+          db: deps.db,
+          botRepo: this.botRepo,
+          botMemoryRepo: deps.botMemoryRepo ?? new BotMemoryRepository(deps.db)
+        })
     } else {
       if (!deps.activeWorkspaceContext) {
         throw new ConversationServiceError(
@@ -217,6 +234,11 @@ export class ConversationService {
       this.providerConnectionRepo = deps.providerConnectionRepo
       this.registry = deps.registry ?? providerRegistry
       this.botRagService = deps.botRagService
+      this.botMemoryService =
+        deps.botMemoryService ??
+        (deps.botMemoryRepo && deps.botRepo
+          ? new BotMemoryService({ botMemoryRepo: deps.botMemoryRepo, botRepo: deps.botRepo })
+          : undefined)
     }
   }
 
@@ -289,6 +311,31 @@ export class ConversationService {
     // 8. Execute Bot-scoped RAG retrieval
     const retrievalResult = this.executeBotRagRetrieval(bot.id, validatedRequest)
 
+    // 8.5. Retrieve Bot memory context
+    let memoryContext: BotMemoryContextSelectionResult | undefined
+    if (this.botMemoryService) {
+      try {
+        memoryContext = this.botMemoryService.getMemoryContext(bot.id)
+      } catch (err) {
+        if (err instanceof BotMemoryServiceError) {
+          if (err.code === 'BOT_NOT_FOUND') {
+            throw new ConversationServiceError(err.message, 'BOT_NOT_FOUND')
+          }
+          if (err.code === 'BOT_ARCHIVED') {
+            throw new ConversationServiceError(err.message, 'BOT_ARCHIVED')
+          }
+          throw new ConversationServiceError(
+            `Memory retrieval error: ${err.message}`,
+            'RETRIEVAL_ERROR'
+          )
+        }
+        throw new ConversationServiceError(
+          `Unexpected memory retrieval error: ${err instanceof Error ? err.message : String(err)}`,
+          'RETRIEVAL_ERROR'
+        )
+      }
+    }
+
     // 9. Assemble prompt and budget context window
     const contextResult = this.budgetConversationContext(
       bot,
@@ -296,7 +343,8 @@ export class ConversationService {
       validatedRequest.question,
       retrievalResult,
       contextLimits.inputTokens,
-      reservedOutputTokens
+      reservedOutputTokens,
+      memoryContext
     )
 
     // 10. Construct immutable PreparedConversationTurn
@@ -317,7 +365,8 @@ export class ConversationService {
       tokenEstimates: contextResult.promptResult.tokenEstimates,
       includedMessageCount: contextResult.includedMessageCount,
       excludedMessageCount: contextResult.excludedMessageCount,
-      historyTrimmingOccurred: contextResult.historyTrimmingOccurred
+      historyTrimmingOccurred: contextResult.historyTrimmingOccurred,
+      memoryContext
     })
   }
 
@@ -529,7 +578,8 @@ export class ConversationService {
     question: string,
     retrievalResult: BotRagRetrievalResult,
     modelInputTokens: number,
-    reservedOutputTokens: number
+    reservedOutputTokens: number,
+    memoryContext?: BotMemoryContextSelectionResult
   ): ConversationContextResult {
     try {
       return ConversationContextManager.selectContext({
@@ -541,7 +591,8 @@ export class ConversationService {
         question,
         retrievalResult,
         modelContextLimit: modelInputTokens,
-        reservedOutputTokens
+        reservedOutputTokens,
+        memoryContext
       })
     } catch (err) {
       if (err instanceof ConversationContextManagerError) {

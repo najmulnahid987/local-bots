@@ -151,4 +151,80 @@ describe('Renderer: BotDeleteDialog (Phase 6 Step 6.5)', () => {
     const errorEl = screen.getByTestId('delete-bot-error')
     expect(errorEl.textContent).toContain('SQLite cascade error [REDACTED_PATH]')
   })
+
+  it('7. loads deletion preview and displays dependent counts for conversations, messages, runs, memories', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(window as any).api = {
+      deletion: {
+        getPreview: vi.fn(async () => ({
+          entityType: 'bot',
+          entityId: sampleBot.id,
+          displayName: sampleBot.name,
+          parentName: 'Alpha KB',
+          parentId: sampleBot.knowledgeBaseId,
+          dependentCounts: {
+            conversations: 5,
+            messages: 23,
+            agentRuns: 2,
+            memories: 4,
+            toolEvents: 8
+          },
+          affectedCategories: ['Conversations', 'Messages'],
+          unaffectedCategories: ['Knowledge Base'],
+          backupReversible: true,
+          isBlocked: false,
+          warnings: []
+        }))
+      }
+    }
+
+    render(<BotDeleteDialog isOpen={true} bot={sampleBot} onClose={vi.fn()} />)
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10))
+    })
+
+    expect(screen.getByText(/5 threads/)).toBeDefined()
+    expect(screen.getByText(/23 messages/)).toBeDefined()
+    expect(screen.getByText(/2 runs, 8 events/)).toBeDefined()
+    expect(screen.getByText(/4 memories/)).toBeDefined()
+  })
+
+  it('8. blocks deletion when preview indicates active operations', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(window as any).api = {
+      deletion: {
+        getPreview: vi.fn(async () => ({
+          entityType: 'bot',
+          entityId: sampleBot.id,
+          displayName: sampleBot.name,
+          parentName: 'Alpha KB',
+          parentId: sampleBot.knowledgeBaseId,
+          dependentCounts: { conversations: 1 },
+          affectedCategories: [],
+          unaffectedCategories: [],
+          backupReversible: true,
+          isBlocked: true,
+          blockReason: 'Active agent task currently running on this Bot.',
+          warnings: []
+        }))
+      }
+    }
+
+    render(<BotDeleteDialog isOpen={true} bot={sampleBot} onClose={vi.fn()} />)
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10))
+    })
+
+    expect(screen.getByTestId('delete-bot-blocked-alert')).toBeDefined()
+    expect(screen.getByText(/Active agent task currently running on this Bot/)).toBeDefined()
+
+    // Type exact name
+    const input = screen.getByTestId('confirm-delete-bot-input')
+    fireEvent.change(input, { target: { value: 'Analytical Bot Alpha' } })
+
+    const confirmBtn = screen.getByTestId('delete-bot-confirm-btn')
+    expect(confirmBtn.getAttribute('disabled')).not.toBeNull()
+  })
 })

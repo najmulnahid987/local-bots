@@ -23,13 +23,14 @@ describe('Migration 003: Knowledge Sources Lifecycle and FTS5 Foundation', () =>
   // -------------------------------------------------------------------------
   describe('Part 1: Fresh Database Migration', () => {
     it('applies migrations 001, 002, and 003 in sequence on a fresh database', () => {
-      const result = runMigrations(db, migrations)
+      const v3Migrations = migrations.slice(0, 3)
+      const result = runMigrations(db, v3Migrations)
 
       expect(result.appliedCount).toBe(3)
       expect(result.currentVersion).toBe(3)
       expect(result.appliedVersions).toEqual([1, 2, 3])
 
-      const status = getMigrationStatus(db, migrations)
+      const status = getMigrationStatus(db, v3Migrations)
       expect(status.currentVersion).toBe(3)
       expect(status.pendingCount).toBe(0)
 
@@ -161,7 +162,7 @@ describe('Migration 003: Knowledge Sources Lifecycle and FTS5 Foundation', () =>
       )
 
       // Step 2: Apply Migration 003
-      const migrationResult = runMigrations(db, migrations)
+      const migrationResult = runMigrations(db, migrations.slice(0, 3))
       expect(migrationResult.appliedCount).toBe(1)
       expect(migrationResult.currentVersion).toBe(3)
 

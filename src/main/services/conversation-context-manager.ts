@@ -1,6 +1,7 @@
 import type { MessageDto } from '../../shared/conversations'
 import type { BotRagRetrievalResult } from './bot-rag-service'
 import { RagPromptBuilder, type RagPromptResult, type BotPromptConfig } from './rag-prompt-builder'
+import type { BotMemoryContextSelectionResult } from './bot-memory-service'
 
 // ============================================================================
 // Service Constants & Limits
@@ -46,6 +47,7 @@ export interface ConversationContextManagerInput {
   readonly reservedOutputTokens?: number
   readonly safetyMarginTokens?: number
   readonly messageOverheadTokens?: number
+  readonly memoryContext?: BotMemoryContextSelectionResult | string
 }
 
 export interface ConversationTurn {
@@ -64,6 +66,7 @@ export interface ConversationContextResult {
   readonly modelContextLimit: number
   readonly historyTrimmingOccurred: boolean
   readonly fitsWithinBudget: boolean
+  readonly memoryOmittedDueToContextLimit?: boolean
 }
 
 // ============================================================================
@@ -213,6 +216,8 @@ export class ConversationContextManager {
     let promptResult: RagPromptResult | null = null
     let totalEstimatedInputTokens = 0
     let startTurnIndex = 0
+    let activeMemoryContext = input.memoryContext
+    let memoryOmittedDueToContextLimit = false
 
     while (startTurnIndex <= turns.length) {
       selectedTurns = turns.slice(startTurnIndex)
@@ -223,7 +228,8 @@ export class ConversationContextManager {
           bot: input.bot,
           history: candidateMessages,
           question: input.question,
-          retrievalResult: input.retrievalResult
+          retrievalResult: input.retrievalResult,
+          memoryContext: activeMemoryContext
         })
       } catch (err) {
         throw new ConversationContextManagerError(
@@ -244,8 +250,14 @@ export class ConversationContextManager {
       // If over budget and there are turns to remove, trim the oldest complete turn
       if (startTurnIndex < turns.length) {
         startTurnIndex++
+      } else if (activeMemoryContext) {
+        // Even with 0 historical turns, prompt exceeds budget.
+        // Omit memory context to protect mandatory system prompt, KB evidence, and question.
+        activeMemoryContext = undefined
+        memoryOmittedDueToContextLimit = true
+        // Re-evaluate with 0 historical turns and no memory context
       } else {
-        // Even with 0 historical turns, mandatory prompt exceeds budget
+        // Even with 0 historical turns and no memory, mandatory prompt exceeds budget
         break
       }
     }
@@ -273,7 +285,8 @@ export class ConversationContextManager {
       reservedOutputTokens,
       modelContextLimit,
       historyTrimmingOccurred,
-      fitsWithinBudget: true
+      fitsWithinBudget: true,
+      memoryOmittedDueToContextLimit
     }
   }
 }

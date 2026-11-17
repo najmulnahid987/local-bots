@@ -18,6 +18,12 @@ import {
   registerFailingAgentIpcHandlers,
   registerBotMemoryIpcHandlers,
   registerFailingBotMemoryIpcHandlers,
+  registerDiagnosticsIpcHandlers,
+  registerFailingDiagnosticsIpcHandlers,
+  registerDeletionIpcHandlers,
+  registerFailingDeletionIpcHandlers,
+  registerPrivacyIpcHandlers,
+  registerFailingPrivacyIpcHandlers,
   sanitizeBotMemoryErrorMessage,
   sanitizeAgentErrorMessage,
   isTrustedRendererUrl
@@ -53,6 +59,7 @@ import { BotManagerService } from './services/bot-manager'
 import { sanitizeBotErrorMessage } from './services/bot-errors'
 import { ConversationManagerService } from './services/conversation-manager'
 import { ConversationTurnService } from './services/conversation-turn-service'
+import { BotMemoryService } from './services/bot-memory-service'
 import { ConversationExecutionService } from './services/conversation-execution-service'
 import { ConversationPersistenceService } from './services/conversation-persistence-service'
 import { sanitizeConversationErrorMessage } from './ipc/conversation-validation'
@@ -67,6 +74,18 @@ import { providerRegistry } from './providers/provider-registry'
 import { ProviderManagerService } from './providers/provider-manager/provider-manager-service'
 import { sanitizeErrorMessage } from './providers/provider-manager/errors'
 import { sanitizeDocumentErrorMessage } from './ipc/document-validation'
+import { BackupExportManager } from './services/backup-export-manager'
+import { BackupImportManager } from './services/backup-import-manager'
+import { ImportRecoveryRepository } from './database/repositories/import-recovery-repository'
+import { ImportRecoveryService } from './services/import-recovery-service'
+import { StartupReconciliationService } from './services/startup-reconciliation-service'
+import { DatabaseIntegrityService } from './services/database-integrity-service'
+import { DiagnosticsCollector } from './services/diagnostics-collector'
+import { DiagnosticsExportService } from './services/diagnostics-export-service'
+import { defaultErrorRingBuffer } from './services/error-ring-buffer'
+import { DeletionRecoveryRepository } from './database/repositories/deletion-recovery-repository'
+import { DeletionService } from './services/deletion-service'
+import { PrivacyService } from './services/privacy-service'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -347,8 +366,29 @@ app.whenReady().then(async () => {
   let vault: CredentialVault | null = null
   let sourceRepo: KnowledgeSourceRepository | null = null
   let turnService: ConversationTurnService | null = null
+  let backupExportManager: BackupExportManager | undefined
+  let backupImportManager: BackupImportManager | undefined
+  let importRecoveryService: ImportRecoveryService | undefined
+  let docLifecycleService: DocumentLifecycleService | null = null
+  let kbManager: KnowledgeBaseManager | null = null
+  let botManager: BotManagerService | null = null
+  let conversationManager: ConversationManagerService | null = null
+  let botMemoryRepo: BotMemoryRepository | null = null
+  let botRepo: BotRepository | null = null
+  let conversationRepo: ConversationRepository | null = null
+  let messageRepo: MessageRepository | null = null
+  let storageManager: DocumentStorageManager | null = null
+  let deletionRecoveryRepo: DeletionRecoveryRepository | null = null
   try {
     const userDataPath = app.getPath('userData')
+    botRepo = new BotRepository(db)
+    botMemoryRepo = new BotMemoryRepository(db)
+    conversationRepo = new ConversationRepository(db)
+    messageRepo = new MessageRepository(db)
+    sourceRepo = new KnowledgeSourceRepository(db)
+    deletionRecoveryRepo = new DeletionRecoveryRepository(db)
+    storageManager = new DocumentStorageManager({ userDataPath })
+
     vault = new CredentialVault({ vaultDir: join(userDataPath, 'credentials') })
     providerManager = new ProviderManagerService({
       credentialVault: vault,
@@ -370,12 +410,17 @@ app.whenReady().then(async () => {
   // Initialize KnowledgeBaseManager and register Knowledge Base IPC handlers
   try {
     const userDataPath = app.getPath('userData')
-    const kbManager = new KnowledgeBaseManager({
+    kbManager = new KnowledgeBaseManager({
       repository: kbRepo,
       userDataPath
     })
 
-    registerKnowledgeBaseIpcHandlers(() => mainWindow, kbManager)
+    registerKnowledgeBaseIpcHandlers(
+      () => mainWindow,
+      kbManager,
+      () => backupExportManager,
+      () => backupImportManager
+    )
     console.log(
       '[KNOWLEDGE_BASE_SUBSYSTEM_INITIALIZED]',
       JSON.stringify({ documentsDir: kbManager.getDocumentsDirectory() })
@@ -406,6 +451,7 @@ app.whenReady().then(async () => {
       sourceRepository: sourceRepo,
       storageManager
     })
+    docLifecycleService = lifecycleService
 
     registerDocumentIpcHandlers({
       getMainWindow: () => mainWindow,
@@ -443,8 +489,8 @@ app.whenReady().then(async () => {
 
   // Initialize ActiveWorkspaceContext and BotManagerService, and register Bot IPC handlers
   try {
-    const botRepo = new BotRepository(db)
-    const botManager = new BotManagerService({
+    botRepo = botRepo ?? new BotRepository(db)
+    botManager = new BotManagerService({
       botRepo,
       kbRepo,
       connectionRepo,
@@ -468,8 +514,8 @@ app.whenReady().then(async () => {
 
   // Initialize BotMemoryRepository and register Bot Memory IPC handlers
   try {
-    const botRepo = new BotRepository(db)
-    const botMemoryRepo = new BotMemoryRepository(db)
+    botRepo = botRepo ?? new BotRepository(db)
+    botMemoryRepo = botMemoryRepo ?? new BotMemoryRepository(db)
     registerBotMemoryIpcHandlers({
       getMainWindow: () => mainWindow,
       botMemoryRepo,
@@ -490,11 +536,13 @@ app.whenReady().then(async () => {
 
   // Initialize ConversationManagerService and ConversationTurnService, and register Conversation IPC handlers
   try {
-    const botRepo = new BotRepository(db)
-    const conversationRepo = new ConversationRepository(db)
-    const messageRepo = new MessageRepository(db)
+    botRepo = botRepo ?? new BotRepository(db)
+    botMemoryRepo = botMemoryRepo ?? new BotMemoryRepository(db)
+    const botMemoryService = new BotMemoryService({ db, botRepo, botMemoryRepo })
+    conversationRepo = conversationRepo ?? new ConversationRepository(db)
+    messageRepo = messageRepo ?? new MessageRepository(db)
 
-    const conversationManager = new ConversationManagerService({
+    conversationManager = new ConversationManagerService({
       conversationRepo,
       messageRepo,
       botRepo,
@@ -520,7 +568,8 @@ app.whenReady().then(async () => {
       messageRepo,
       activeWorkspaceContext,
       executionService,
-      persistenceService
+      persistenceService,
+      botMemoryService
     })
 
     registerConversationIpcHandlers({
@@ -539,6 +588,53 @@ app.whenReady().then(async () => {
       () => mainWindow,
       'Conversation subsystem failed to initialize.'
     )
+  }
+
+  // Initialize Backup & Export Subsystem
+  try {
+    const botRepo = new BotRepository(db)
+    const botMemoryRepo = new BotMemoryRepository(db)
+    const conversationRepo = new ConversationRepository(db)
+    const messageRepo = new MessageRepository(db)
+    const storageManager = new DocumentStorageManager({ userDataPath: app.getPath('userData') })
+
+    backupExportManager = new BackupExportManager({
+      db,
+      kbRepository: kbRepo,
+      botRepository: botRepo,
+      botMemoryRepository: botMemoryRepo,
+      knowledgeSourceRepository: sourceRepo ?? new KnowledgeSourceRepository(db),
+      conversationRepository: conversationRepo,
+      messageRepository: messageRepo,
+      storageManager,
+      appVersion: app.getVersion()
+    })
+    console.log('[BACKUP_EXPORT_SUBSYSTEM_INITIALIZED]')
+
+    const importRecoveryRepo = new ImportRecoveryRepository(db)
+    importRecoveryService = new ImportRecoveryService({
+      db,
+      journalRepository: importRecoveryRepo,
+      storageManager,
+      tempBaseDir: join(app.getPath('userData'), 'temp')
+    })
+
+    backupImportManager = new BackupImportManager({
+      db,
+      kbRepository: kbRepo,
+      botRepository: botRepo,
+      botMemoryRepository: botMemoryRepo,
+      knowledgeSourceRepository: sourceRepo ?? new KnowledgeSourceRepository(db),
+      conversationRepository: conversationRepo,
+      messageRepository: messageRepo,
+      storageManager,
+      documentLifecycleService: docLifecycleService ?? undefined,
+      importRecoveryService,
+      tempBaseDir: join(app.getPath('userData'), 'temp')
+    })
+    console.log('[BACKUP_IMPORT_SUBSYSTEM_INITIALIZED]')
+  } catch (exportInitErr) {
+    console.error('[BACKUP_SUBSYSTEM_INITIALIZATION_FAILED]', exportInitErr)
   }
 
   // Initialize Agent Subsystem and register Agent IPC handlers
@@ -631,6 +727,135 @@ app.whenReady().then(async () => {
     registerFailingAgentIpcHandlers(() => mainWindow, 'Agent subsystem failed to initialize.')
   }
 
+  // Startup Reconciliation: Reconcile interrupted imports, document indexing, agent tasks, and quarantines
+  if (db && sourceRepo && importRecoveryService) {
+    try {
+      const storageMgr =
+        storageManager ?? new DocumentStorageManager({ userDataPath: app.getPath('userData') })
+      const startupReconciliationService = new StartupReconciliationService({
+        db,
+        importRecoveryService,
+        storageManager: storageMgr,
+        sourceRepository: sourceRepo,
+        deletionJournalRepo: deletionRecoveryRepo ?? undefined,
+        tempBaseDir: join(app.getPath('userData'), 'temp')
+      })
+
+      const reconReport = await startupReconciliationService.reconcile()
+      if (
+        reconReport.recoveredImportsCount > 0 ||
+        reconReport.reconciledSourcesCount > 0 ||
+        reconReport.reconciledAgentRunsCount > 0 ||
+        reconReport.reconciledToolEventsCount > 0 ||
+        reconReport.cleanedStagingDirsCount > 0 ||
+        reconReport.quarantineCleanedCount > 0 ||
+        reconReport.quarantineRecoveredCount > 0 ||
+        reconReport.warnings.length > 0
+      ) {
+        console.log('[STARTUP_RECONCILIATION_COMPLETED]', JSON.stringify(reconReport))
+      }
+    } catch (reconErr) {
+      console.warn('[STARTUP_RECONCILIATION_WARNING]', reconErr)
+    }
+  }
+
+  // Initialize DatabaseIntegrityService and DiagnosticsExportService, and register Diagnostics IPC handlers
+  try {
+    const dbPath = databaseManager.getDatabasePath()
+    const integrityService = new DatabaseIntegrityService({
+      db,
+      databaseFilePath: dbPath
+    })
+    const diagnosticsCollector = new DiagnosticsCollector({
+      db,
+      integrityService,
+      errorRingBuffer: defaultErrorRingBuffer,
+      tempBaseDir: join(app.getPath('userData'), 'temp'),
+      appVersion: app.getVersion()
+    })
+    const diagnosticsExportService = new DiagnosticsExportService({
+      collector: diagnosticsCollector
+    })
+
+    registerDiagnosticsIpcHandlers({
+      getMainWindow: () => mainWindow,
+      integrityService,
+      exportService: diagnosticsExportService
+    })
+    console.log('[DIAGNOSTICS_SUBSYSTEM_INITIALIZED]')
+  } catch (diagError) {
+    console.error('[DIAGNOSTICS_SUBSYSTEM_INITIALIZATION_FAILED]', diagError)
+    registerFailingDiagnosticsIpcHandlers(
+      () => mainWindow,
+      'Diagnostics subsystem failed to initialize.'
+    )
+  }
+
+  // Initialize DeletionService and register Deletion IPC handlers
+  try {
+    if (
+      !db ||
+      !kbRepo ||
+      !botRepo ||
+      !sourceRepo ||
+      !conversationRepo ||
+      !messageRepo ||
+      !botMemoryRepo ||
+      !kbManager ||
+      !docLifecycleService ||
+      !conversationManager ||
+      !botManager ||
+      !turnService ||
+      !storageManager
+    ) {
+      throw new Error('Required subsystem dependencies missing for DeletionService.')
+    }
+
+    const deletionService = new DeletionService({
+      db,
+      kbRepo,
+      botRepo,
+      sourceRepo,
+      conversationRepo,
+      messageRepo,
+      botMemoryRepo,
+      kbManager,
+      docLifecycleService,
+      conversationManager,
+      botManager,
+      turnService,
+      deletionJournalRepo: deletionRecoveryRepo ?? undefined,
+      storageManager
+    })
+
+    registerDeletionIpcHandlers({
+      getMainWindow: () => mainWindow,
+      deletionService
+    })
+    console.log('[DELETION_SUBSYSTEM_INITIALIZED]')
+  } catch (deletionError) {
+    console.error('[DELETION_SUBSYSTEM_INITIALIZATION_FAILED]', deletionError)
+    registerFailingDeletionIpcHandlers(() => mainWindow, 'Deletion subsystem failed to initialize.')
+  }
+
+  // Phase 9 Step 9.9: Privacy & Transparency subsystem initialization
+  try {
+    const privacyService = new PrivacyService({
+      userDataPath: app.getPath('userData'),
+      credentialVault: vault ?? undefined,
+      platform: process.platform
+    })
+
+    registerPrivacyIpcHandlers({
+      getMainWindow: () => mainWindow,
+      privacyService
+    })
+    console.log('[PRIVACY_SUBSYSTEM_INITIALIZED]')
+  } catch (privacyError) {
+    console.error('[PRIVACY_SUBSYSTEM_INITIALIZATION_FAILED]', privacyError)
+    registerFailingPrivacyIpcHandlers(() => mainWindow, 'Privacy subsystem failed to initialize.')
+  }
+
   createWindow()
 
   app.on('activate', function () {
@@ -644,6 +869,15 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
+  }
+})
+
+// Orderly shutdown: execute passive checkpoint before database closes
+app.on('before-quit', () => {
+  try {
+    databaseManager.checkpoint('PASSIVE')
+  } catch {
+    // Non-critical checkpoint
   }
 })
 

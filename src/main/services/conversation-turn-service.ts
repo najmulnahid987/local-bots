@@ -10,6 +10,7 @@ import { ConversationRepository } from '../database/repositories/conversation-re
 import { MessageRepository } from '../database/repositories/message-repository'
 import { ActiveWorkspaceContext, type SessionId } from './active-workspace-context'
 import { ConversationService, ConversationServiceError } from './conversation-service'
+import type { BotMemoryService } from './bot-memory-service'
 import {
   ConversationExecutionService,
   ConversationExecutionError,
@@ -153,6 +154,7 @@ export interface ConversationTurnServiceDependencies {
   readonly conversationRepo?: ConversationRepository
   readonly messageRepo?: MessageRepository
   readonly activeWorkspaceContext?: ActiveWorkspaceContext
+  readonly botMemoryService?: BotMemoryService
   readonly db?: Database.Database
 }
 
@@ -211,7 +213,8 @@ export class ConversationTurnService {
           db: deps.db,
           conversationRepo: this.conversationRepo,
           messageRepo: this.messageRepo,
-          activeWorkspaceContext: this.activeWorkspaceContext
+          activeWorkspaceContext: this.activeWorkspaceContext,
+          botMemoryService: deps.botMemoryService
         })
     } else {
       if (!deps.conversationRepo) {

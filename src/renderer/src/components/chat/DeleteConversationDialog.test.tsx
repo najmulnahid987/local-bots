@@ -160,4 +160,83 @@ describe('DeleteConversationDialog (Phase 7 Step 7.11)', () => {
     expect(errorEl.textContent).not.toContain('C:\\Users\\Acer\\secret.db')
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  it('8. loads deletion preview and displays dependent counts', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(window as any).api = {
+      deletion: {
+        getPreview: vi.fn(async () => ({
+          entityType: 'conversation',
+          entityId: sampleConv.id,
+          displayName: sampleConv.title,
+          parentName: 'Financial Bot',
+          parentId: sampleConv.botId,
+          dependentCounts: {
+            messages: 42,
+            agentRuns: 3,
+            toolEvents: 10
+          },
+          affectedCategories: ['Messages'],
+          unaffectedCategories: ['Knowledge Base'],
+          backupReversible: true,
+          isBlocked: false,
+          warnings: []
+        }))
+      }
+    }
+
+    render(
+      <DeleteConversationDialog
+        isOpen={true}
+        conversation={sampleConv}
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('deletion-preview-summary')).toBeDefined()
+    })
+
+    expect(screen.getByText('42')).toBeDefined()
+    expect(screen.getByText('3')).toBeDefined()
+  })
+
+  it('9. disables delete button and renders block reason when preview isBlocked is true', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(window as any).api = {
+      deletion: {
+        getPreview: vi.fn(async () => ({
+          entityType: 'conversation',
+          entityId: sampleConv.id,
+          displayName: sampleConv.title,
+          parentName: 'Financial Bot',
+          parentId: sampleConv.botId,
+          dependentCounts: { messages: 1 },
+          affectedCategories: [],
+          unaffectedCategories: [],
+          backupReversible: true,
+          isBlocked: true,
+          blockReason: 'Active turn lock active on conversation.',
+          warnings: []
+        }))
+      }
+    }
+
+    render(
+      <DeleteConversationDialog
+        isOpen={true}
+        conversation={sampleConv}
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Active turn lock active on conversation.')).toBeDefined()
+    })
+
+    const confirmBtn = screen.getByTestId('confirm-delete-btn')
+    expect(confirmBtn.getAttribute('disabled')).not.toBeNull()
+  })
 })

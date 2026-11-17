@@ -120,4 +120,58 @@ describe('Renderer: TaskActivityTimeline', () => {
 
     expect(screen.queryByText('Search Knowledge Base')).toBeNull()
   })
+
+  it('renders save memory action banner when status is completed and onSaveAsMemory is provided', () => {
+    const handleSaveAsMemory = vi.fn()
+
+    render(
+      <TaskActivityTimeline
+        agentRunId="run-done-1"
+        status="completed"
+        iteration={3}
+        maxIterations={5}
+        toolActivities={sampleToolActivities}
+        onSaveAsMemory={handleSaveAsMemory}
+      />
+    )
+
+    expect(screen.getByTestId('timeline-save-memory-banner-run-done-1')).toBeDefined()
+    expect(screen.getByText(/Save key findings to this Bot's persistent memory\?/)).toBeDefined()
+
+    const saveBtn = screen.getByTestId('save-task-memory-btn-run-done-1')
+    expect(saveBtn).toBeDefined()
+
+    fireEvent.click(saveBtn)
+    expect(handleSaveAsMemory).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not render save memory banner when status is running or failed', () => {
+    const handleSaveAsMemory = vi.fn()
+
+    const { rerender } = render(
+      <TaskActivityTimeline
+        agentRunId="run-running-1"
+        status="running"
+        iteration={1}
+        maxIterations={5}
+        toolActivities={sampleToolActivities}
+        onSaveAsMemory={handleSaveAsMemory}
+      />
+    )
+
+    expect(screen.queryByTestId('timeline-save-memory-banner-run-running-1')).toBeNull()
+
+    rerender(
+      <TaskActivityTimeline
+        agentRunId="run-failed-1"
+        status="failed"
+        iteration={2}
+        maxIterations={5}
+        toolActivities={sampleToolActivities}
+        onSaveAsMemory={handleSaveAsMemory}
+      />
+    )
+
+    expect(screen.queryByTestId('timeline-save-memory-banner-run-failed-1')).toBeNull()
+  })
 })

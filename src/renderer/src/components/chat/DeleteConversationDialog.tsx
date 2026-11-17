@@ -1,7 +1,8 @@
-import { ReactElement, useState, KeyboardEvent } from 'react'
+import { ReactElement, useState, useEffect, KeyboardEvent } from 'react'
 import { X, Loader2, Trash2, AlertTriangle, Info } from 'lucide-react'
 import type { ConversationDto } from '../../../../shared/conversations'
 import { ConversationBridgeError } from '../../../../shared/conversations'
+import type { DeletionPreviewDto } from '../../../../shared/deletion'
 
 export interface DeleteConversationDialogProps {
   readonly isOpen: boolean
@@ -34,8 +35,44 @@ export function DeleteConversationDialog({
 }: DeleteConversationDialogProps): ReactElement | null {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [preview, setPreview] = useState<DeletionPreviewDto | null>(null)
+  const [isLoadingPreview, setIsLoadingPreview] = useState<boolean>(false)
+
+  useEffect(() => {
+    if (!isOpen || !conversation) return
+
+    let isCancelled = false
+    const loadPreview = async (): Promise<void> => {
+      setIsLoadingPreview(true)
+      try {
+        if (window.api?.deletion?.getPreview) {
+          const res = await window.api.deletion.getPreview('conversation', conversation.id)
+          if (!isCancelled) setPreview(res)
+        } else if (window.api?.conversations?.getDeletionPreview) {
+          const res = await window.api.conversations.getDeletionPreview(conversation.id)
+          if (!isCancelled) setPreview(res)
+        }
+      } catch {
+        // Fall back gracefully to static dialog
+      } finally {
+        if (!isCancelled) setIsLoadingPreview(false)
+      }
+    }
+
+    void loadPreview()
+    return () => {
+      isCancelled = true
+    }
+  }, [isOpen, conversation])
 
   if (!isOpen || !conversation) return null
+
+  const isOperationBlocked = isGenerating || (preview?.isBlocked ?? false)
+  const effectiveBlockReason =
+    preview?.blockReason ??
+    (isGenerating
+      ? 'Generation is currently active for this conversation. You must stop generation before deleting.'
+      : undefined)
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key === 'Escape' && !isSubmitting) {
@@ -44,7 +81,7 @@ export function DeleteConversationDialog({
   }
 
   const handleDelete = async (): Promise<void> => {
-    if (isSubmitting || isGenerating) return
+    if (isSubmitting || isOperationBlocked) return
 
     setIsSubmitting(true)
     setErrorMessage(null)
@@ -125,17 +162,71 @@ export function DeleteConversationDialog({
             </div>
           </div>
 
-          {isGenerating && (
+          {isLoadingPreview && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '12px',
+                color: 'var(--color-text-secondary)',
+                marginTop: '12px'
+              }}
+              data-testid="loading-preview-indicator"
+            >
+              <Loader2 size={14} className="spinner inline-icon" aria-hidden="true" />
+              <span>Analyzing conversation dependencies...</span>
+            </div>
+          )}
+
+          {preview && (
+            <div
+              className="deletion-preview-card"
+              data-testid="deletion-preview-summary"
+              style={{
+                padding: '10px 12px',
+                backgroundColor: 'var(--color-bg-secondary, #f8fafc)',
+                border: '1px solid var(--color-border, #e2e8f0)',
+                borderRadius: 'var(--radius-md, 6px)',
+                marginTop: '12px',
+                fontSize: '12px'
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 600,
+                  marginBottom: '4px',
+                  color: 'var(--color-text-primary)'
+                }}
+              >
+                Affected Items:
+              </div>
+              <ul style={{ margin: 0, paddingLeft: '18px', color: 'var(--color-text-secondary)' }}>
+                <li>
+                  Messages: <strong>{preview.dependentCounts.messages ?? 0}</strong>
+                </li>
+                {(preview.dependentCounts.agentRuns ?? 0) > 0 && (
+                  <li>
+                    Autonomous Agent Tasks: <strong>{preview.dependentCounts.agentRuns}</strong>
+                  </li>
+                )}
+                {(preview.dependentCounts.toolEvents ?? 0) > 0 && (
+                  <li>
+                    Recorded Tool Events: <strong>{preview.dependentCounts.toolEvents}</strong>
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+
+          {isOperationBlocked && effectiveBlockReason && (
             <div
               className="section-alert section-alert-error"
               role="alert"
               data-testid="delete-generating-warning"
               style={{ marginTop: '12px' }}
             >
-              <span>
-                Generation is currently active for this conversation. You must stop generation
-                before deleting.
-              </span>
+              <span>{effectiveBlockReason}</span>
             </div>
           )}
 
@@ -165,7 +256,7 @@ export function DeleteConversationDialog({
             type="button"
             className="btn btn-danger"
             onClick={() => void handleDelete()}
-            disabled={isSubmitting || isGenerating}
+            disabled={isSubmitting || isOperationBlocked}
             data-testid="confirm-delete-btn"
             style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >

@@ -6,7 +6,10 @@ import type {
   KnowledgeDocumentApi,
   BotApi,
   ConversationApi,
-  BotMemoryApi
+  BotMemoryApi,
+  DiagnosticsApi,
+  DeletionApi,
+  PrivacyApi
 } from '../shared/ipc'
 import type { AgentApi } from './index'
 
@@ -21,6 +24,9 @@ export interface AppApi {
   conversation?: ConversationApi
   conversations?: ConversationApi
   agents?: AgentApi
+  diagnostics?: DiagnosticsApi
+  deletion?: DeletionApi
+  privacy?: PrivacyApi
 }
 
 declare global {

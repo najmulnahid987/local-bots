@@ -1,10 +1,14 @@
-import { ReactElement } from 'react'
+import { ReactElement, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Settings, Clock, HardDrive, KeyRound } from 'lucide-react'
+import { Settings, Clock, HardDrive, KeyRound, FolderArchive, Download, Upload } from 'lucide-react'
 import type { WorkspaceOutletContext } from './WorkspaceOverviewTab'
+import { ExportKnowledgeBaseModal } from '../../components/kb/ExportKnowledgeBaseModal'
+import { ImportKnowledgeBaseModal } from '../../components/kb/ImportKnowledgeBaseModal'
 
 export function WorkspaceSettingsTab(): ReactElement {
   const { knowledgeBase } = useOutletContext<WorkspaceOutletContext>()
+  const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false)
+  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false)
 
   const formattedCreated = new Date(knowledgeBase.createdAt).toLocaleString(undefined, {
     year: 'numeric',
@@ -88,6 +92,56 @@ export function WorkspaceSettingsTab(): ReactElement {
           </div>
         </dl>
       </div>
+
+      <div
+        className="workspace-settings-card"
+        style={{ marginTop: '16px' }}
+        data-testid="settings-card-export"
+      >
+        <div className="settings-section-header">
+          <FolderArchive size={18} className="text-secondary" aria-hidden="true" />
+          <h3 className="settings-section-title">Export & Portability</h3>
+        </div>
+
+        <p className="text-sm text-secondary" style={{ marginTop: '8px', lineHeight: 1.5 }}>
+          Export this Knowledge Base, its Bots, saved memories, documents, and conversations into a
+          portable ZIP archive (<code>.voyaro-kb.zip</code>). All API keys and machine paths are
+          strictly excluded.
+        </p>
+
+        <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setIsExportModalOpen(true)}
+            data-testid="btn-open-export-kb"
+          >
+            <Download size={14} className="inline-icon" aria-hidden="true" />
+            <span>Export Knowledge Base</span>
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setIsImportModalOpen(true)}
+            data-testid="btn-open-import-kb-workspace"
+          >
+            <Upload size={14} className="inline-icon" aria-hidden="true" />
+            <span>Import / Restore Archive</span>
+          </button>
+        </div>
+      </div>
+
+      <ExportKnowledgeBaseModal
+        isOpen={isExportModalOpen}
+        knowledgeBase={knowledgeBase}
+        onClose={() => setIsExportModalOpen(false)}
+      />
+
+      <ImportKnowledgeBaseModal
+        isOpen={isImportModalOpen}
+        defaultTargetKnowledgeBaseId={knowledgeBase.id}
+        onClose={() => setIsImportModalOpen(false)}
+      />
     </div>
   )
 }
