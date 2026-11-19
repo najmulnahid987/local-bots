@@ -18,13 +18,14 @@ describe('Migration 005: Deletion Recovery Journal', () => {
   })
 
   it('applies migrations 001 through 005 in sequence on a fresh database', () => {
-    const result = runMigrations(db, migrations)
+    const migrations005 = migrations.slice(0, 5)
+    const result = runMigrations(db, migrations005)
 
     expect(result.appliedCount).toBe(5)
     expect(result.currentVersion).toBe(5)
     expect(result.appliedVersions).toEqual([1, 2, 3, 4, 5])
 
-    const status = getMigrationStatus(db, migrations)
+    const status = getMigrationStatus(db, migrations005)
     expect(status.currentVersion).toBe(5)
     expect(status.pendingCount).toBe(0)
 

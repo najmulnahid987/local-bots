@@ -646,9 +646,9 @@ describe('Phase 9 — Step 9.10: Final Master End-to-End Integration Suite', () 
       const { migrations } = await import('../database/migrations')
       const migrationResults = runMigrations(freshDb, migrations)
 
-      // All 5 migrations must succeed
-      expect(migrationResults.appliedCount).toBe(5)
-      expect(migrationResults.currentVersion).toBe(5)
+      // All registered migrations must succeed
+      expect(migrationResults.appliedCount).toBe(migrations.length)
+      expect(migrationResults.currentVersion).toBe(migrations.length)
 
       // Verify all tables exist and count is 13
       const tables = freshDb

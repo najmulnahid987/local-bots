@@ -65,6 +65,14 @@ function cspPlugin(): Plugin {
 export default defineConfig({
   main: {
     build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          'docx-parser-worker': resolve(
+            'src/main/documents/extraction/workers/docx-parser-worker.ts'
+          )
+        }
+      },
       externalizeDeps: {
         exclude: ['unpdf']
       }

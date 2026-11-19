@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { DocumentErrors } from './document-errors'
+import { DocxArchiveValidator } from './extraction/docx/docx-archive-validator'
 import {
   type DocumentSettingsProvider,
   StaticDocumentSettingsProvider,
@@ -11,7 +12,7 @@ import {
 /**
  * Approved document file extensions (without leading dot).
  */
-export const SUPPORTED_EXTENSIONS = ['txt', 'md', 'pdf'] as const
+export const SUPPORTED_EXTENSIONS = ['txt', 'md', 'pdf', 'docx'] as const
 export type SupportedExtension = (typeof SUPPORTED_EXTENSIONS)[number]
 
 /**
@@ -20,7 +21,8 @@ export type SupportedExtension = (typeof SUPPORTED_EXTENSIONS)[number]
 export const SUPPORTED_MIME_TYPES: Record<SupportedExtension, string> = {
   txt: 'text/plain',
   md: 'text/markdown',
-  pdf: 'application/pdf'
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 } as const
 
 export type SupportedMimeType = (typeof SUPPORTED_MIME_TYPES)[SupportedExtension]
@@ -102,7 +104,7 @@ export class DocumentFileValidator {
     const rawExt = path.extname(originalFileName).toLowerCase()
 
     // 1. Extension Allowlist Check
-    if (rawExt !== '.txt' && rawExt !== '.md' && rawExt !== '.pdf') {
+    if (rawExt !== '.txt' && rawExt !== '.md' && rawExt !== '.pdf' && rawExt !== '.docx') {
       throw DocumentErrors.unsupportedFileType(rawExt || '(none)')
     }
 
@@ -141,6 +143,8 @@ export class DocumentFileValidator {
     // 4. Format-Specific Signature & Content Validation
     if (extension === 'pdf') {
       await this.validatePdfHeader(resolvedPath)
+    } else if (extension === 'docx') {
+      await this.validateDocxArchive(resolvedPath)
     }
 
     // 5. Streaming Checksum Calculation & Content Integrity Check
@@ -194,6 +198,17 @@ export class DocumentFileValidator {
         await handle.close()
       }
     }
+  }
+
+  /**
+   * Validates a candidate DOCX archive package against defensive preflight rules.
+   */
+  private async validateDocxArchive(filePath: string): Promise<void> {
+    const buffer = await fs.promises.readFile(filePath)
+    const settings = this.getSettings()
+    DocxArchiveValidator.validate(buffer, {
+      maxCompressedBytes: settings.maxFileSizeBytes
+    })
   }
 
   /**

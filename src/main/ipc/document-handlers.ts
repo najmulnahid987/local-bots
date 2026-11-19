@@ -140,9 +140,10 @@ export function registerDocumentIpcHandlers(options: DocumentIpcHandlerOptions):
           properties: ['openFile'],
           filters: [
             {
-              name: 'Supported Documents (*.txt, *.md, *.pdf)',
-              extensions: ['txt', 'md', 'pdf']
+              name: 'Supported Documents (*.txt, *.md, *.pdf, *.docx)',
+              extensions: ['txt', 'md', 'pdf', 'docx']
             },
+            { name: 'Word Documents (*.docx)', extensions: ['docx'] },
             { name: 'All Files (*.*)', extensions: ['*'] }
           ]
         })

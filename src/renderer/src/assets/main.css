@@ -2125,6 +2125,11 @@
   color: #475569;
 }
 
+.doc-format-badge.format-docx {
+  background-color: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+}
+
 .doc-row-actions {
   display: flex;
   align-items: center;

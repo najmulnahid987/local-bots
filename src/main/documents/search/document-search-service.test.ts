@@ -588,4 +588,48 @@ describe('DocumentSearchService (Phase 5 Step 5.9)', () => {
       code: 'VALIDATION_ERROR'
     })
   })
+
+  it('14. successfully searches and returns results for DOCX source chunks with correct fileType and snippets', async () => {
+    const docxSourceId = randomUUID()
+    sourceRepo.create({
+      id: docxSourceId,
+      knowledge_base_id: kbAId,
+      file_name: 'telemetry_spec.docx',
+      original_file_name: 'Telemetry_Specification.docx',
+      relative_file_path: `originals/${docxSourceId}.docx`,
+      file_type: 'docx',
+      mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      file_size: 15420,
+      content_hash: '9'.repeat(64),
+      indexing_status: 'completed'
+    })
+
+    sourceRepo.insertChunks([
+      {
+        id: randomUUID(),
+        knowledge_base_id: kbAId,
+        source_id: docxSourceId,
+        chunk_index: 0,
+        content:
+          'Autonomous drone telemetry stream transmits synchronized LiDAR navigation vectors.',
+        page_number: null,
+        token_count: 12,
+        metadata_json: JSON.stringify({ heading: 'Navigation Matrix', headingLevel: 1 })
+      }
+    ])
+
+    const results = await searchService.search({
+      knowledgeBaseId: kbAId,
+      query: 'drone telemetry LiDAR'
+    })
+
+    expect(results).toHaveLength(1)
+    expect(results[0].sourceId).toBe(docxSourceId)
+    expect(results[0].filename).toBe('Telemetry_Specification.docx')
+    expect(results[0].heading).toBe('Navigation Matrix')
+    expect(results[0].headingLevel).toBe(1)
+    expect(results[0].snippet).toContain('[[HL]]drone[[/HL]]')
+    expect(results[0].snippet).toContain('[[HL]]telemetry[[/HL]]')
+    expect(results[0].snippet).toContain('[[HL]]LiDAR[[/HL]]')
+  })
 })

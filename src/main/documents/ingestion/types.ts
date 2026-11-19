@@ -3,6 +3,7 @@ import type { KnowledgeSource, KnowledgeSourceRepository } from '../../database/
 import type { DocumentFileValidator } from '../document-file-validator'
 import type { DocumentStorageManager } from '../document-storage-manager'
 import type { ExtractorRegistry } from '../extractors'
+import type { DocumentExtractionService } from '../extraction'
 import type { DocumentSettingsProvider } from '../document-settings'
 import type { SemanticChunker } from '../chunking'
 
@@ -71,6 +72,7 @@ export interface DocumentIngestionServiceOptions {
   readonly validator?: DocumentFileValidator
   readonly storageManager?: DocumentStorageManager
   readonly extractorRegistry?: ExtractorRegistry
+  readonly extractionService?: DocumentExtractionService
   readonly settingsProvider?: DocumentSettingsProvider
   readonly chunker?: SemanticChunker
   readonly sourceRepository?: KnowledgeSourceRepository

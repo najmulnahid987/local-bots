@@ -211,17 +211,22 @@ export function runMigrations(
 
   // 5. Execute each pending migration inside an immediate transaction
   for (const migration of pendingMigrations) {
+    // 1. Read and preserve the original foreign-key enforcement setting
+    const originalFk = db.pragma('foreign_keys', { simple: true }) as number
     const disableFk = Boolean(migration.disableForeignKeysForTableRebuild)
+
+    // 2. If required, disable foreign-key enforcement before starting the rebuild transaction
     if (disableFk) {
       db.pragma('foreign_keys = OFF')
     }
 
     try {
+      // 3. Start the transaction (BEGIN IMMEDIATE)
       const executeTx = db.transaction(() => {
-        // Execute the migration DDL/DML
+        // 4-8. Execute the migration DDL/DML (replacement table, copy, drop, rename, indexes)
         db.exec(migration.sql)
 
-        // Verify foreign key integrity if foreign keys were disabled for table rebuild
+        // 9. Run explicit PRAGMA foreign_key_check inside the transaction
         if (disableFk) {
           const violations = db.pragma('foreign_key_check') as Array<{
             table: string
@@ -236,22 +241,23 @@ export function runMigrations(
           }
         }
 
-        // Calculate checksum and record
+        // Calculate checksum and record in schema_migrations
         const checksum = computeChecksum(migration.sql)
         const appliedAt = Date.now()
         insertStmt.run(migration.version, migration.name, checksum, appliedAt)
       })
 
-      // Execute with BEGIN IMMEDIATE
+      // 10. Commit the transaction
       executeTx.immediate()
       newlyAppliedVersions.push(migration.version)
     } finally {
+      // 11. Restore the original foreign-key enforcement setting after the transaction ends
       if (disableFk) {
-        db.pragma('foreign_keys = ON')
+        db.pragma(originalFk === 1 ? 'foreign_keys = ON' : 'foreign_keys = OFF')
       }
     }
 
-    // Always verify PRAGMA foreign_keys = 1 after migration (success or failure)
+    // 12. Verify the final foreign-key enforcement setting
     assertForeignKeysEnabled(db)
   }
 

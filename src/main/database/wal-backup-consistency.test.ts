@@ -105,11 +105,11 @@ describe('WAL-Aware Database Backup Consistency (Phase 9 Step 9.7)', () => {
       expect(checkBot).toBeDefined()
       expect(checkBot.name).toBe('WAL Bot')
 
-      // Verify all 5 migrations exist
+      // Verify all migrations exist
       const migCount = bakDb.prepare('SELECT count(*) as c FROM schema_migrations').get() as {
         c: number
       }
-      expect(migCount.c).toBe(5)
+      expect(migCount.c).toBe(migrations.length)
     } finally {
       bakDb.close()
     }

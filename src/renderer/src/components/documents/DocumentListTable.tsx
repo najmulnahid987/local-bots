@@ -120,8 +120,8 @@ export function DocumentListTable({
           />
           <h3 className="empty-state-heading">No documents uploaded yet</h3>
           <p className="empty-state-text">
-            Import text, Markdown, or PDF documents to share them across all Bots in this Knowledge
-            Base.
+            Import text, Markdown, PDF, or Word documents to share them across all Bots in this
+            Knowledge Base.
           </p>
           <div className="empty-state-actions" style={{ marginTop: '16px' }}>
             <button

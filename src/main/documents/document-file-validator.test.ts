@@ -5,6 +5,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { DocumentFileValidator } from './document-file-validator'
 import { StaticDocumentSettingsProvider } from './document-settings'
+import { buildSyntheticDocx } from './benchmarks/fixtures/office-generator'
 
 describe('DocumentFileValidator (Phase 5 Step 5.3)', () => {
   let tempDir: string
@@ -80,7 +81,29 @@ describe('DocumentFileValidator (Phase 5 Step 5.3)', () => {
       expect(result.contentHash).toBe(crypto.createHash('sha256').update(pdfBytes).digest('hex'))
     })
 
-    it('1.4 normalizes uppercase extensions to lowercase', async () => {
+    it('1.4 validates and accepts a valid .docx file', async () => {
+      const docxBytes = buildSyntheticDocx({
+        title: 'Validation Test Doc',
+        identifier: 'VAL-001',
+        headings: ['Heading 1'],
+        tableRows: []
+      })
+      const filePath = path.join(tempDir, 'document.docx')
+      fs.writeFileSync(filePath, docxBytes)
+
+      const result = await validator.validate(filePath)
+
+      expect(result.originalFileName).toBe('document.docx')
+      expect(result.extension).toBe('docx')
+      expect(result.fileType).toBe('docx')
+      expect(result.mimeType).toBe(
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      )
+      expect(result.fileSizeBytes).toBe(docxBytes.length)
+      expect(result.contentHash).toBe(crypto.createHash('sha256').update(docxBytes).digest('hex'))
+    })
+
+    it('1.5 normalizes uppercase extensions to lowercase', async () => {
       const txtPath = path.join(tempDir, 'DOCUMENT.TXT')
       fs.writeFileSync(txtPath, 'Text content in uppercase file.', 'utf-8')
 
@@ -96,9 +119,9 @@ describe('DocumentFileValidator (Phase 5 Step 5.3)', () => {
       expect(pdfResult.mimeType).toBe('application/pdf')
     })
 
-    it('1.5 rejects unsupported extensions with UNSUPPORTED_FILE_TYPE', async () => {
+    it('1.6 rejects unsupported extensions with UNSUPPORTED_FILE_TYPE', async () => {
       const invalidFiles = [
-        'data.docx',
+        'data.xlsx',
         'report.doc',
         'script.py',
         'archive.zip',

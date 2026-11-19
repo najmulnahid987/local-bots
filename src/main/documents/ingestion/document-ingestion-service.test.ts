@@ -14,6 +14,7 @@ import { StaticDocumentSettingsProvider } from '../document-settings'
 import { ExtractorRegistry } from '../extractors/registry'
 import { SemanticChunker } from '../chunking/semantic-chunker'
 import { DocumentError, DocumentValidationError } from '../document-errors'
+import { buildSyntheticDocx } from '../benchmarks/fixtures/office-generator'
 
 /**
  * Deterministic in-memory PDF generator for unit tests.
@@ -732,5 +733,103 @@ Managed files are isolated in the originals subdirectory.`
         .all('kaleidoscope')
       expect(matches).toHaveLength(0)
     }
+  })
+
+  // 20. Successful DOCX ingestion
+  it('20. successfully ingests a DOCX (.docx) document through isolated execution, persists chunks and indexes in FTS5', async () => {
+    const docxBuffer = buildSyntheticDocx({
+      title: 'Quantum Telemetry Protocol',
+      identifier: 'QTP-9000',
+      headings: ['Subsystem Matrix', 'Sensor Calibration'],
+      tableRows: [
+        ['Sensor', 'Bandwidth', 'Calibrated'],
+        ['Photonic Array', '40 Gbps', 'True']
+      ]
+    })
+    const filePath = createTestFile('telemetry-spec.docx', docxBuffer)
+
+    const result = await service.ingest({
+      knowledgeBaseId: defaultKbId,
+      filePath
+    })
+
+    expect(result.status).toBe('completed')
+    if (result.status === 'completed') {
+      expect(result.duplicate).toBe(false)
+      expect(result.sourceId).toBeDefined()
+      expect(result.knowledgeBaseId).toBe(defaultKbId)
+      expect(result.totalChunks).toBeGreaterThanOrEqual(1)
+      expect(result.totalTokens).toBeGreaterThan(0)
+      expect(result.relativeFilePath).toMatch(/^originals\/[0-9a-f-]+\.docx$/)
+
+      // Verify source database record
+      const source = service.getSource(result.sourceId, defaultKbId)
+      expect(source).not.toBeNull()
+      expect(source?.indexing_status).toBe('completed')
+      expect(source?.file_type).toBe('docx')
+      expect(source?.original_file_name).toBe('telemetry-spec.docx')
+      expect(source?.indexed_at).toBeGreaterThan(0)
+      expect(source?.error_message).toBeNull()
+
+      // Verify physical storage
+      const physicalFile = path.join(documentsDir, defaultKbId, result.relativeFilePath)
+      expect(fs.existsSync(physicalFile)).toBe(true)
+
+      // Verify chunks
+      const chunks = service.getChunks(result.sourceId, defaultKbId)
+      expect(chunks.length).toBe(result.totalChunks)
+      expect(chunks[0].chunk_index).toBe(0)
+      expect(chunks[0].content).toContain('Quantum Telemetry Protocol')
+      expect(chunks[0].token_count).toBeGreaterThan(0)
+
+      // Verify FTS5 synchronization
+      const ftsMatches = db
+        .prepare('SELECT rowid, content FROM knowledge_fts WHERE knowledge_fts MATCH ?')
+        .all('Telemetry')
+      expect(ftsMatches.length).toBeGreaterThanOrEqual(1)
+    }
+  })
+
+  // 21. Duplicate DOCX detection
+  it('21. detects duplicate DOCX import in the same Knowledge Base and returns structured duplicate result', async () => {
+    const docxBuffer = buildSyntheticDocx({
+      title: 'Duplicate DOCX Test',
+      identifier: 'DUP-001',
+      headings: ['Section One'],
+      tableRows: []
+    })
+    const file1 = createTestFile('original-doc.docx', docxBuffer)
+    const file2 = createTestFile('copy-doc.docx', docxBuffer)
+
+    const first = await service.ingest({ knowledgeBaseId: defaultKbId, filePath: file1 })
+    expect(first.status).toBe('completed')
+
+    const second = await service.ingest({ knowledgeBaseId: defaultKbId, filePath: file2 })
+    expect(second.status).toBe('duplicate')
+    if (second.status === 'duplicate') {
+      expect(second.duplicate).toBe(true)
+      expect(second.existingSource.originalFileName).toBe('original-doc.docx')
+    }
+  })
+
+  // 22. Corrupt DOCX rejection
+  it('22. safely rejects corrupt/truncated DOCX file, writes 0 database records and cleans up storage', async () => {
+    // Corrupt PK zip archive (bad header)
+    const corruptBuffer = Buffer.from('PK\x03\x04corrupted_data_not_a_valid_zip_archive')
+    const corruptPath = createTestFile('broken.docx', corruptBuffer)
+
+    await expect(
+      service.ingest({ knowledgeBaseId: defaultKbId, filePath: corruptPath })
+    ).rejects.toThrow()
+
+    // Verify 0 sources and 0 chunks in database
+    const sources = db.prepare('SELECT count(*) as count FROM knowledge_sources').get() as {
+      count: number
+    }
+    const chunks = db.prepare('SELECT count(*) as count FROM knowledge_chunks').get() as {
+      count: number
+    }
+    expect(sources.count).toBe(0)
+    expect(chunks.count).toBe(0)
   })
 })

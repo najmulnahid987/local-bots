@@ -8,6 +8,7 @@ import type {
 import type { KnowledgeSourceRepository } from '../../database/repositories/knowledge-source-repository'
 import type { DocumentStorageManager } from '../document-storage-manager'
 import type { ExtractorRegistry } from '../extractors/registry'
+import type { DocumentExtractionService } from '../extraction'
 import type { SemanticChunker } from '../chunking/semantic-chunker'
 import type { DocumentSettingsProvider } from '../document-settings'
 
@@ -26,6 +27,7 @@ export interface DocumentLifecycleServiceOptions {
   readonly sourceRepository: KnowledgeSourceRepository
   readonly storageManager: DocumentStorageManager
   readonly extractorRegistry?: ExtractorRegistry
+  readonly extractionService?: DocumentExtractionService
   readonly normalizer?: (text: string) => string
   readonly chunker?: SemanticChunker
   readonly settingsProvider?: DocumentSettingsProvider

@@ -12,6 +12,7 @@ import { DocumentFileValidator } from '../document-file-validator'
 import { DocumentStorageManager } from '../document-storage-manager'
 import { type DocumentSettingsProvider, StaticDocumentSettingsProvider } from '../document-settings'
 import { ExtractorRegistry, defaultExtractorRegistry } from '../extractors'
+import { DocumentExtractionService } from '../extraction'
 import type { ExtractedDocument } from '../extractors/types'
 import { normalizeText } from '../normalization/text-normalizer'
 import { SemanticChunker } from '../chunking/semantic-chunker'
@@ -44,6 +45,8 @@ export class DocumentIngestionService {
   private readonly validator: DocumentFileValidator
   private readonly storageManager: DocumentStorageManager
   private readonly extractorRegistry: ExtractorRegistry
+  private readonly extractionService: DocumentExtractionService
+  private readonly hasCustomRegistry: boolean
   private readonly settingsProvider: DocumentSettingsProvider
   private readonly chunker: SemanticChunker
 
@@ -56,11 +59,17 @@ export class DocumentIngestionService {
     this.settingsProvider = options.settingsProvider ?? new StaticDocumentSettingsProvider()
     this.validator = options.validator ?? new DocumentFileValidator(this.settingsProvider)
     this.storageManager = options.storageManager ?? new DocumentStorageManager()
+    this.hasCustomRegistry = !!options.extractorRegistry
     this.extractorRegistry =
       options.extractorRegistry ??
       (options.settingsProvider
         ? new ExtractorRegistry(options.settingsProvider)
         : defaultExtractorRegistry)
+    this.extractionService =
+      options.extractionService ??
+      new DocumentExtractionService({
+        settingsProvider: this.settingsProvider
+      })
     this.chunker = options.chunker ?? new SemanticChunker(this.settingsProvider)
   }
 
@@ -191,7 +200,10 @@ export class DocumentIngestionService {
       const fileBytes = await fs.promises.readFile(stored.storagePath)
 
       // 9B. Format-neutral text extraction
-      const extracted = await this.extractorRegistry.extract(validation.fileType, fileBytes)
+      const extracted =
+        this.hasCustomRegistry && this.extractorRegistry.hasExtractor(validation.fileType)
+          ? await this.extractorRegistry.extract(validation.fileType, fileBytes)
+          : await this.extractionService.extractLegacy(validation.fileType, fileBytes)
 
       // 9C. Text normalization
       const normalizedDoc: ExtractedDocument = {

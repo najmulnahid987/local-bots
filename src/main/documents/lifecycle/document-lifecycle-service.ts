@@ -15,6 +15,7 @@ import { DocumentStorageManager } from '../document-storage-manager'
 import { DocumentErrors } from '../document-errors'
 import { type DocumentSettingsProvider, StaticDocumentSettingsProvider } from '../document-settings'
 import { ExtractorRegistry, defaultExtractorRegistry } from '../extractors/registry'
+import { DocumentExtractionService } from '../extraction'
 import type { ExtractedDocument } from '../extractors/types'
 import { normalizeText } from '../normalization/text-normalizer'
 import { SemanticChunker } from '../chunking/semantic-chunker'
@@ -34,6 +35,8 @@ export class DocumentLifecycleService {
   private readonly sourceRepository: KnowledgeSourceRepository
   private readonly storageManager: DocumentStorageManager
   private readonly extractorRegistry: ExtractorRegistry
+  private readonly extractionService: DocumentExtractionService
+  private readonly hasCustomRegistry: boolean
   private readonly normalizer: (text: string) => string
   private readonly chunker: SemanticChunker
   private readonly settingsProvider: DocumentSettingsProvider
@@ -61,7 +64,13 @@ export class DocumentLifecycleService {
     this.sourceRepository = options.sourceRepository
     this.storageManager = options.storageManager
     this.settingsProvider = options.settingsProvider ?? new StaticDocumentSettingsProvider()
+    this.hasCustomRegistry = !!options.extractorRegistry
     this.extractorRegistry = options.extractorRegistry ?? defaultExtractorRegistry
+    this.extractionService =
+      options.extractionService ??
+      new DocumentExtractionService({
+        settingsProvider: this.settingsProvider
+      })
     this.normalizer = options.normalizer ?? normalizeText
     this.chunker = options.chunker ?? new SemanticChunker(this.settingsProvider)
   }
@@ -154,7 +163,10 @@ export class DocumentLifecycleService {
       this.sourceRepository.updateStatus(sourceId, knowledgeBaseId, 'processing', null)
 
       // 9. Format-neutral text extraction
-      const extracted = await this.extractorRegistry.extract(source.file_type, fileBytes)
+      const extracted =
+        this.hasCustomRegistry && this.extractorRegistry.hasExtractor(source.file_type)
+          ? await this.extractorRegistry.extract(source.file_type, fileBytes)
+          : await this.extractionService.extractLegacy(source.file_type, fileBytes)
 
       // 10. Text normalization
       const normalizedDoc: ExtractedDocument = {

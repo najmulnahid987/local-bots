@@ -28,6 +28,19 @@ export type DocumentErrorCode =
   | 'EXTRACTION_PDF_PAGE_LIMIT_EXCEEDED'
   | 'EXTRACTION_NO_TEXT_CONTENT'
   | 'EXTRACTION_PDF_PROCESSING_FAILED'
+  | 'EXTRACTION_TIMEOUT'
+  | 'EXTRACTION_CANCELLED'
+  | 'EXTRACTION_OUTPUT_LIMIT_EXCEEDED'
+  | 'EXTRACTION_REGISTRY_CONFLICT'
+  | 'EXTRACTION_MALFORMED_OUTPUT'
+  | 'EXTRACTION_ENCRYPTED_ARCHIVE'
+  | 'EXTRACTION_INVALID_ARCHIVE'
+  | 'EXTRACTION_ARCHIVE_LIMIT_EXCEEDED'
+  | 'EXTRACTION_MACRO_NOT_ALLOWED'
+  | 'EXTRACTION_MISSING_DOCX_PARTS'
+  | 'EXTRACTION_XXE_DETECTED'
+  | 'EXTRACTION_WORKER_UNAVAILABLE'
+  | 'EXTRACTION_FAILED'
   | 'CHUNKING_FAILED'
   | 'CHUNKING_INVALID_INPUT'
 
@@ -295,6 +308,108 @@ export const DocumentErrors = {
     return new DocumentExtractionError(
       `PDF text extraction failed: ${message}`,
       'EXTRACTION_PDF_PROCESSING_FAILED',
+      details
+    )
+  },
+
+  extractionTimeout(timeoutMs: number): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `Document extraction timed out after ${timeoutMs}ms. The file may be overly complex or corrupted.`,
+      'EXTRACTION_TIMEOUT',
+      { timeoutMs }
+    )
+  },
+
+  extractionCancelled(): DocumentExtractionError {
+    return new DocumentExtractionError(
+      'Document extraction was cancelled by user or caller.',
+      'EXTRACTION_CANCELLED'
+    )
+  },
+
+  extractionOutputLimitExceeded(maxBytes: number, actualBytes: number): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `Document extraction output exceeded maximum permitted text size of ${maxBytes} bytes (extracted ${actualBytes} bytes).`,
+      'EXTRACTION_OUTPUT_LIMIT_EXCEEDED',
+      { maxBytes, actualBytes }
+    )
+  },
+
+  extractionRegistryConflict(message: string): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `Document extractor registry conflict: ${message}`,
+      'EXTRACTION_REGISTRY_CONFLICT'
+    )
+  },
+
+  extractionMalformedOutput(message: string): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `Document extractor produced malformed output: ${message}`,
+      'EXTRACTION_MALFORMED_OUTPUT'
+    )
+  },
+
+  extractionEncryptedArchive(details?: unknown): DocumentExtractionError {
+    return new DocumentExtractionError(
+      'This DOCX document is encrypted or password-protected. Password-protected documents are not supported.',
+      'EXTRACTION_ENCRYPTED_ARCHIVE',
+      details
+    )
+  },
+
+  extractionInvalidArchive(message: string, details?: unknown): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `Invalid or corrupted DOCX archive package: ${message}`,
+      'EXTRACTION_INVALID_ARCHIVE',
+      details
+    )
+  },
+
+  extractionArchiveLimitExceeded(message: string, details?: unknown): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `DOCX archive exceeded safety bounds: ${message}`,
+      'EXTRACTION_ARCHIVE_LIMIT_EXCEEDED',
+      details
+    )
+  },
+
+  extractionMacroNotAllowed(details?: unknown): DocumentExtractionError {
+    return new DocumentExtractionError(
+      'Macro-enabled documents (.docm) and documents containing VBA projects are not supported for security reasons.',
+      'EXTRACTION_MACRO_NOT_ALLOWED',
+      details
+    )
+  },
+
+  extractionMissingDocxParts(missing: string[]): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `The document is not a valid DOCX package. Missing required OpenXML parts: ${missing.join(', ')}`,
+      'EXTRACTION_MISSING_DOCX_PARTS',
+      { missing }
+    )
+  },
+
+  extractionXxeDetected(details?: unknown): DocumentExtractionError {
+    return new DocumentExtractionError(
+      'XML external entity (XXE) or custom DOCTYPE declaration detected in document package. Rejected for security.',
+      'EXTRACTION_XXE_DETECTED',
+      details
+    )
+  },
+
+  extractionWorkerUnavailable(details?: unknown, customMessage?: string): DocumentExtractionError {
+    return new DocumentExtractionError(
+      customMessage ??
+        'The isolated document parser worker is unavailable or could not be initialized.',
+      'EXTRACTION_WORKER_UNAVAILABLE',
+      details
+    )
+  },
+
+  extractionFailed(message: string, details?: unknown): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `Document extraction failed: ${message}`,
+      'EXTRACTION_FAILED',
       details
     )
   },

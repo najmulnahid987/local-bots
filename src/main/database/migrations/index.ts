@@ -4,6 +4,7 @@ import providerCredentialRefsSql from './002_provider_credential_refs.sql?raw'
 import knowledgeSourcesLifecycleAndFts5Sql from './003_knowledge_sources_lifecycle_and_fts5.sql?raw'
 import importRecoveryJournalSql from './004_import_recovery_journal.sql?raw'
 import deletionRecoveryJournalSql from './005_deletion_recovery_journal.sql?raw'
+import docxPersistenceSupportSql from './006_docx_persistence_support.sql?raw'
 
 export * from './types'
 export * from './runner'
@@ -16,6 +17,7 @@ export * from './runner'
  * Migration 003 evolves knowledge_sources lifecycle statuses and establishes the knowledge_fts FTS5 foundation.
  * Migration 004 establishes the import_recovery_journal table for durable crash resilience.
  * Migration 005 establishes the deletion_recovery_journal table for safe crash recovery during deletions.
+ * Migration 006 evolves knowledge_sources.file_type to permit 'docx' persistence.
  */
 export const migrations: readonly Migration[] = [
   {
@@ -43,5 +45,11 @@ export const migrations: readonly Migration[] = [
     version: 5,
     name: 'deletion_recovery_journal',
     sql: deletionRecoveryJournalSql
+  },
+  {
+    version: 6,
+    name: 'docx_persistence_support',
+    sql: docxPersistenceSupportSql,
+    disableForeignKeysForTableRebuild: true
   }
 ]

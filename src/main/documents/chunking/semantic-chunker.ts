@@ -7,6 +7,7 @@ import {
 import type { ExtractedDocument, ExtractedDocumentSection } from '../extractors/types'
 import { normalizeText } from '../normalization/text-normalizer'
 import type { ChunkingResult, DocumentChunk } from './types'
+import { chunkMarkdownSection } from './markdown-table-chunker'
 
 /**
  * Estimates token count from text length using the approved model-agnostic heuristic:
@@ -198,7 +199,7 @@ export class SemanticChunker {
       throw DocumentErrors.chunkingInvalidInput('Extracted document must be a valid object.')
     }
 
-    if (!doc.format || !['txt', 'md', 'pdf'].includes(doc.format)) {
+    if (!doc.format || !['txt', 'md', 'pdf', 'docx'].includes(doc.format)) {
       throw DocumentErrors.extractionUnsupportedFormat(String(doc.format))
     }
 
@@ -263,25 +264,36 @@ export class SemanticChunker {
           })
         }
       }
-    } else if (doc.format === 'md') {
-      // Markdown: Heading-aware boundary hierarchy
+    } else if (doc.format === 'md' || doc.format === 'docx') {
+      // Markdown & DOCX: Heading-aware and table-aware boundary hierarchy
       for (const section of doc.sections) {
         const normalized = normalizeText(section.text).trim()
         if (normalized.length === 0) {
           continue
         }
 
-        const slices = chunkTextSlice(normalized, chunkTargetTokens, chunkOverlapTokens)
+        const slices = chunkMarkdownSection({
+          sectionText: normalized,
+          headingPath: section.headingPath,
+          chunkTargetTokens,
+          chunkOverlapTokens,
+          chunkTextSliceFn: chunkTextSlice
+        })
+
         for (const slice of slices) {
           chunks.push({
             chunkIndex: currentIndex++,
             content: slice.content,
-            tokenCount: estimateTokenCount(slice.content),
+            tokenCount: slice.tokenCount,
             pageNumber: null,
             metadata: {
               ...(section.heading ? { heading: section.heading } : {}),
               ...(section.headingLevel !== undefined ? { headingLevel: section.headingLevel } : {}),
               headingPath: section.headingPath ? [...section.headingPath] : [],
+              ...(section.headingPath && section.headingPath.length > 0
+                ? { headingContext: section.headingPath.join(' > ') }
+                : {}),
+              ...(slice.hasTable ? { hasTable: true } : {}),
               startIndex: slice.startIndex,
               endIndex: slice.endIndex
             },

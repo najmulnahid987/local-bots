@@ -12,6 +12,7 @@ import { KnowledgeSourceRepository } from '../../database/repositories/knowledge
 import { DocumentStorageManager } from '../document-storage-manager'
 import { DocumentIngestionService } from '../ingestion/document-ingestion-service'
 import { DocumentLifecycleService } from './document-lifecycle-service'
+import { buildSyntheticDocx } from '../benchmarks/fixtures/office-generator'
 
 describe('DocumentLifecycleService (Phase 5 Step 5.10)', () => {
   let dbContext: MigratedTestDatabaseContext
@@ -197,6 +198,40 @@ describe('DocumentLifecycleService (Phase 5 Step 5.10)', () => {
       expect(reindexRes.source.id).toBe(sourceBefore.id)
     })
 
+    it('4b. successfully reindexes a DOCX document and updates chunks and FTS5 search', async () => {
+      const docxBuffer = buildSyntheticDocx({
+        title: 'Network Optimization Specification',
+        identifier: 'NET-OPT-001',
+        headings: ['Throughput Analysis', 'Latency Benchmarks'],
+        tableRows: [
+          ['Protocol', 'Bandwidth', 'LossRate'],
+          ['QUIC', '10 Gbps', '0.01%']
+        ]
+      })
+      const sourceId = await ingestCompleted('network-spec.docx', docxBuffer)
+
+      // Initial search finds "Throughput"
+      const initialSearch = sourceRepo.searchChunks(kbId, 'Throughput', 10)
+      expect(initialSearch.length).toBeGreaterThanOrEqual(1)
+
+      // Reindex the document
+      const reindexRes = await lifecycleService.reindex({
+        knowledgeBaseId: kbId,
+        sourceId
+      })
+
+      expect(reindexRes.status).toBe('completed')
+      expect(reindexRes.source.id).toBe(sourceId)
+      expect(reindexRes.source.fileType).toBe('docx')
+      expect(reindexRes.source.indexingStatus).toBe('completed')
+      expect(reindexRes.totalChunks).toBeGreaterThanOrEqual(1)
+
+      // FTS search still works after reindexing
+      const postSearch = sourceRepo.searchChunks(kbId, 'Throughput', 10)
+      expect(postSearch.length).toBeGreaterThanOrEqual(1)
+      expect(postSearch[0].source_id).toBe(sourceId)
+    })
+
     it('5. transitions source to failed on disk file checksum mismatch', async () => {
       const sourceId = await ingestCompleted(
         'corrupted.txt',
@@ -293,6 +328,44 @@ describe('DocumentLifecycleService (Phase 5 Step 5.10)', () => {
 
       // FTS search returns 0 results
       expect(sourceRepo.searchChunks(kbId, 'cryptographic', 10)).toHaveLength(0)
+    })
+
+    it('8b. safely deletes a DOCX document, unlinks original file, and cascades chunks and FTS rows', async () => {
+      const docxBuffer = buildSyntheticDocx({
+        title: 'DOCX Deletion Protocol',
+        identifier: 'DEL-DOCX-001',
+        headings: ['Cleanup Directives'],
+        tableRows: []
+      })
+      const sourceId = await ingestCompleted('delete_me.docx', docxBuffer)
+
+      const storagePath = storageManager.resolveOriginalPath(kbId, sourceId, 'docx')
+      expect(fs.existsSync(storagePath)).toBe(true)
+
+      // Verify searchable initially
+      expect(sourceRepo.searchChunks(kbId, 'Cleanup', 10).length).toBeGreaterThanOrEqual(1)
+
+      const deleteRes = await lifecycleService.delete({
+        knowledgeBaseId: kbId,
+        sourceId
+      })
+
+      expect(deleteRes.success).toBe(true)
+      expect(deleteRes.sourceId).toBe(sourceId)
+      expect(deleteRes.knowledgeBaseId).toBe(kbId)
+      expect(deleteRes.fileCleaned).toBe(true)
+
+      // Managed original file removed
+      expect(fs.existsSync(storagePath)).toBe(false)
+
+      // Database record deleted
+      expect(sourceRepo.getById(sourceId, kbId)).toBeNull()
+
+      // Chunks cascaded
+      expect(sourceRepo.getChunksBySourceId(sourceId, kbId)).toHaveLength(0)
+
+      // FTS search returns 0 results
+      expect(sourceRepo.searchChunks(kbId, 'Cleanup', 10)).toHaveLength(0)
     })
 
     it('9. restores original file from quarantine if database deletion fails', async () => {

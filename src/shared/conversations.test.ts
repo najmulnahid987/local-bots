@@ -520,13 +520,27 @@ describe('Shared Conversation and Message Contracts (Step 7.1)', () => {
           citationNumber: 1,
           sourceId: validSourceId,
           chunkId: validChunkId,
-          fileName: 'presentation.docx',
-          fileType: 'docx',
+          fileName: 'presentation.pptx',
+          fileType: 'pptx',
           pageNumber: null,
           headingPath: null,
           chunkIndex: 0
         })
-      ).toThrow(/fileType must be 'txt', 'md', or 'pdf'/)
+      ).toThrow(/fileType must be 'txt', 'md', 'pdf', or 'docx'/)
+    })
+
+    it('32b. accepts docx file type in citation', () => {
+      const parsed = citationDtoSchema.parse({
+        citationNumber: 1,
+        sourceId: validSourceId,
+        chunkId: validChunkId,
+        fileName: 'specification.docx',
+        fileType: 'docx',
+        pageNumber: null,
+        headingPath: ['Architecture', 'Overview'],
+        chunkIndex: 0
+      })
+      expect(parsed.fileType).toBe('docx')
     })
 
     it('33. rejects empty heading strings in headingPath', () => {

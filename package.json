@@ -32,9 +32,11 @@
     "ai": "7.0.164",
     "better-sqlite3": "^13.0.3",
     "lucide-react": "^1.70.0",
+    "mammoth": "^1.13.0",
     "prismjs": "^1.30.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.5",
+    "read-excel-file": "^9.3.17",
     "remark-gfm": "^4.0.1",
     "unpdf": "2.1.0",
     "zod": "^4.6.7"
