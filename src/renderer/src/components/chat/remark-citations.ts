@@ -95,7 +95,7 @@ export const remarkCitations: Plugin<[RemarkCitationsOptions?]> = (options) => {
                       className: 'chat-citation-marker',
                       'data-testid': `citation-marker-${num}`,
                       'data-citation-number': String(num),
-                      'aria-label': `Citation ${num}: ${authentic.fileName}${authentic.pageNumber ? ` page ${authentic.pageNumber}` : ''}`
+                      'aria-label': `Citation ${num}: ${authentic.fileName}${authentic.pageNumber ? ` ${authentic.fileType === 'pptx' ? 'slide' : 'page'} ${authentic.pageNumber}` : ''}`
                     }
                   },
                   children: [{ type: 'text', value: `[${num}]` }]

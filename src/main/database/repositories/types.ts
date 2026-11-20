@@ -366,7 +366,7 @@ export interface KnowledgeSource {
   readonly file_name: string
   readonly original_file_name: string
   readonly relative_file_path: string
-  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx'
+  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx'
   readonly mime_type: string
   readonly file_size: number
   readonly content_hash: string
@@ -392,7 +392,7 @@ export interface SearchChunkMatchRow {
   readonly source_id: string
   readonly knowledge_base_id: string
   readonly original_file_name: string
-  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx'
+  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx'
   readonly chunk_index: number
   readonly content: string
   readonly page_number: number | null
@@ -410,7 +410,7 @@ export interface CreateKnowledgeSourceInput {
   readonly file_name: string
   readonly original_file_name: string
   readonly relative_file_path: string
-  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx'
+  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx'
   readonly mime_type: string
   readonly file_size: number
   readonly content_hash: string
@@ -466,8 +466,8 @@ export const createKnowledgeSourceSchema = z
       .string()
       .trim()
       .min(1, { message: 'relative_file_path cannot be blank.' }),
-    file_type: z.enum(['txt', 'md', 'pdf', 'docx'], {
-      message: "file_type must be 'txt', 'md', 'pdf', or 'docx'."
+    file_type: z.enum(['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'], {
+      message: "file_type must be 'txt', 'md', 'pdf', 'docx', 'xlsx', or 'pptx'."
     }),
     mime_type: z.string().trim().min(1, { message: 'mime_type cannot be blank.' }),
     file_size: z

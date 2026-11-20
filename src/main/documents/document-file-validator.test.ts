@@ -5,7 +5,11 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { DocumentFileValidator } from './document-file-validator'
 import { StaticDocumentSettingsProvider } from './document-settings'
-import { buildSyntheticDocx } from './benchmarks/fixtures/office-generator'
+import {
+  buildSyntheticDocx,
+  buildSyntheticXlsx,
+  buildSyntheticPptx
+} from './benchmarks/fixtures/office-generator'
 
 describe('DocumentFileValidator (Phase 5 Step 5.3)', () => {
   let tempDir: string
@@ -103,6 +107,58 @@ describe('DocumentFileValidator (Phase 5 Step 5.3)', () => {
       expect(result.contentHash).toBe(crypto.createHash('sha256').update(docxBytes).digest('hex'))
     })
 
+    it('1.4b validates and accepts a valid .xlsx file', async () => {
+      const xlsxBytes = buildSyntheticXlsx({
+        title: 'Validation Test Workbook',
+        identifier: 'VAL-002',
+        summaryRows: [
+          ['Quarter', 'Revenue', 'Profit'],
+          ['Q1', '100000', '25000']
+        ],
+        departmentRows: [
+          ['Department', 'Headcount'],
+          ['Engineering', '42']
+        ]
+      })
+      const filePath = path.join(tempDir, 'financials.xlsx')
+      fs.writeFileSync(filePath, xlsxBytes)
+
+      const result = await validator.validate(filePath)
+
+      expect(result.originalFileName).toBe('financials.xlsx')
+      expect(result.extension).toBe('xlsx')
+      expect(result.fileType).toBe('xlsx')
+      expect(result.mimeType).toBe(
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      )
+      expect(result.fileSizeBytes).toBe(xlsxBytes.length)
+      expect(result.contentHash).toBe(crypto.createHash('sha256').update(xlsxBytes).digest('hex'))
+    })
+
+    it('1.4c validates and accepts a valid .pptx file', async () => {
+      const pptxBytes = buildSyntheticPptx({
+        title: 'Validation Test Deck',
+        identifier: 'VAL-003',
+        slides: [
+          { title: 'Slide 1 Title', paragraphs: ['Slide 1 body paragraph'] },
+          { title: 'Slide 2 Title', bullets: ['Bullet A', 'Bullet B'] }
+        ]
+      })
+      const filePath = path.join(tempDir, 'presentation.pptx')
+      fs.writeFileSync(filePath, pptxBytes)
+
+      const result = await validator.validate(filePath)
+
+      expect(result.originalFileName).toBe('presentation.pptx')
+      expect(result.extension).toBe('pptx')
+      expect(result.fileType).toBe('pptx')
+      expect(result.mimeType).toBe(
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+      )
+      expect(result.fileSizeBytes).toBe(pptxBytes.length)
+      expect(result.contentHash).toBe(crypto.createHash('sha256').update(pptxBytes).digest('hex'))
+    })
+
     it('1.5 normalizes uppercase extensions to lowercase', async () => {
       const txtPath = path.join(tempDir, 'DOCUMENT.TXT')
       fs.writeFileSync(txtPath, 'Text content in uppercase file.', 'utf-8')
@@ -117,16 +173,32 @@ describe('DocumentFileValidator (Phase 5 Step 5.3)', () => {
       const pdfResult = await validator.validate(pdfPath)
       expect(pdfResult.extension).toBe('pdf')
       expect(pdfResult.mimeType).toBe('application/pdf')
+
+      const pptxPath = path.join(tempDir, 'DECK.PPTX')
+      const pptxBytes = buildSyntheticPptx({
+        title: 'Upper Deck',
+        identifier: 'VAL-UP-001',
+        slides: [{ title: 'Uppercase Slide', paragraphs: ['Deck text.'] }]
+      })
+      fs.writeFileSync(pptxPath, pptxBytes)
+      const pptxResult = await validator.validate(pptxPath)
+      expect(pptxResult.extension).toBe('pptx')
+      expect(pptxResult.fileType).toBe('pptx')
+      expect(pptxResult.mimeType).toBe(
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+      )
     })
 
     it('1.6 rejects unsupported extensions with UNSUPPORTED_FILE_TYPE', async () => {
       const invalidFiles = [
-        'data.xlsx',
+        'data.csv',
         'report.doc',
         'script.py',
         'archive.zip',
         'image.png',
         'executable.exe',
+        'presentation.ppt',
+        'presentation.pptm',
         'no_extension'
       ]
 

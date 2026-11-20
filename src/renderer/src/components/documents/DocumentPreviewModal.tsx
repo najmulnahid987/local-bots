@@ -236,8 +236,8 @@ export function DocumentPreviewModal({
 
                           {chunk.pageNumber !== null && (
                             <span className="chunk-page-badge" data-testid="chunk-page-number">
-                              <BookOpen size={12} className="inline-icon" aria-hidden="true" /> Page{' '}
-                              {chunk.pageNumber}
+                              <BookOpen size={12} className="inline-icon" aria-hidden="true" />{' '}
+                              {preview.fileType === 'pptx' ? 'Slide' : 'Page'} {chunk.pageNumber}
                             </span>
                           )}
 

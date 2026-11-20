@@ -165,4 +165,43 @@ describe('DocumentPreviewModal (Phase 5 Step 5.11)', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(closeSpy).toHaveBeenCalledTimes(1)
   })
+
+  it('7. renders Slide badge instead of Page for PPTX documents', async () => {
+    const pptxPreview: DocumentPreviewDto = {
+      sourceId,
+      knowledgeBaseId: kbId,
+      originalFileName: 'briefing.pptx',
+      fileType: 'pptx',
+      fileSize: 12345,
+      status: 'completed',
+      totalChunks: 1,
+      chunks: [
+        {
+          chunkId: 'chunk-pptx-1',
+          chunkIndex: 0,
+          pageNumber: 4,
+          heading: 'Executive Summary',
+          headingLevel: 2,
+          headingPath: ['Executive Summary'],
+          content: 'Slide content regarding mission architecture.',
+          tokenCount: 15
+        }
+      ]
+    }
+    previewMock.mockResolvedValueOnce(pptxPreview)
+
+    render(
+      <DocumentPreviewModal
+        isOpen={true}
+        sourceId={sourceId}
+        knowledgeBaseId={kbId}
+        onClose={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByTestId('preview-title')).toBeDefined()
+    expect(screen.getByText('briefing.pptx')).toBeDefined()
+    expect(screen.getByText('PPTX')).toBeDefined()
+    expect(screen.getByText(/Slide 4/)).toBeDefined()
+  })
 })

@@ -632,4 +632,104 @@ describe('DocumentSearchService (Phase 5 Step 5.9)', () => {
     expect(results[0].snippet).toContain('[[HL]]telemetry[[/HL]]')
     expect(results[0].snippet).toContain('[[HL]]LiDAR[[/HL]]')
   })
+
+  it('15. successfully searches and returns results for XLSX source chunks with sheet metadata and snippets', async () => {
+    const xlsxSourceId = randomUUID()
+    sourceRepo.create({
+      id: xlsxSourceId,
+      knowledge_base_id: kbAId,
+      file_name: 'quarterly_revenue.xlsx',
+      original_file_name: 'Quarterly_Revenue_Model.xlsx',
+      relative_file_path: `originals/${xlsxSourceId}.xlsx`,
+      file_type: 'xlsx',
+      mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      file_size: 24500,
+      content_hash: '8'.repeat(64),
+      indexing_status: 'completed'
+    })
+
+    sourceRepo.insertChunks([
+      {
+        id: randomUUID(),
+        knowledge_base_id: kbAId,
+        source_id: xlsxSourceId,
+        chunk_index: 0,
+        content:
+          '| Product Line | Q3 Recurring SaaS Revenue | Net Dollar Retention |\n| Antigravity Enterprise | $4,500,000 | 135% |',
+        page_number: null,
+        token_count: 24,
+        metadata_json: JSON.stringify({
+          heading: 'Sheet: Enterprise SaaS',
+          headingPath: ['Sheet: Enterprise SaaS'],
+          sheetName: 'Enterprise SaaS',
+          sheetIndex: 0,
+          startRow: 1,
+          endRow: 3,
+          hasTable: true
+        })
+      }
+    ])
+
+    const results = await searchService.search({
+      knowledgeBaseId: kbAId,
+      query: 'Antigravity Recurring SaaS'
+    })
+
+    expect(results).toHaveLength(1)
+    expect(results[0].sourceId).toBe(xlsxSourceId)
+    expect(results[0].filename).toBe('Quarterly_Revenue_Model.xlsx')
+    expect(results[0].heading).toBe('Sheet: Enterprise SaaS')
+    expect(results[0].snippet).toContain('[[HL]]Antigravity[[/HL]]')
+    expect(results[0].snippet).toContain('[[HL]]Recurring[[/HL]]')
+    expect(results[0].snippet).toContain('[[HL]]SaaS[[/HL]]')
+  })
+
+  it('16. successfully searches and returns results for PPTX source chunks with slide metadata, page_number, and snippets', async () => {
+    const pptxSourceId = randomUUID()
+    sourceRepo.create({
+      id: pptxSourceId,
+      knowledge_base_id: kbAId,
+      file_name: 'board_deck.pptx',
+      original_file_name: 'Board_Strategy_Deck.pptx',
+      relative_file_path: `originals/${pptxSourceId}.pptx`,
+      file_type: 'pptx',
+      mime_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      file_size: 48900,
+      content_hash: '9'.repeat(64),
+      indexing_status: 'completed'
+    })
+
+    sourceRepo.insertChunks([
+      {
+        id: randomUUID(),
+        knowledge_base_id: kbAId,
+        source_id: pptxSourceId,
+        chunk_index: 0,
+        content:
+          '## Slide 4: Suborbital Propulsion Systems\n\nAntigravity orbital thrusters achieved orbital insertion telemetry successfully.',
+        page_number: 4,
+        token_count: 20,
+        metadata_json: JSON.stringify({
+          heading: 'Slide 4: Suborbital Propulsion Systems',
+          headingPath: ['Slide 4: Suborbital Propulsion Systems'],
+          slideNumber: 4,
+          slideTitle: 'Suborbital Propulsion Systems',
+          partNumber: 1
+        })
+      }
+    ])
+
+    const results = await searchService.search({
+      knowledgeBaseId: kbAId,
+      query: 'Antigravity thrusters orbital telemetry'
+    })
+
+    expect(results).toHaveLength(1)
+    expect(results[0].sourceId).toBe(pptxSourceId)
+    expect(results[0].filename).toBe('Board_Strategy_Deck.pptx')
+    expect(results[0].pageNumber).toBe(4)
+    expect(results[0].heading).toBe('Slide 4: Suborbital Propulsion Systems')
+    expect(results[0].snippet).toContain('[[HL]]Antigravity[[/HL]]')
+    expect(results[0].snippet).toContain('[[HL]]thrusters[[/HL]]')
+  })
 })

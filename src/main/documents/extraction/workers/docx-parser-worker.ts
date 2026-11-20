@@ -1,12 +1,19 @@
 import { DocxExtractor } from '../docx/docx-extractor'
+import { XlsxExtractor } from '../xlsx/xlsx-extractor'
+import { PptxExtractor } from '../pptx/pptx-extractor'
+import { PdfOcrPipeline } from '../ocr/pdf-ocr-pipeline'
 import { DocumentError } from '../../document-errors'
+import type { DocumentExtractionResult } from '../types'
 import {
   WORKER_PROTOCOL_VERSION,
   type WorkerRequestMessage,
   type WorkerResponseMessage
 } from './protocol'
 
-const extractor = new DocxExtractor()
+const docxExtractor = new DocxExtractor()
+const xlsxExtractor = new XlsxExtractor()
+const pptxExtractor = new PptxExtractor()
+const pdfOcrPipeline = new PdfOcrPipeline()
 
 /**
  * Sends a response back to the parent process, supporting both
@@ -77,12 +84,18 @@ export async function handleWorkerRequest(message: unknown): Promise<void> {
     return
   }
 
-  if (req.type === 'EXTRACT_DOCX') {
+  if (req.type === 'EXTRACT_DOCX' || req.type === 'EXTRACT_XLSX' || req.type === 'EXTRACT_PPTX') {
     try {
       const bytes = toUint8Array(req.payload.bytes)
       const limits = req.payload.limits
+      const targetExtractor =
+        req.type === 'EXTRACT_PPTX'
+          ? pptxExtractor
+          : req.type === 'EXTRACT_XLSX'
+            ? xlsxExtractor
+            : docxExtractor
 
-      const result = await extractor.extract(
+      const result = await targetExtractor.extract(
         { bytes },
         limits
           ? {
@@ -121,6 +134,74 @@ export async function handleWorkerRequest(message: unknown): Promise<void> {
         }
       })
     }
+    return
+  }
+
+  if (req.type === 'EXTRACT_PDF_OCR') {
+    try {
+      const bytes = toUint8Array(req.payload.bytes)
+      const limits = req.payload.limits
+      void limits
+      const ocrResult = await pdfOcrPipeline.extract(bytes)
+
+      const result: DocumentExtractionResult = {
+        format: 'pdf',
+        text: ocrResult.text,
+        blocks: ocrResult.blocks.map((b) => ({
+          type: b.type,
+          text: b.text,
+          pageNumber: b.pageNumber
+        })),
+        metadata: {
+          ...ocrResult.metadata,
+          ocrPageNumbers: ocrResult.ocrPageNumbers
+        },
+        warnings: ocrResult.warnings.map((w) => ({
+          code: 'OCR_WARNING',
+          message: w
+        })),
+        quality: {
+          fidelity: ocrResult.ocrPageNumbers.length > 0 ? 'medium' : 'high',
+          isLossy: ocrResult.ocrPageNumbers.length > 0,
+          isOcr: ocrResult.ocrPageNumbers.length > 0
+        },
+        extractor: {
+          id: 'pdf-ocr-worker-extractor',
+          name: 'Isolated PDF OCR Extractor',
+          version: '1.0.0',
+          supportedFormats: ['pdf'],
+          supportedMimeTypes: ['application/pdf'],
+          isHeavy: true,
+          requiresUtilityProcess: true
+        }
+      }
+
+      sendResponseToParent({
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        jobId: req.jobId,
+        type: 'EXTRACTION_SUCCESS',
+        result
+      })
+    } catch (err: unknown) {
+      const code = err instanceof DocumentError ? err.code : 'EXTRACTION_FAILED'
+      const rawMessage = err instanceof Error ? err.message : String(err)
+      const sanitized = rawMessage
+        .replace(/[a-zA-Z]:\\[^\s"';)]+/g, '[path]')
+        .replace(/\/[\w.-]+(\/[\w.-]+)+/g, '[path]')
+        .trim()
+
+      sendResponseToParent({
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        jobId: req.jobId,
+        type: 'EXTRACTION_ERROR',
+        error: {
+          code,
+          message: sanitized,
+          details: err instanceof DocumentError ? err.details : undefined
+        }
+      })
+    }
+    return
   }
 }
 

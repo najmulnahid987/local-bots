@@ -275,10 +275,14 @@ describe('Phase 10 — Step 10.2: Quality Evaluation Suite & Baselines', () => {
       expect(result.completenessRatio).toBe(1.0)
     })
 
-    it('confirms scanned PDF extraction failure due to missing OCR (KNOWN DEFECT)', async () => {
+    it('extracts scanned PDF using page-level OCR fallback (DEFECT-05 RESOLVED)', async () => {
       const fix = corpus.get('FIX-PDF-11')!
       const extractor = registry.getExtractor('pdf')
-      await expect(extractor.extract(fix.contentBytes)).rejects.toThrow()
+      const extracted = await extractor.extract(fix.contentBytes)
+      expect(extracted.format).toBe('pdf')
+      expect(extracted.sections.length).toBeGreaterThan(0)
+      expect(extracted.text.length).toBeGreaterThan(0)
+      expect(extracted.sections[0].pageNumber).toBe(1)
     })
 
     it('extracts DOCX documents with structured headings and tables using defaultDocumentExtractionService', async () => {
@@ -296,6 +300,38 @@ describe('Phase 10 — Step 10.2: Quality Evaluation Suite & Baselines', () => {
         result.blocks.some((b) => b.type === 'heading' && b.text === '1. Executive Summary')
       ).toBe(true)
       expect(result.blocks.some((b) => b.type === 'table')).toBe(true)
+    })
+
+    it('extracts XLSX spreadsheets with structured worksheets and tables using defaultDocumentExtractionService', async () => {
+      const fix = corpus.get('FIX-XLSX-01')!
+      const result = await defaultDocumentExtractionService.extract({
+        bytes: fix.contentBytes,
+        formatHint: 'xlsx'
+      })
+      expect(result.format).toBe('xlsx')
+      expect(result.quality.fidelity).toBe('high')
+      expect(result.text).toContain('XLSX-BUDGET-2026-MOD')
+      expect(result.text).toContain('Operating Revenue')
+      expect(result.text).toContain('DEPT-AERO-101')
+      expect(result.metadata.sheetCount).toBe(2)
+      expect(result.blocks.some((b) => b.type === 'sheet_boundary')).toBe(true)
+      expect(result.blocks.some((b) => b.type === 'table')).toBe(true)
+    })
+
+    it('extracts PPTX presentations with ordered slides, titles, and text using defaultDocumentExtractionService', async () => {
+      const fix = corpus.get('FIX-PPTX-01')!
+      const result = await defaultDocumentExtractionService.extract({
+        bytes: fix.contentBytes,
+        formatHint: 'pptx'
+      })
+      expect(result.format).toBe('pptx')
+      expect(result.metadata.slideCount).toBe(5)
+      expect(result.text).toContain('Aether Dynamics 2026 Strategic Vision')
+      expect(result.text).toContain('Autonomous navigation across contested airspace')
+      expect(result.text).toContain('PROJECT-NOVA-741')
+      expect(result.blocks.some((b) => b.type === 'slide_boundary')).toBe(true)
+      expect(result.blocks.some((b) => b.type === 'heading')).toBe(true)
+      expect(result.blocks.some((b) => b.type === 'list')).toBe(true)
     })
   })
 

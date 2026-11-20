@@ -1,24 +1,45 @@
-import { getDocumentProxy, extractText } from 'unpdf'
+import { getDocumentProxy, extractText, inspectPages } from 'unpdf'
 import { DocumentError, DocumentErrors } from '../document-errors'
 import { type DocumentSettingsProvider, StaticDocumentSettingsProvider } from '../document-settings'
 import type { DocumentExtractor, ExtractedDocument, ExtractedDocumentSection } from './types'
+import { PdfOcrPipeline } from '../extraction/ocr/pdf-ocr-pipeline'
+import type { IOcrEngine } from '../extraction/ocr/tesseract-engine'
+
+export interface PdfExtractorOptions {
+  readonly enableOcr?: boolean
+  readonly ocrEngine?: IOcrEngine
+  readonly ocrPipeline?: PdfOcrPipeline
+}
 
 /**
- * Pure-JavaScript text extractor for text-based PDF documents using unpdf.
+ * Pure-JavaScript text extractor for text-based PDF documents using unpdf,
+ * with selective page-level OCR fallback for scanned pages.
  *
  * Responsibilities:
  * 1. Accepts validated PDF byte buffers; never touches filesystem paths.
  * 2. Enforces configured maximum page limits before performing page text extraction.
  * 3. Preserves strict 1-based physical page numbers for every page.
  * 4. Preserves blank intermediate pages without renumbering or shifting pages.
- * 5. Rejects password-protected, encrypted, corrupted, empty, and image-only PDFs with structured errors.
- * 6. Guarantees deterministic resource destruction (cleanup and loadingTask.destroy) in finally blocks.
+ * 5. Rejects password-protected, encrypted, and corrupted PDFs with structured errors.
+ * 6. Selectively routes scanned pages through isolated OCR without re-OCR'ing born-digital pages.
+ * 7. Guarantees deterministic resource destruction (cleanup and loadingTask.destroy) in finally blocks.
  */
 export class PdfExtractor implements DocumentExtractor {
   private readonly settingsProvider: DocumentSettingsProvider
+  private readonly ocrPipeline?: PdfOcrPipeline
+  private readonly enableOcr: boolean
 
-  constructor(settingsProvider?: DocumentSettingsProvider) {
+  constructor(settingsProvider?: DocumentSettingsProvider, options?: PdfExtractorOptions) {
     this.settingsProvider = settingsProvider ?? new StaticDocumentSettingsProvider()
+    this.enableOcr = options?.enableOcr ?? true
+    this.ocrPipeline =
+      options?.ocrPipeline ??
+      (this.enableOcr
+        ? new PdfOcrPipeline({
+            settingsProvider: this.settingsProvider,
+            ocrEngine: options?.ocrEngine
+          })
+        : undefined)
   }
 
   /**
@@ -112,9 +133,55 @@ export class PdfExtractor implements DocumentExtractor {
 
       const rawPages = Array.isArray(result.text) ? result.text : [result.text]
 
-      // 7. Check if all pages are empty/blank or image-only
+      // 7. Check if OCR is needed or if document is born-digital
       const hasText = rawPages.some((p) => typeof p === 'string' && p.trim().length > 0)
-      if (!hasText) {
+
+      if (this.enableOcr && this.ocrPipeline) {
+        // If there's no digital text, or if any page might be a scanned page needing OCR
+        if (!hasText) {
+          // Inspect to see if it's truly blank or contains scanned images
+          let inspected: {
+            pages: Array<{ textLength: number; imageCount: number; imageCoverage: number }>
+          } | null = null
+          try {
+            inspected = await inspectPages(new Uint8Array(bytes.slice(0)))
+          } catch {
+            // ignore
+          }
+
+          const hasImages = inspected?.pages?.some((p) => p.imageCount > 0 || p.imageCoverage > 0)
+          if (!hasImages) {
+            throw DocumentErrors.extractionNoTextContent(
+              'No extractable text found. This PDF may be scanned or image-only. OCR is not supported in this version.'
+            )
+          }
+
+          // Contains images! Delegate to OCR pipeline
+          return await this.ocrPipeline.extract(bytes)
+        }
+
+        // Has digital text. Check if any page is an empty scanned image page (mixed document)
+        const hasEmptyPage = rawPages.some((p) => !p || p.trim().length === 0)
+        if (hasEmptyPage) {
+          let inspected: {
+            pages: Array<{ textLength: number; imageCount: number; imageCoverage: number }>
+          } | null = null
+          try {
+            inspected = await inspectPages(new Uint8Array(bytes.slice(0)))
+          } catch {
+            // ignore
+          }
+
+          const hasScannedPage = inspected?.pages?.some(
+            (p, idx) =>
+              (!rawPages[idx] || rawPages[idx].trim().length < 30) &&
+              (p.imageCount > 0 || p.imageCoverage >= 0.4)
+          )
+          if (hasScannedPage) {
+            return await this.ocrPipeline.extract(bytes)
+          }
+        }
+      } else if (!hasText) {
         throw DocumentErrors.extractionNoTextContent(
           'No extractable text found. This PDF may be scanned or image-only. OCR is not supported in this version.'
         )

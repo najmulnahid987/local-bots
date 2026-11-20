@@ -382,6 +382,26 @@ export function extractionResultToExtractedDocument(
       currentPageNumber = block.pageNumber
     }
 
+    if (block.type === 'sheet_boundary' && block.sheet) {
+      flushSection()
+      currentHeading = `Sheet: ${block.sheet.name}`
+      currentHeadingLevel = 1
+      currentHeadingPath = [`Sheet: ${block.sheet.name}`]
+      currentLines = []
+      continue
+    }
+
+    if (block.type === 'slide_boundary' && block.slide) {
+      flushSection()
+      const titleSuffix = block.slide.title ? `: ${block.slide.title}` : ''
+      currentHeading = `Slide ${block.slide.number}${titleSuffix}`
+      currentHeadingLevel = 1
+      currentHeadingPath = [currentHeading]
+      currentPageNumber = block.slide.number
+      currentLines = []
+      continue
+    }
+
     if (block.type === 'heading' && block.heading) {
       flushSection()
       currentHeading = block.text

@@ -5,6 +5,8 @@ import knowledgeSourcesLifecycleAndFts5Sql from './003_knowledge_sources_lifecyc
 import importRecoveryJournalSql from './004_import_recovery_journal.sql?raw'
 import deletionRecoveryJournalSql from './005_deletion_recovery_journal.sql?raw'
 import docxPersistenceSupportSql from './006_docx_persistence_support.sql?raw'
+import xlsxPersistenceSupportSql from './007_xlsx_persistence_support.sql?raw'
+import pptxPersistenceSupportSql from './008_pptx_persistence_support.sql?raw'
 
 export * from './types'
 export * from './runner'
@@ -18,6 +20,8 @@ export * from './runner'
  * Migration 004 establishes the import_recovery_journal table for durable crash resilience.
  * Migration 005 establishes the deletion_recovery_journal table for safe crash recovery during deletions.
  * Migration 006 evolves knowledge_sources.file_type to permit 'docx' persistence.
+ * Migration 007 evolves knowledge_sources.file_type to permit 'xlsx' persistence.
+ * Migration 008 evolves knowledge_sources.file_type to permit 'pptx' persistence.
  */
 export const migrations: readonly Migration[] = [
   {
@@ -50,6 +54,18 @@ export const migrations: readonly Migration[] = [
     version: 6,
     name: 'docx_persistence_support',
     sql: docxPersistenceSupportSql,
+    disableForeignKeysForTableRebuild: true
+  },
+  {
+    version: 7,
+    name: 'xlsx_persistence_support',
+    sql: xlsxPersistenceSupportSql,
+    disableForeignKeysForTableRebuild: true
+  },
+  {
+    version: 8,
+    name: 'pptx_persistence_support',
+    sql: pptxPersistenceSupportSql,
     disableForeignKeysForTableRebuild: true
   }
 ]

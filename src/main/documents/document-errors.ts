@@ -38,8 +38,14 @@ export type DocumentErrorCode =
   | 'EXTRACTION_ARCHIVE_LIMIT_EXCEEDED'
   | 'EXTRACTION_MACRO_NOT_ALLOWED'
   | 'EXTRACTION_MISSING_DOCX_PARTS'
+  | 'EXTRACTION_MISSING_XLSX_PARTS'
+  | 'EXTRACTION_MISSING_PPTX_PARTS'
   | 'EXTRACTION_XXE_DETECTED'
   | 'EXTRACTION_WORKER_UNAVAILABLE'
+  | 'EXTRACTION_OCR_ENGINE_UNAVAILABLE'
+  | 'EXTRACTION_OCR_LANGUAGE_UNAVAILABLE'
+  | 'EXTRACTION_PAGE_RENDERING_FAILED'
+  | 'EXTRACTION_OCR_TIMEOUT'
   | 'EXTRACTION_FAILED'
   | 'CHUNKING_FAILED'
   | 'CHUNKING_INVALID_INPUT'
@@ -389,6 +395,22 @@ export const DocumentErrors = {
     )
   },
 
+  extractionMissingXlsxParts(missing: string[]): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `The document is not a valid XLSX package. Missing required OpenXML parts: ${missing.join(', ')}`,
+      'EXTRACTION_MISSING_XLSX_PARTS',
+      { missing }
+    )
+  },
+
+  extractionMissingPptxParts(missing: string[]): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `The document is not a valid PPTX package. Missing required OpenXML parts: ${missing.join(', ')}`,
+      'EXTRACTION_MISSING_PPTX_PARTS',
+      { missing }
+    )
+  },
+
   extractionXxeDetected(details?: unknown): DocumentExtractionError {
     return new DocumentExtractionError(
       'XML external entity (XXE) or custom DOCTYPE declaration detected in document package. Rejected for security.',
@@ -402,6 +424,45 @@ export const DocumentErrors = {
       customMessage ??
         'The isolated document parser worker is unavailable or could not be initialized.',
       'EXTRACTION_WORKER_UNAVAILABLE',
+      details
+    )
+  },
+
+  extractionOcrEngineUnavailable(
+    details?: unknown,
+    customMessage?: string
+  ): DocumentExtractionError {
+    return new DocumentExtractionError(
+      customMessage ?? 'The native OCR engine is unavailable or not packaged for this system.',
+      'EXTRACTION_OCR_ENGINE_UNAVAILABLE',
+      details
+    )
+  },
+
+  extractionOcrLanguageUnavailable(language: string, details?: unknown): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `The requested OCR language pack '${language}' is not available or failed to load.`,
+      'EXTRACTION_OCR_LANGUAGE_UNAVAILABLE',
+      details
+    )
+  },
+
+  extractionPageRenderingFailed(
+    pageNumber: number,
+    message: string,
+    details?: unknown
+  ): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `Failed to render PDF page ${pageNumber} for OCR: ${message}`,
+      'EXTRACTION_PAGE_RENDERING_FAILED',
+      details
+    )
+  },
+
+  extractionOcrTimeout(timeoutMs: number, details?: unknown): DocumentExtractionError {
+    return new DocumentExtractionError(
+      `OCR processing timed out after ${timeoutMs}ms.`,
+      'EXTRACTION_OCR_TIMEOUT',
       details
     )
   },

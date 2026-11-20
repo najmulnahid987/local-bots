@@ -3,6 +3,8 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { DocumentErrors } from './document-errors'
 import { DocxArchiveValidator } from './extraction/docx/docx-archive-validator'
+import { XlsxArchiveValidator } from './extraction/xlsx/xlsx-archive-validator'
+import { PptxArchiveValidator } from './extraction/pptx/pptx-archive-validator'
 import {
   type DocumentSettingsProvider,
   StaticDocumentSettingsProvider,
@@ -12,7 +14,7 @@ import {
 /**
  * Approved document file extensions (without leading dot).
  */
-export const SUPPORTED_EXTENSIONS = ['txt', 'md', 'pdf', 'docx'] as const
+export const SUPPORTED_EXTENSIONS = ['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'] as const
 export type SupportedExtension = (typeof SUPPORTED_EXTENSIONS)[number]
 
 /**
@@ -22,7 +24,9 @@ export const SUPPORTED_MIME_TYPES: Record<SupportedExtension, string> = {
   txt: 'text/plain',
   md: 'text/markdown',
   pdf: 'application/pdf',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 } as const
 
 export type SupportedMimeType = (typeof SUPPORTED_MIME_TYPES)[SupportedExtension]
@@ -104,7 +108,14 @@ export class DocumentFileValidator {
     const rawExt = path.extname(originalFileName).toLowerCase()
 
     // 1. Extension Allowlist Check
-    if (rawExt !== '.txt' && rawExt !== '.md' && rawExt !== '.pdf' && rawExt !== '.docx') {
+    if (
+      rawExt !== '.txt' &&
+      rawExt !== '.md' &&
+      rawExt !== '.pdf' &&
+      rawExt !== '.docx' &&
+      rawExt !== '.xlsx' &&
+      rawExt !== '.pptx'
+    ) {
       throw DocumentErrors.unsupportedFileType(rawExt || '(none)')
     }
 
@@ -145,6 +156,10 @@ export class DocumentFileValidator {
       await this.validatePdfHeader(resolvedPath)
     } else if (extension === 'docx') {
       await this.validateDocxArchive(resolvedPath)
+    } else if (extension === 'xlsx') {
+      await this.validateXlsxArchive(resolvedPath)
+    } else if (extension === 'pptx') {
+      await this.validatePptxArchive(resolvedPath)
     }
 
     // 5. Streaming Checksum Calculation & Content Integrity Check
@@ -207,6 +222,28 @@ export class DocumentFileValidator {
     const buffer = await fs.promises.readFile(filePath)
     const settings = this.getSettings()
     DocxArchiveValidator.validate(buffer, {
+      maxCompressedBytes: settings.maxFileSizeBytes
+    })
+  }
+
+  /**
+   * Validates a candidate XLSX archive package against defensive preflight rules.
+   */
+  private async validateXlsxArchive(filePath: string): Promise<void> {
+    const buffer = await fs.promises.readFile(filePath)
+    const settings = this.getSettings()
+    XlsxArchiveValidator.validate(buffer, {
+      maxCompressedBytes: settings.maxFileSizeBytes
+    })
+  }
+
+  /**
+   * Validates a candidate PPTX archive package against defensive preflight rules.
+   */
+  private async validatePptxArchive(filePath: string): Promise<void> {
+    const buffer = await fs.promises.readFile(filePath)
+    const settings = this.getSettings()
+    PptxArchiveValidator.validate(buffer, {
       maxCompressedBytes: settings.maxFileSizeBytes
     })
   }

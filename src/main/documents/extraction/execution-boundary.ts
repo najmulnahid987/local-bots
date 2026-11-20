@@ -170,7 +170,43 @@ export class UtilityProcessExecutionBoundary implements IParserExecutionBoundary
           'The isolated DOCX parser worker bundle is unavailable. In-process fallback is blocked for security.'
         )
       }
-      return this.executeInWorker(request, context)
+      return this.executeInWorker(request, context, 'EXTRACT_DOCX')
+    }
+
+    // Fail-closed enforcement for XLSX parser
+    if (extractor.metadata.id === 'xlsx-extractor') {
+      if (!fs.existsSync(this.workerPath)) {
+        throw DocumentErrors.extractionWorkerUnavailable(
+          { workerPath: this.workerPath },
+          'The isolated XLSX parser worker bundle is unavailable. In-process fallback is blocked for security.'
+        )
+      }
+      return this.executeInWorker(request, context, 'EXTRACT_XLSX')
+    }
+
+    // Fail-closed enforcement for PPTX parser
+    if (extractor.metadata.id === 'pptx-extractor') {
+      if (!fs.existsSync(this.workerPath)) {
+        throw DocumentErrors.extractionWorkerUnavailable(
+          { workerPath: this.workerPath },
+          'The isolated PPTX parser worker bundle is unavailable. In-process fallback is blocked for security.'
+        )
+      }
+      return this.executeInWorker(request, context, 'EXTRACT_PPTX')
+    }
+
+    // Fail-closed enforcement for PDF OCR worker extractor
+    if (
+      extractor.metadata.id === 'pdf-ocr-worker-extractor' ||
+      extractor.metadata.id === 'pdf-ocr-extractor'
+    ) {
+      if (!fs.existsSync(this.workerPath)) {
+        throw DocumentErrors.extractionWorkerUnavailable(
+          { workerPath: this.workerPath },
+          'The isolated PDF OCR parser worker bundle is unavailable. In-process fallback is blocked for security.'
+        )
+      }
+      return this.executeInWorker(request, context, 'EXTRACT_PDF_OCR')
     }
 
     // Any other extractor requiring utilityProcess without an approved worker fails closed
@@ -186,7 +222,8 @@ export class UtilityProcessExecutionBoundary implements IParserExecutionBoundary
    */
   private async executeInWorker(
     request: DocumentExtractionRequest,
-    context: DocumentExtractionContext
+    context: DocumentExtractionContext,
+    jobType: 'EXTRACT_DOCX' | 'EXTRACT_XLSX' | 'EXTRACT_PPTX' | 'EXTRACT_PDF_OCR' = 'EXTRACT_DOCX'
   ): Promise<DocumentExtractionResult> {
     const { signal, limits } = context
     const timeoutMs = limits.timeoutMs
@@ -344,7 +381,7 @@ export class UtilityProcessExecutionBoundary implements IParserExecutionBoundary
       const requestMsg: WorkerRequestMessage = {
         protocolVersion: WORKER_PROTOCOL_VERSION,
         jobId,
-        type: 'EXTRACT_DOCX',
+        type: jobType,
         payload: {
           bytes: request.bytes instanceof Uint8Array ? Buffer.from(request.bytes) : request.bytes,
           limits: {

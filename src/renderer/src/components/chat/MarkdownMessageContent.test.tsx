@@ -256,6 +256,31 @@ Visit [Official Docs](https://electronjs.org) for details.
       expect(onCitationClick).toHaveBeenCalledWith(sampleCitations[0])
     })
 
+    it('14b. renders PPTX slide-aware citation aria-label', () => {
+      const pptxCitation: CitationDto = {
+        citationNumber: 3,
+        sourceId: '00000000-0000-4000-8000-000000000050',
+        chunkId: '00000000-0000-4000-8000-000000000060',
+        fileName: 'quarterly_deck.pptx',
+        fileType: 'pptx',
+        pageNumber: 3,
+        headingPath: ['Slide 3: Roadmap'],
+        chunkIndex: 2
+      }
+
+      render(
+        <MarkdownMessageContent
+          content="As shown on the roadmap [3], Q3 deliverables are aligned."
+          contentFormat="markdown"
+          citations={[pptxCitation]}
+        />
+      )
+
+      const citationBtn = screen.getByTestId('citation-marker-3')
+      expect(citationBtn).toBeDefined()
+      expect(citationBtn.getAttribute('aria-label')).toBe('Citation 3: quarterly_deck.pptx slide 3')
+    })
+
     it('15. a marker without matching metadata remains ordinary text', () => {
       const onCitationClick = vi.fn()
       const content = 'Unknown source reference [99] and [42].'

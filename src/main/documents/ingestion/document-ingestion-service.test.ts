@@ -14,7 +14,11 @@ import { StaticDocumentSettingsProvider } from '../document-settings'
 import { ExtractorRegistry } from '../extractors/registry'
 import { SemanticChunker } from '../chunking/semantic-chunker'
 import { DocumentError, DocumentValidationError } from '../document-errors'
-import { buildSyntheticDocx } from '../benchmarks/fixtures/office-generator'
+import {
+  buildSyntheticDocx,
+  buildSyntheticXlsx,
+  buildSyntheticPptx
+} from '../benchmarks/fixtures/office-generator'
 
 /**
  * Deterministic in-memory PDF generator for unit tests.
@@ -817,6 +821,222 @@ Managed files are isolated in the originals subdirectory.`
     // Corrupt PK zip archive (bad header)
     const corruptBuffer = Buffer.from('PK\x03\x04corrupted_data_not_a_valid_zip_archive')
     const corruptPath = createTestFile('broken.docx', corruptBuffer)
+
+    await expect(
+      service.ingest({ knowledgeBaseId: defaultKbId, filePath: corruptPath })
+    ).rejects.toThrow()
+
+    // Verify 0 sources and 0 chunks in database
+    const sources = db.prepare('SELECT count(*) as count FROM knowledge_sources').get() as {
+      count: number
+    }
+    const chunks = db.prepare('SELECT count(*) as count FROM knowledge_chunks').get() as {
+      count: number
+    }
+    expect(sources.count).toBe(0)
+    expect(chunks.count).toBe(0)
+  })
+
+  // 23. Successful XLSX ingestion
+  it('23. successfully ingests an XLSX (.xlsx) document through isolated execution, persists chunks and indexes in FTS5', async () => {
+    const xlsxBuffer = buildSyntheticXlsx({
+      title: 'Quarterly Financial Model',
+      identifier: 'XLSX-001',
+      summaryRows: [
+        ['Metric', 'Target', 'Actual'],
+        ['ARR Revenue', '1000000', '1250000'],
+        ['Gross Margin', '85%', '88%']
+      ],
+      departmentRows: [
+        ['Department', 'Budget', 'Spent'],
+        ['Infrastructure', '50000', '42000']
+      ]
+    })
+    const filePath = createTestFile('financial_model.xlsx', xlsxBuffer)
+
+    const result = await service.ingest({
+      knowledgeBaseId: defaultKbId,
+      filePath
+    })
+
+    expect(result.status).toBe('completed')
+    if (result.status === 'completed') {
+      expect(result.duplicate).toBe(false)
+      expect(result.sourceId).toBeDefined()
+      expect(result.knowledgeBaseId).toBe(defaultKbId)
+      expect(result.totalChunks).toBeGreaterThanOrEqual(1)
+      expect(result.totalTokens).toBeGreaterThan(0)
+      expect(result.relativeFilePath).toMatch(/^originals\/[0-9a-f-]+\.xlsx$/)
+
+      // Verify source database record
+      const source = service.getSource(result.sourceId, defaultKbId)
+      expect(source).not.toBeNull()
+      expect(source?.indexing_status).toBe('completed')
+      expect(source?.file_type).toBe('xlsx')
+      expect(source?.original_file_name).toBe('financial_model.xlsx')
+      expect(source?.indexed_at).toBeGreaterThan(0)
+      expect(source?.error_message).toBeNull()
+
+      // Verify physical storage
+      const physicalFile = path.join(documentsDir, defaultKbId, result.relativeFilePath)
+      expect(fs.existsSync(physicalFile)).toBe(true)
+
+      // Verify chunks and metadata
+      const chunks = service.getChunks(result.sourceId, defaultKbId)
+      expect(chunks.length).toBe(result.totalChunks)
+      expect(chunks[0].chunk_index).toBe(0)
+      expect(chunks[0].token_count).toBeGreaterThan(0)
+
+      // Verify FTS5 synchronization
+      const ftsMatches = db
+        .prepare('SELECT rowid, content FROM knowledge_fts WHERE knowledge_fts MATCH ?')
+        .all('Revenue')
+      expect(ftsMatches.length).toBeGreaterThanOrEqual(1)
+    }
+  })
+
+  // 24. Duplicate XLSX detection
+  it('24. detects duplicate XLSX import in the same Knowledge Base and returns structured duplicate result', async () => {
+    const xlsxBuffer = buildSyntheticXlsx({
+      title: 'Duplicate XLSX Test',
+      identifier: 'DUP-XLSX-001',
+      summaryRows: [
+        ['Product', 'SKU'],
+        ['Widget Alpha', 'W-001']
+      ],
+      departmentRows: []
+    })
+    const file1 = createTestFile('model.xlsx', xlsxBuffer)
+    const file2 = createTestFile('model-copy.xlsx', xlsxBuffer)
+
+    const first = await service.ingest({ knowledgeBaseId: defaultKbId, filePath: file1 })
+    expect(first.status).toBe('completed')
+
+    const second = await service.ingest({ knowledgeBaseId: defaultKbId, filePath: file2 })
+    expect(second.status).toBe('duplicate')
+    if (second.status === 'duplicate') {
+      expect(second.duplicate).toBe(true)
+      expect(second.existingSource.originalFileName).toBe('model.xlsx')
+    }
+  })
+
+  // 25. Corrupt XLSX rejection
+  it('25. safely rejects corrupt/truncated XLSX file, writes 0 database records and cleans up storage', async () => {
+    // Corrupt PK zip archive (bad header)
+    const corruptBuffer = Buffer.from('PK\x03\x04corrupted_data_not_a_valid_xlsx_archive')
+    const corruptPath = createTestFile('broken.xlsx', corruptBuffer)
+
+    await expect(
+      service.ingest({ knowledgeBaseId: defaultKbId, filePath: corruptPath })
+    ).rejects.toThrow()
+
+    // Verify 0 sources and 0 chunks in database
+    const sources = db.prepare('SELECT count(*) as count FROM knowledge_sources').get() as {
+      count: number
+    }
+    const chunks = db.prepare('SELECT count(*) as count FROM knowledge_chunks').get() as {
+      count: number
+    }
+    expect(sources.count).toBe(0)
+    expect(chunks.count).toBe(0)
+  })
+
+  // 26. Successful PPTX ingestion
+  it('26. successfully ingests a PPTX (.pptx) presentation through isolated execution, persists chunks and indexes in FTS5', async () => {
+    const pptxBuffer = buildSyntheticPptx({
+      title: 'Quarterly Strategic Deck',
+      identifier: 'PPTX-001',
+      slides: [
+        {
+          title: 'Executive Summary',
+          paragraphs: [
+            'Antigravity platform demonstrates exceptional local-first document indexing.'
+          ]
+        },
+        {
+          title: 'Architecture Overview',
+          bullets: ['Isolated utilityProcess worker', 'Porter stemming FTS5', 'Safe table rebuild']
+        }
+      ]
+    })
+    const filePath = createTestFile('strategic-deck.pptx', pptxBuffer)
+
+    const result = await service.ingest({
+      knowledgeBaseId: defaultKbId,
+      filePath
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.duplicate).toBe(false)
+    if (result.status === 'completed') {
+      expect(result.sourceId).toBeDefined()
+      expect(result.knowledgeBaseId).toBe(defaultKbId)
+      expect(result.totalChunks).toBeGreaterThanOrEqual(2)
+      expect(result.relativeFilePath).toMatch(/^originals\/[0-9a-f-]+\.pptx$/)
+
+      // Verify database source record
+      const source = service.getSource(result.sourceId, defaultKbId)
+      expect(source).not.toBeNull()
+      expect(source?.file_type).toBe('pptx')
+      expect(source?.original_file_name).toBe('strategic-deck.pptx')
+      expect(source?.indexing_status).toBe('completed')
+
+      // Verify persisted chunks contain slide metadata
+      const chunks = db
+        .prepare(
+          'SELECT chunk_index, content, page_number, metadata_json FROM knowledge_chunks WHERE source_id = ? ORDER BY chunk_index ASC'
+        )
+        .all(result.sourceId) as {
+        chunk_index: number
+        content: string
+        page_number: number | null
+        metadata_json: string
+      }[]
+      expect(chunks.length).toBe(result.totalChunks)
+
+      // First chunk should reflect Slide 1
+      expect(chunks[0].page_number).toBe(1)
+      const meta0 = JSON.parse(chunks[0].metadata_json)
+      expect(meta0.slideNumber).toBe(1)
+      expect(meta0.slideTitle).toBe('Executive Summary')
+
+      // Verify FTS5 indexing
+      const ftsMatches = db
+        .prepare(
+          `SELECT c.id FROM knowledge_chunks c
+           JOIN knowledge_fts fts ON fts.rowid = c.rowid
+           WHERE knowledge_fts MATCH 'antigravity'`
+        )
+        .all()
+      expect(ftsMatches.length).toBeGreaterThanOrEqual(1)
+    }
+  })
+
+  // 27. Duplicate PPTX detection
+  it('27. detects duplicate PPTX import in the same Knowledge Base and returns structured duplicate result', async () => {
+    const pptxBuffer = buildSyntheticPptx({
+      title: 'Duplicate PPTX Test',
+      identifier: 'DUP-PPTX-001',
+      slides: [{ title: 'Unique Slide', paragraphs: ['Unique content for hash match.'] }]
+    })
+    const file1 = createTestFile('deck.pptx', pptxBuffer)
+    const file2 = createTestFile('deck-copy.pptx', pptxBuffer)
+
+    const first = await service.ingest({ knowledgeBaseId: defaultKbId, filePath: file1 })
+    expect(first.status).toBe('completed')
+
+    const second = await service.ingest({ knowledgeBaseId: defaultKbId, filePath: file2 })
+    expect(second.status).toBe('duplicate')
+    if (second.status === 'duplicate') {
+      expect(second.duplicate).toBe(true)
+      expect(second.existingSource.originalFileName).toBe('deck.pptx')
+    }
+  })
+
+  // 28. Corrupt PPTX rejection
+  it('28. safely rejects corrupt/truncated PPTX file, writes 0 database records and cleans up storage', async () => {
+    const corruptBuffer = Buffer.from('PK\x03\x04corrupted_data_not_a_valid_pptx_archive')
+    const corruptPath = createTestFile('broken.pptx', corruptBuffer)
 
     await expect(
       service.ingest({ knowledgeBaseId: defaultKbId, filePath: corruptPath })

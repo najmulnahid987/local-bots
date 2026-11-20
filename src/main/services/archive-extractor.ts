@@ -36,7 +36,7 @@ const EXPECTED_METADATA_ENTRIES = new Set([
 /**
  * Allowed document file extensions.
  */
-const ALLOWED_DOCUMENT_EXTENSIONS = new Set(['txt', 'md', 'pdf', 'docx'])
+const ALLOWED_DOCUMENT_EXTENSIONS = new Set(['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'])
 
 /**
  * UUIDv4 validation regex.

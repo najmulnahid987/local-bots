@@ -5,6 +5,7 @@ import { migrations } from './index'
 
 describe('Migration 006: DOCX Persistence Enablement', () => {
   let db: Database.Database
+  const v6Migrations = migrations.slice(0, 6)
 
   beforeEach(() => {
     db = new Database(':memory:')
@@ -22,13 +23,13 @@ describe('Migration 006: DOCX Persistence Enablement', () => {
   // -------------------------------------------------------------------------
   describe('1. Fresh Database Migration to v6', () => {
     it('applies migrations 001 through 006 in sequence on a fresh database', () => {
-      const result = runMigrations(db, migrations)
+      const result = runMigrations(db, v6Migrations)
 
       expect(result.appliedCount).toBe(6)
       expect(result.currentVersion).toBe(6)
       expect(result.appliedVersions).toEqual([1, 2, 3, 4, 5, 6])
 
-      const status = getMigrationStatus(db, migrations)
+      const status = getMigrationStatus(db, v6Migrations)
       expect(status.currentVersion).toBe(6)
       expect(status.pendingCount).toBe(0)
 
@@ -39,7 +40,7 @@ describe('Migration 006: DOCX Persistence Enablement', () => {
     })
 
     it('verifies knowledge_sources table CHECK constraint permits docx', () => {
-      runMigrations(db, migrations)
+      runMigrations(db, v6Migrations)
 
       const kbId = 'a1b2c3d4-0000-4000-8000-000000000001'
       const now = Date.now()
@@ -85,7 +86,7 @@ describe('Migration 006: DOCX Persistence Enablement', () => {
     })
 
     it('still accepts txt, md, and pdf and rejects invalid formats like xlsx', () => {
-      runMigrations(db, migrations)
+      runMigrations(db, v6Migrations)
 
       const kbId = 'a1b2c3d4-0000-4000-8000-000000000001'
       const now = Date.now()
@@ -197,7 +198,7 @@ describe('Migration 006: DOCX Persistence Enablement', () => {
       expect(getMigrationStatus(db, v5Migrations).currentVersion).toBe(5)
 
       // 2. Run Migration 006
-      const result = runMigrations(db, migrations)
+      const result = runMigrations(db, v6Migrations)
       expect(result.appliedCount).toBe(1)
       expect(result.currentVersion).toBe(6)
       expect(result.appliedVersions).toEqual([6])
@@ -261,8 +262,8 @@ describe('Migration 006: DOCX Persistence Enablement', () => {
     })
 
     it('idempotently does nothing when migration 006 is already applied', () => {
-      runMigrations(db, migrations)
-      const secondRun = runMigrations(db, migrations)
+      runMigrations(db, v6Migrations)
+      const secondRun = runMigrations(db, v6Migrations)
 
       expect(secondRun.appliedCount).toBe(0)
       expect(secondRun.currentVersion).toBe(6)
@@ -277,7 +278,7 @@ describe('Migration 006: DOCX Persistence Enablement', () => {
     it('verifies foreign keys are enabled before migration and restored after commit', () => {
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1)
 
-      const result = runMigrations(db, migrations)
+      const result = runMigrations(db, v6Migrations)
       expect(result.currentVersion).toBe(6)
 
       // Post-migration: foreign keys must remain enabled and valid
@@ -385,7 +386,7 @@ describe('Migration 006: DOCX Persistence Enablement', () => {
     })
 
     it('verifies parent-child CASCADE deletion works on rebuilt knowledge_sources table', () => {
-      runMigrations(db, migrations)
+      runMigrations(db, v6Migrations)
       const kbId = 'f1b2c3d4-0000-4000-8000-000000000001'
       const sourceId = 'f1b2c3d4-0000-4000-8000-000000000002'
       const chunkId = 'f1b2c3d4-0000-4000-8000-000000000003'
@@ -440,7 +441,7 @@ describe('Migration 006: DOCX Persistence Enablement', () => {
     })
 
     it('verifies FTS5 triggers remain active and synchronize on knowledge_chunks after migration', () => {
-      runMigrations(db, migrations)
+      runMigrations(db, v6Migrations)
       const kbId = 'g1b2c3d4-0000-4000-8000-000000000001'
       const sourceId = 'g1b2c3d4-0000-4000-8000-000000000002'
       const chunkId = 'g1b2c3d4-0000-4000-8000-000000000003'

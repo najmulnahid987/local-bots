@@ -39,7 +39,7 @@ describe('BotRagService (Phase 7 Step 7.3)', () => {
     opts: {
       fileName: string
       originalFileName: string
-      fileType: 'txt' | 'md' | 'pdf'
+      fileType: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx'
       status?: KnowledgeSourceStatus
       chunks: Array<{
         content: string
@@ -61,7 +61,13 @@ describe('BotRagService (Phase 7 Step 7.3)', () => {
           ? 'application/pdf'
           : opts.fileType === 'md'
             ? 'text/markdown'
-            : 'text/plain',
+            : opts.fileType === 'pptx'
+              ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+              : opts.fileType === 'xlsx'
+                ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                : opts.fileType === 'docx'
+                  ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                  : 'text/plain',
       file_size: 1024,
       content_hash: 'a'.repeat(64),
       indexing_status: opts.status ?? 'completed'
@@ -690,6 +696,42 @@ describe('BotRagService (Phase 7 Step 7.3)', () => {
     const result = ragService.retrieve({ botId: botAId, query: 'schema validation' })
     expect(result.citations.length).toBe(1)
     const citation = result.citations[0]
+
+    expect(() => citationDtoSchema.parse(citation)).not.toThrow()
+    const parsed = citationDtoSchema.parse(citation)
+    expect(parsed).toEqual(citation)
+  })
+
+  it('27b. PPTX citation metadata passes CitationDto validation with authentic slide number and slide heading', () => {
+    createTestDoc(kbAId, {
+      fileName: 'deck.pptx',
+      originalFileName: 'Quantum_Strategy.pptx',
+      fileType: 'pptx',
+      chunks: [
+        {
+          content: 'Quantum propulsion systems operate with zero gravitational drag.',
+          pageNumber: 5,
+          metadata: {
+            heading: 'Slide 5: Propulsion Systems',
+            headingPath: ['Slide 5: Propulsion Systems'],
+            slideNumber: 5,
+            slideTitle: 'Propulsion Systems'
+          }
+        }
+      ]
+    })
+
+    const result = ragService.retrieve({
+      botId: botAId,
+      query: 'quantum propulsion gravitational drag'
+    })
+    expect(result.citations.length).toBe(1)
+    const citation = result.citations[0]
+
+    expect(citation.fileType).toBe('pptx')
+    expect(citation.fileName).toBe('Quantum_Strategy.pptx')
+    expect(citation.pageNumber).toBe(5)
+    expect(citation.headingPath).toEqual(['Slide 5: Propulsion Systems'])
 
     expect(() => citationDtoSchema.parse(citation)).not.toThrow()
     const parsed = citationDtoSchema.parse(citation)

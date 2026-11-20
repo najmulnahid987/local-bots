@@ -28,10 +28,46 @@ describe('FormatDetector (Phase 10 Step 10.4)', () => {
     expect(detectedXlsx.canonicalFormat).toBe('xlsx')
     expect(detectedXlsx.confidence).toBe('high')
 
+    // With pptx hint
+    const detectedPptx = FormatDetector.detect(zipBytes, 'deck.pptx')
+    expect(detectedPptx.canonicalFormat).toBe('pptx')
+    expect(detectedPptx.confidence).toBe('high')
+
+    // With pptx MIME type hint
+    const detectedPptxMime = FormatDetector.detect(
+      zipBytes,
+      undefined,
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    )
+    expect(detectedPptxMime.canonicalFormat).toBe('pptx')
+    expect(detectedPptxMime.confidence).toBe('high')
+
     // Without hint
     const detectedZip = FormatDetector.detect(zipBytes)
     expect(detectedZip.canonicalFormat).toBe('zip')
     expect(detectedZip.confidence).toBe('exact')
+
+    // Content-based inspection for XLSX without hint
+    const xlsxZipBytes = new Uint8Array(
+      Buffer.concat([
+        Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00]),
+        Buffer.from('some data with xl/workbook.xml inside')
+      ])
+    )
+    const detectedXlsxByContent = FormatDetector.detect(xlsxZipBytes)
+    expect(detectedXlsxByContent.canonicalFormat).toBe('xlsx')
+    expect(detectedXlsxByContent.confidence).toBe('high')
+
+    // Content-based inspection for PPTX without hint
+    const pptxZipBytes = new Uint8Array(
+      Buffer.concat([
+        Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00]),
+        Buffer.from('some data with ppt/presentation.xml inside')
+      ])
+    )
+    const detectedPptxByContent = FormatDetector.detect(pptxZipBytes)
+    expect(detectedPptxByContent.canonicalFormat).toBe('pptx')
+    expect(detectedPptxByContent.confidence).toBe('high')
   })
 
   // 3. Binary control bytes check

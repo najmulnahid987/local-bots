@@ -2130,6 +2130,16 @@
   color: #1d4ed8;
 }
 
+.doc-format-badge.format-xlsx {
+  background-color: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+
+.doc-format-badge.format-pptx {
+  background-color: rgba(234, 88, 12, 0.12);
+  color: #c2410c;
+}
+
 .doc-row-actions {
   display: flex;
   align-items: center;

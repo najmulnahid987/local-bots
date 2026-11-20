@@ -91,6 +91,11 @@ export class FormatDetector {
         hintExt = 'docx'
       else if (lowerMime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         hintExt = 'xlsx'
+      else if (
+        lowerMime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+        lowerMime === 'application/vnd.openxmlformats-officedocument.presentationml.slideshow'
+      )
+        hintExt = 'pptx'
     }
 
     // 2. Check Magic Bytes
@@ -117,11 +122,27 @@ export class FormatDetector {
           isBinary: true
         }
       }
-      // Inspect if ZIP contains word/document.xml even without filename hint
+      // Inspect if ZIP contains word/document.xml or xl/workbook.xml even without filename hint
       const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
       if (buf.includes('word/document.xml')) {
         return {
           canonicalFormat: 'docx',
+          confidence: 'high',
+          magicBytesMatched: true,
+          isBinary: true
+        }
+      }
+      if (buf.includes('xl/workbook.xml')) {
+        return {
+          canonicalFormat: 'xlsx',
+          confidence: 'high',
+          magicBytesMatched: true,
+          isBinary: true
+        }
+      }
+      if (buf.includes('ppt/presentation.xml')) {
+        return {
+          canonicalFormat: 'pptx',
           confidence: 'high',
           magicBytesMatched: true,
           isBinary: true

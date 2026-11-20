@@ -29,6 +29,7 @@
     "@ai-sdk/openai": "4.0.110",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "@napi-rs/canvas": "^1.1.1",
     "ai": "7.0.164",
     "better-sqlite3": "^13.0.3",
     "lucide-react": "^1.70.0",

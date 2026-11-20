@@ -520,13 +520,13 @@ describe('Shared Conversation and Message Contracts (Step 7.1)', () => {
           citationNumber: 1,
           sourceId: validSourceId,
           chunkId: validChunkId,
-          fileName: 'presentation.pptx',
-          fileType: 'pptx',
+          fileName: 'executable.exe',
+          fileType: 'exe' as unknown as 'pdf',
           pageNumber: null,
           headingPath: null,
           chunkIndex: 0
         })
-      ).toThrow(/fileType must be 'txt', 'md', 'pdf', or 'docx'/)
+      ).toThrow(/fileType must be 'txt', 'md', 'pdf', 'docx', 'xlsx', or 'pptx'/)
     })
 
     it('32b. accepts docx file type in citation', () => {
@@ -541,6 +541,36 @@ describe('Shared Conversation and Message Contracts (Step 7.1)', () => {
         chunkIndex: 0
       })
       expect(parsed.fileType).toBe('docx')
+    })
+
+    it('32c. accepts xlsx file type in citation', () => {
+      const parsed = citationDtoSchema.parse({
+        citationNumber: 1,
+        sourceId: validSourceId,
+        chunkId: validChunkId,
+        fileName: 'financial_model.xlsx',
+        fileType: 'xlsx',
+        pageNumber: null,
+        headingPath: ['Sheet: Q1 Revenue'],
+        chunkIndex: 0
+      })
+      expect(parsed.fileType).toBe('xlsx')
+    })
+
+    it('32d. accepts pptx file type in citation with slide number', () => {
+      const parsed = citationDtoSchema.parse({
+        citationNumber: 1,
+        sourceId: validSourceId,
+        chunkId: validChunkId,
+        fileName: 'deck.pptx',
+        fileType: 'pptx',
+        pageNumber: 3,
+        headingPath: ['Executive Summary'],
+        chunkIndex: 2
+      })
+      expect(parsed.fileType).toBe('pptx')
+      expect(parsed.pageNumber).toBe(3)
+      expect(parsed.headingPath).toEqual(['Executive Summary'])
     })
 
     it('33. rejects empty heading strings in headingPath', () => {

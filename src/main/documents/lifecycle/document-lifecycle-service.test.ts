@@ -12,7 +12,11 @@ import { KnowledgeSourceRepository } from '../../database/repositories/knowledge
 import { DocumentStorageManager } from '../document-storage-manager'
 import { DocumentIngestionService } from '../ingestion/document-ingestion-service'
 import { DocumentLifecycleService } from './document-lifecycle-service'
-import { buildSyntheticDocx } from '../benchmarks/fixtures/office-generator'
+import {
+  buildSyntheticDocx,
+  buildSyntheticXlsx,
+  buildSyntheticPptx
+} from '../benchmarks/fixtures/office-generator'
 
 describe('DocumentLifecycleService (Phase 5 Step 5.10)', () => {
   let dbContext: MigratedTestDatabaseContext
@@ -232,6 +236,78 @@ describe('DocumentLifecycleService (Phase 5 Step 5.10)', () => {
       expect(postSearch[0].source_id).toBe(sourceId)
     })
 
+    it('4c. successfully reindexes an XLSX document and updates chunks and FTS5 search', async () => {
+      const xlsxBuffer = buildSyntheticXlsx({
+        title: 'Inventory Forecasting Model',
+        identifier: 'INV-XLSX-001',
+        summaryRows: [
+          ['Category', 'StockLevel', 'ReorderPoint'],
+          ['Semiconductor Chips', '25000', '5000']
+        ],
+        departmentRows: [
+          ['Warehouse', 'Capacity'],
+          ['Austin-Hub', '95%']
+        ]
+      })
+      const sourceId = await ingestCompleted('inventory.xlsx', xlsxBuffer)
+
+      // Initial search finds "Semiconductor"
+      const initialSearch = sourceRepo.searchChunks(kbId, 'Semiconductor', 10)
+      expect(initialSearch.length).toBeGreaterThanOrEqual(1)
+
+      // Reindex the document
+      const reindexRes = await lifecycleService.reindex({
+        knowledgeBaseId: kbId,
+        sourceId
+      })
+
+      expect(reindexRes.status).toBe('completed')
+      expect(reindexRes.source.id).toBe(sourceId)
+      expect(reindexRes.source.fileType).toBe('xlsx')
+      expect(reindexRes.source.indexingStatus).toBe('completed')
+      expect(reindexRes.totalChunks).toBeGreaterThanOrEqual(1)
+
+      // FTS search still works after reindexing
+      const postSearch = sourceRepo.searchChunks(kbId, 'Semiconductor', 10)
+      expect(postSearch.length).toBeGreaterThanOrEqual(1)
+      expect(postSearch[0].source_id).toBe(sourceId)
+    })
+
+    it('4d. successfully reindexes a PPTX presentation and updates chunks and FTS5 search', async () => {
+      const pptxBuffer = buildSyntheticPptx({
+        title: 'Mission Briefing Deck',
+        identifier: 'PPTX-BRIEF-001',
+        slides: [
+          {
+            title: 'Mission Payload',
+            paragraphs: ['Payload delivery involves suborbital quantum telemetry.']
+          }
+        ]
+      })
+      const sourceId = await ingestCompleted('mission_briefing.pptx', pptxBuffer)
+
+      // Initial search finds "suborbital"
+      const initialSearch = sourceRepo.searchChunks(kbId, 'suborbital', 10)
+      expect(initialSearch.length).toBeGreaterThanOrEqual(1)
+
+      // Reindex the presentation
+      const reindexRes = await lifecycleService.reindex({
+        knowledgeBaseId: kbId,
+        sourceId
+      })
+
+      expect(reindexRes.status).toBe('completed')
+      expect(reindexRes.source.id).toBe(sourceId)
+      expect(reindexRes.source.fileType).toBe('pptx')
+      expect(reindexRes.source.indexingStatus).toBe('completed')
+      expect(reindexRes.totalChunks).toBeGreaterThanOrEqual(1)
+
+      // FTS search still works after reindexing
+      const postSearch = sourceRepo.searchChunks(kbId, 'suborbital', 10)
+      expect(postSearch.length).toBeGreaterThanOrEqual(1)
+      expect(postSearch[0].source_id).toBe(sourceId)
+    })
+
     it('5. transitions source to failed on disk file checksum mismatch', async () => {
       const sourceId = await ingestCompleted(
         'corrupted.txt',
@@ -366,6 +442,89 @@ describe('DocumentLifecycleService (Phase 5 Step 5.10)', () => {
 
       // FTS search returns 0 results
       expect(sourceRepo.searchChunks(kbId, 'Cleanup', 10)).toHaveLength(0)
+    })
+
+    it('8c. safely deletes an XLSX document, unlinks original file, and cascades chunks and FTS rows', async () => {
+      const xlsxBuffer = buildSyntheticXlsx({
+        title: 'XLSX Deletion Workbook',
+        identifier: 'DEL-XLSX-001',
+        summaryRows: [
+          ['Asset', 'Value'],
+          ['Supercomputer Cluster', '$5,000,000']
+        ],
+        departmentRows: []
+      })
+      const sourceId = await ingestCompleted('delete_model.xlsx', xlsxBuffer)
+
+      const storagePath = storageManager.resolveOriginalPath(kbId, sourceId, 'xlsx')
+      expect(fs.existsSync(storagePath)).toBe(true)
+
+      // Verify searchable initially
+      expect(sourceRepo.searchChunks(kbId, 'Supercomputer', 10).length).toBeGreaterThanOrEqual(1)
+
+      const deleteRes = await lifecycleService.delete({
+        knowledgeBaseId: kbId,
+        sourceId
+      })
+
+      expect(deleteRes.success).toBe(true)
+      expect(deleteRes.sourceId).toBe(sourceId)
+      expect(deleteRes.knowledgeBaseId).toBe(kbId)
+      expect(deleteRes.fileCleaned).toBe(true)
+
+      // Managed original file removed
+      expect(fs.existsSync(storagePath)).toBe(false)
+
+      // Database record deleted
+      expect(sourceRepo.getById(sourceId, kbId)).toBeNull()
+
+      // Chunks cascaded
+      expect(sourceRepo.getChunksBySourceId(sourceId, kbId)).toHaveLength(0)
+
+      // FTS search returns 0 results
+      expect(sourceRepo.searchChunks(kbId, 'Supercomputer', 10)).toHaveLength(0)
+    })
+
+    it('8d. safely deletes a PPTX presentation, unlinks original file, and cascades chunks and FTS rows', async () => {
+      const pptxBuffer = buildSyntheticPptx({
+        title: 'PPTX Deletion Deck',
+        identifier: 'DEL-PPTX-001',
+        slides: [
+          {
+            title: 'Decommissioning Plan',
+            paragraphs: ['Decommissioning orbital relay alpha.']
+          }
+        ]
+      })
+      const sourceId = await ingestCompleted('delete_deck.pptx', pptxBuffer)
+
+      const storagePath = storageManager.resolveOriginalPath(kbId, sourceId, 'pptx')
+      expect(fs.existsSync(storagePath)).toBe(true)
+
+      // Verify searchable initially
+      expect(sourceRepo.searchChunks(kbId, 'Decommissioning', 10).length).toBeGreaterThanOrEqual(1)
+
+      const deleteRes = await lifecycleService.delete({
+        knowledgeBaseId: kbId,
+        sourceId
+      })
+
+      expect(deleteRes.success).toBe(true)
+      expect(deleteRes.sourceId).toBe(sourceId)
+      expect(deleteRes.knowledgeBaseId).toBe(kbId)
+      expect(deleteRes.fileCleaned).toBe(true)
+
+      // Managed original file removed
+      expect(fs.existsSync(storagePath)).toBe(false)
+
+      // Database record deleted
+      expect(sourceRepo.getById(sourceId, kbId)).toBeNull()
+
+      // Chunks cascaded
+      expect(sourceRepo.getChunksBySourceId(sourceId, kbId)).toHaveLength(0)
+
+      // FTS search returns 0 results
+      expect(sourceRepo.searchChunks(kbId, 'Decommissioning', 10)).toHaveLength(0)
     })
 
     it('9. restores original file from quarantine if database deletion fails', async () => {

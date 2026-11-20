@@ -8,6 +8,8 @@ import type { ExtractedDocument, ExtractedDocumentSection } from '../extractors/
 import { normalizeText } from '../normalization/text-normalizer'
 import type { ChunkingResult, DocumentChunk } from './types'
 import { chunkMarkdownSection } from './markdown-table-chunker'
+import { SpreadsheetChunker } from './spreadsheet-chunker'
+import { PresentationChunker } from './presentation-chunker'
 
 /**
  * Estimates token count from text length using the approved model-agnostic heuristic:
@@ -199,7 +201,7 @@ export class SemanticChunker {
       throw DocumentErrors.chunkingInvalidInput('Extracted document must be a valid object.')
     }
 
-    if (!doc.format || !['txt', 'md', 'pdf', 'docx'].includes(doc.format)) {
+    if (!doc.format || !['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'].includes(doc.format)) {
       throw DocumentErrors.extractionUnsupportedFormat(String(doc.format))
     }
 
@@ -207,7 +209,18 @@ export class SemanticChunker {
       throw DocumentErrors.chunkingInvalidInput('Extracted document contains no sections to chunk.')
     }
 
-    // 2. Load and validate chunking configuration
+    // 2. Format-specific delegation for spreadsheets and presentations
+    if (doc.format === 'xlsx') {
+      const spreadsheetChunker = new SpreadsheetChunker(this.settingsProvider)
+      return spreadsheetChunker.chunk(doc)
+    }
+
+    if (doc.format === 'pptx') {
+      const presentationChunker = new PresentationChunker(this.settingsProvider)
+      return presentationChunker.chunk(doc)
+    }
+
+    // 3. Load and validate chunking configuration
     const settings = this.settingsProvider.getSettings()
     const { chunkTargetTokens, chunkOverlapTokens, chunkerVersion } = settings
 

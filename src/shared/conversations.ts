@@ -58,7 +58,7 @@ export type MessageContentFormat = (typeof MESSAGE_CONTENT_FORMATS)[number]
 /**
  * Supported document formats for cited knowledge sources.
  */
-export const CITATION_FILE_TYPES = ['txt', 'md', 'pdf', 'docx'] as const
+export const CITATION_FILE_TYPES = ['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'] as const
 export type CitationFileType = (typeof CITATION_FILE_TYPES)[number]
 
 /**
@@ -507,7 +507,7 @@ export const citationDtoSchema = z
         message: 'fileName must be a simple filename without path separators.'
       }),
     fileType: z.enum(CITATION_FILE_TYPES, {
-      message: "fileType must be 'txt', 'md', 'pdf', or 'docx'."
+      message: "fileType must be 'txt', 'md', 'pdf', 'docx', 'xlsx', or 'pptx'."
     }),
     pageNumber: z
       .number()

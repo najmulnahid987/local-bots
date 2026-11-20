@@ -106,6 +106,7 @@ export function buildSyntheticDocx(options: {
  */
 export function buildSyntheticXlsx(options: {
   identifier: string
+  title?: string
   summaryRows: readonly (readonly string[])[]
   departmentRows: readonly (readonly string[])[]
 }): Buffer {
@@ -182,17 +183,24 @@ export function buildSyntheticXlsx(options: {
   return writer.build()
 }
 
+export interface SyntheticSlideOptions {
+  readonly title: string
+  readonly bullets?: readonly string[]
+  readonly paragraphs?: readonly string[]
+  readonly speakerNotes?: string
+  readonly tableRows?: readonly (readonly string[])[]
+  readonly hasChart?: boolean
+  readonly hasImage?: boolean
+}
+
 /**
- * Builds a valid 5-slide OpenXML Presentation (.pptx).
+ * Builds a valid OpenXML Presentation (.pptx).
  */
 export function buildSyntheticPptx(options: {
   title: string
   identifier: string
-  slides: readonly {
-    title: string
-    bullets: readonly string[]
-    speakerNotes?: string
-  }[]
+  slides: readonly SyntheticSlideOptions[]
+  slideOrderOverride?: readonly number[]
 }): Buffer {
   const writer = new ZipArchiveWriter()
 
@@ -228,9 +236,11 @@ ${slideOverrides}</Types>`
   writer.addEntry('ppt/_rels/presentation.xml.rels', presRels, DETERMINISTIC_DATE)
 
   // 4. ppt/presentation.xml
+  const order = options.slideOrderOverride ?? options.slides.map((_, idx) => idx + 1)
   let sldIdLst = '<p:sldIdLst>\n'
-  for (let i = 1; i <= options.slides.length; i++) {
-    sldIdLst += `  <p:sldId id="${255 + i}" r:id="rId${i}"/>\n`
+  for (let i = 0; i < order.length; i++) {
+    const targetSlideNum = order[i]
+    sldIdLst += `  <p:sldId id="${255 + i + 1}" r:id="rId${targetSlideNum}"/>\n`
   }
   sldIdLst += '</p:sldIdLst>'
 
@@ -247,14 +257,78 @@ ${slideOverrides}</Types>`
     const slide = options.slides[i]
 
     let bulletNodes = ''
-    for (const b of slide.bullets) {
-      bulletNodes += `
+    if (slide.bullets && slide.bullets.length > 0) {
+      for (const b of slide.bullets) {
+        bulletNodes += `
         <a:p>
+          <a:pPr lvl="0"/>
           <a:r>
             <a:rPr lang="en-US" sz="1800"/>
             <a:t>${b}</a:t>
           </a:r>
         </a:p>`
+      }
+    }
+
+    let paragraphNodes = ''
+    if (slide.paragraphs && slide.paragraphs.length > 0) {
+      for (const p of slide.paragraphs) {
+        paragraphNodes += `
+        <a:p>
+          <a:r>
+            <a:rPr lang="en-US" sz="1800"/>
+            <a:t>${p}</a:t>
+          </a:r>
+        </a:p>`
+      }
+    }
+
+    let tableFrame = ''
+    if (slide.tableRows && slide.tableRows.length > 0) {
+      let trXml = ''
+      for (const row of slide.tableRows) {
+        trXml += '<a:tr h="370840">'
+        for (const cell of row) {
+          trXml += `<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>${cell}</a:t></a:r></a:p></a:txBody></a:tc>`
+        }
+        trXml += '</a:tr>'
+      }
+      tableFrame = `
+      <p:graphicFrame>
+        <p:nvGraphicFramePr><p:cNvPr id="${100 + slideNum}" name="Table 1"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>
+        <p:xfrm><a:off x="1524000" y="1524000"/><a:ext cx="6096000" cy="2743200"/></p:xfrm>
+        <a:graphic>
+          <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+            <a:tbl>
+              ${trXml}
+            </a:tbl>
+          </a:graphicData>
+        </a:graphic>
+      </p:graphicFrame>`
+    }
+
+    let chartFrame = ''
+    if (slide.hasChart) {
+      chartFrame = `
+      <p:graphicFrame>
+        <p:nvGraphicFramePr><p:cNvPr id="${200 + slideNum}" name="Chart 1"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>
+        <p:xfrm><a:off x="1524000" y="1524000"/><a:ext cx="6096000" cy="2743200"/></p:xfrm>
+        <a:graphic>
+          <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+            <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart"/>
+          </a:graphicData>
+        </a:graphic>
+      </p:graphicFrame>`
+    }
+
+    let picNode = ''
+    if (slide.hasImage) {
+      picNode = `
+      <p:pic>
+        <p:nvPicPr><p:cNvPr id="${300 + slideNum}" name="Picture 1"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>
+        <p:blipFill><a:blip r:embed="rIdPic"/></p:blipFill>
+        <p:spPr/>
+      </p:pic>`
     }
 
     const slideXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -278,9 +352,13 @@ ${slideOverrides}</Types>`
         <p:spPr/>
         <p:txBody>
           <a:bodyPr/>
+          ${paragraphNodes}
           ${bulletNodes}
         </p:txBody>
       </p:sp>
+      ${tableFrame}
+      ${chartFrame}
+      ${picNode}
     </p:spTree>
   </p:cSld>
 </p:sld>`

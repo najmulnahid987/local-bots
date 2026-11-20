@@ -13,6 +13,8 @@ import { FormatDetector, normalizeFormatExtension } from './format-detector'
 import { IParserExecutionBoundary, UtilityProcessExecutionBoundary } from './execution-boundary'
 import { MarkdownExtractorAdapter, TxtExtractorAdapter, PdfExtractorAdapter } from './adapters'
 import { DocxExtractor } from './docx/docx-extractor'
+import { XlsxExtractor } from './xlsx/xlsx-extractor'
+import { PptxExtractor } from './pptx/pptx-extractor'
 
 /**
  * Configuration options for DocumentExtractionService.
@@ -55,6 +57,8 @@ export class DocumentExtractionService {
       this.registry.register(new MarkdownExtractorAdapter())
       this.registry.register(new PdfExtractorAdapter(this.settingsProvider))
       this.registry.register(new DocxExtractor())
+      this.registry.register(new XlsxExtractor())
+      this.registry.register(new PptxExtractor())
     }
 
     this.boundary = options?.boundary ?? new UtilityProcessExecutionBoundary()

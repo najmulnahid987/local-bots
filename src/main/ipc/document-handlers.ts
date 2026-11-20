@@ -140,10 +140,12 @@ export function registerDocumentIpcHandlers(options: DocumentIpcHandlerOptions):
           properties: ['openFile'],
           filters: [
             {
-              name: 'Supported Documents (*.txt, *.md, *.pdf, *.docx)',
-              extensions: ['txt', 'md', 'pdf', 'docx']
+              name: 'Supported Documents (*.txt, *.md, *.pdf, *.docx, *.xlsx, *.pptx)',
+              extensions: ['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx']
             },
             { name: 'Word Documents (*.docx)', extensions: ['docx'] },
+            { name: 'Excel Spreadsheets (*.xlsx)', extensions: ['xlsx'] },
+            { name: 'PowerPoint Presentations (*.pptx)', extensions: ['pptx'] },
             { name: 'All Files (*.*)', extensions: ['*'] }
           ]
         })

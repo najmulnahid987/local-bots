@@ -112,6 +112,9 @@ describe('ArchiveExtractor & ZIP Security Validation', () => {
       const docId = crypto.randomUUID()
       expect(validateArchiveEntryName(`documents/${docId}.txt`)).toBe(`documents/${docId}.txt`)
       expect(validateArchiveEntryName(`documents/${docId}.pdf`)).toBe(`documents/${docId}.pdf`)
+      expect(validateArchiveEntryName(`documents/${docId}.docx`)).toBe(`documents/${docId}.docx`)
+      expect(validateArchiveEntryName(`documents/${docId}.xlsx`)).toBe(`documents/${docId}.xlsx`)
+      expect(validateArchiveEntryName(`documents/${docId}.pptx`)).toBe(`documents/${docId}.pptx`)
     })
 
     it('rejects path traversal with ../ or backslashes', () => {
