@@ -1,5 +1,8 @@
+import type { UniversalBlockType, UniversalSourceLocation } from '../model/types'
+import type { SupportedDocumentFormat } from '../../../shared/knowledge-documents'
+
 /**
- * Structured document chunk emitted by the deterministic semantic chunker.
+ * Structured document chunk emitted by deterministic format-aware chunkers.
  * Represents a single indexing unit for SQLite FTS5 full-text search.
  */
 export interface DocumentChunk {
@@ -36,7 +39,38 @@ export interface DocumentChunk {
 }
 
 /**
- * Summary result produced by the SemanticChunker engine.
+ * Explicit non-searchable disposition for document blocks that cannot produce searchable text.
+ * Guarantees zero silent information loss by accounting for 100% of blocks in the UniversalDocument.
+ */
+export interface NonSearchableBlockDisposition {
+  /**
+   * Unique identifier of the source block in the UniversalDocument.
+   */
+  readonly blockId: string
+
+  /**
+   * Universal block type discriminator.
+   */
+  readonly blockType: UniversalBlockType
+
+  /**
+   * Detailed architectural reason this block did not emit a searchable text chunk.
+   */
+  readonly reason: string
+
+  /**
+   * 0-based order index of the block within the document.
+   */
+  readonly orderIndex: number
+
+  /**
+   * Available authentic source location coordinates.
+   */
+  readonly location?: UniversalSourceLocation
+}
+
+/**
+ * Summary result produced by the chunking engine.
  */
 export interface ChunkingResult {
   /**
@@ -58,4 +92,74 @@ export interface ChunkingResult {
    * Version of the chunking algorithm used.
    */
   readonly chunkerVersion: string
+
+  /**
+   * Explicit dispositions for blocks that did not emit searchable text chunks.
+   */
+  readonly nonSearchableBlocks?: readonly NonSearchableBlockDisposition[]
+}
+
+/**
+ * Configuration options provided to UniversalDocumentChunker.chunk().
+ */
+export interface UniversalChunkingOptions {
+  /**
+   * Target maximum tokens per chunk (default: 500).
+   */
+  readonly chunkTargetTokens?: number
+
+  /**
+   * Overlap tokens between consecutive text chunks (default: 50).
+   */
+  readonly chunkOverlapTokens?: number
+}
+
+/**
+ * Well-defined structural properties persisted in DocumentChunk.metadata.
+ */
+export interface StructuredChunkMetadata extends Record<string, unknown> {
+  readonly format?: SupportedDocumentFormat | string
+  readonly sourceBlockIds?: readonly string[]
+  readonly primaryOrderIndexes?: readonly number[]
+  readonly heading?: string | null
+  readonly headingLevel?: number | null
+  readonly headingPath?: readonly string[] | null
+  readonly headingContext?: string | null
+  readonly hasTable?: boolean
+  readonly contentRole?:
+    | 'body'
+    | 'table'
+    | 'code'
+    | 'list'
+    | 'heading'
+    | 'header'
+    | 'footer'
+    | 'footnote'
+    | 'endnote'
+    | 'comment'
+    | 'notes'
+    | 'chart'
+    | 'smartart'
+    | 'image'
+    | string
+  readonly pageNumber?: number | null
+  readonly pageNumbers?: readonly number[]
+  readonly sheetName?: string
+  readonly sheetIndex?: number
+  readonly startRow?: number
+  readonly endRow?: number
+  readonly rowStart?: number
+  readonly rowEnd?: number
+  readonly slideNumber?: number
+  readonly slideTitle?: string
+  readonly isSpeakerNotes?: boolean
+  readonly isContextual?: boolean
+  readonly isOversized?: boolean
+  readonly contextPrefix?: string
+  readonly sourceLocation?: UniversalSourceLocation
+  readonly sourceLocations?: readonly UniversalSourceLocation[]
+  readonly isOcr?: boolean
+  readonly ocrConfidence?: number
+  readonly chunkingStrategy?: string
+  readonly chunkerVersion?: string
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import {
   createMigratedTestDatabase,
   type MigratedTestDatabaseContext
@@ -666,6 +666,56 @@ describe('DocumentLifecycleService (Phase 5 Step 5.10)', () => {
           sourceId: 'not-a-uuid'
         })
       ).rejects.toThrow(/Invalid delete request/)
+    })
+
+    it('16. Phase 11 Step 11.3: reindex atomically updates stored UniversalDocument and preserves previous representation on failure', async () => {
+      // 1. Ingest an initial document
+      const docPath = createTestFile('reindex_universal.txt', 'Initial line 1\nInitial line 2')
+      const ingestion = await ingestionService.ingest({ knowledgeBaseId: kbId, filePath: docPath })
+      expect(ingestion.status).toBe('completed')
+
+      if (ingestion.status === 'completed') {
+        const sourceId = ingestion.sourceId
+
+        // Verify initial UniversalDocument exists
+        const initialDoc = sourceRepo.getExtractedDocument(sourceId, kbId)
+        expect(initialDoc).toBeDefined()
+        expect(initialDoc!.text).toContain('Initial line 1')
+
+        // 2. Update file on disk and reindex
+        const storagePath = storageManager.resolveOriginalPath(kbId, sourceId, 'txt')
+        fs.writeFileSync(storagePath, 'Updated line 1\nUpdated line 2\nUpdated line 3')
+
+        // Update content_hash in source record to match new disk bytes
+        const newHash = createHash('sha256')
+          .update(fs.readFileSync(storagePath))
+          .digest('hex')
+          .toLowerCase()
+        dbContext.db
+          .prepare('UPDATE knowledge_sources SET content_hash = ? WHERE id = ?')
+          .run(newHash, sourceId)
+
+        const reindexResult = await lifecycleService.reindex({ knowledgeBaseId: kbId, sourceId })
+        expect(reindexResult.status).toBe('completed')
+
+        // Verify updated UniversalDocument is persisted
+        const updatedDoc = sourceRepo.getExtractedDocument(sourceId, kbId)
+        expect(updatedDoc).toBeDefined()
+        expect(updatedDoc!.text).toContain('Updated line 1')
+        expect(updatedDoc!.text).toContain('Updated line 3')
+
+        // 3. Test failure preservation: corrupt file content without updating content_hash to trigger failure
+        fs.writeFileSync(storagePath, 'Corrupted payload triggering CHECKSUM_MISMATCH')
+        await expect(lifecycleService.reindex({ knowledgeBaseId: kbId, sourceId })).rejects.toThrow(
+          /Document checksum verification failed/
+        )
+
+        // The previously valid UniversalDocument must be 100% preserved
+        const preservedDoc = sourceRepo.getExtractedDocument(sourceId, kbId)
+        expect(preservedDoc).toBeDefined()
+        expect(preservedDoc!.text).toContain('Updated line 1')
+        expect(preservedDoc!.text).toContain('Updated line 3')
+      }
     })
   })
 })

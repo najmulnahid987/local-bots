@@ -48,8 +48,8 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     expect(migrationRow.applied_at).toBeGreaterThan(0)
   })
 
-  // Test B — Verify all 13 core tables exist
-  it('Test B: creates all 13 core application relational tables', () => {
+  // Test B — Verify all 14 core tables exist
+  it('Test B: creates all 14 core application relational tables', () => {
     runMigrations(db, migrations)
 
     const expectedTables = [
@@ -62,6 +62,7 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'import_recovery_journal',
       'knowledge_bases',
       'knowledge_chunks',
+      'knowledge_extracted_documents',
       'knowledge_sources',
       'messages',
       'provider_connections',
@@ -79,8 +80,8 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     expect(actualTables).toEqual(expectedTables)
   })
 
-  // Test C — Verify all 26 indexes exist
-  it('Test C: creates all 26 explicit performance indexes', () => {
+  // Test C — Verify all 27 indexes exist
+  it('Test C: creates all 27 explicit performance indexes', () => {
     runMigrations(db, migrations)
 
     const expectedIndexes = [
@@ -103,6 +104,7 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'idx_knowledge_bases_created_at',
       'idx_knowledge_chunks_kb',
       'idx_knowledge_chunks_source',
+      'idx_knowledge_extracted_documents_created',
       'idx_knowledge_sources_hash',
       'idx_knowledge_sources_kb',
       'idx_knowledge_sources_status',
@@ -947,13 +949,13 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       expect(setting).toBeDefined()
       expect(setting.value).toBe('My Persistent Workspace')
 
-      // Verify all 13 tables still exist
+      // Verify all 14 tables still exist
       const tableCount = db2
         .prepare(
           "SELECT count(*) as c FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations' AND name NOT LIKE 'knowledge_fts%'"
         )
         .get() as { c: number }
-      expect(tableCount.c).toBe(13)
+      expect(tableCount.c).toBe(14)
 
       manager.close()
     } finally {

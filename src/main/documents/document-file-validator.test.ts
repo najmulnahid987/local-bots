@@ -159,6 +159,23 @@ describe('DocumentFileValidator (Phase 5 Step 5.3)', () => {
       expect(result.contentHash).toBe(crypto.createHash('sha256').update(pptxBytes).digest('hex'))
     })
 
+    it('1.4d validates and accepts a valid .csv file', async () => {
+      const csvContent = 'Header1,Header2,Header3\nVal1,Val2,Val3\n'
+      const filePath = path.join(tempDir, 'data.csv')
+      fs.writeFileSync(filePath, csvContent, 'utf-8')
+
+      const result = await validator.validate(filePath)
+
+      expect(result.originalFileName).toBe('data.csv')
+      expect(result.extension).toBe('csv')
+      expect(result.fileType).toBe('csv')
+      expect(result.mimeType).toBe('text/csv')
+      expect(result.fileSizeBytes).toBe(Buffer.byteLength(csvContent))
+      expect(result.contentHash).toBe(
+        crypto.createHash('sha256').update(Buffer.from(csvContent)).digest('hex')
+      )
+    })
+
     it('1.5 normalizes uppercase extensions to lowercase', async () => {
       const txtPath = path.join(tempDir, 'DOCUMENT.TXT')
       fs.writeFileSync(txtPath, 'Text content in uppercase file.', 'utf-8')
@@ -191,7 +208,7 @@ describe('DocumentFileValidator (Phase 5 Step 5.3)', () => {
 
     it('1.6 rejects unsupported extensions with UNSUPPORTED_FILE_TYPE', async () => {
       const invalidFiles = [
-        'data.csv',
+        'data.tsv',
         'report.doc',
         'script.py',
         'archive.zip',

@@ -8,6 +8,11 @@ import type {
 } from './types'
 import type { ExtractedDocument } from '../extractors/types'
 import { DEFAULT_EXTRACTION_LIMITS, extractionResultToExtractedDocument } from './types'
+import {
+  type UniversalDocument,
+  type ExtractionResultToUniversalDocumentOptions,
+  documentExtractionResultToUniversalDocument
+} from '../model'
 import { DocumentExtractorRegistry } from './extractor-registry'
 import { FormatDetector, normalizeFormatExtension } from './format-detector'
 import { IParserExecutionBoundary, UtilityProcessExecutionBoundary } from './execution-boundary'
@@ -15,6 +20,7 @@ import { MarkdownExtractorAdapter, TxtExtractorAdapter, PdfExtractorAdapter } fr
 import { DocxExtractor } from './docx/docx-extractor'
 import { XlsxExtractor } from './xlsx/xlsx-extractor'
 import { PptxExtractor } from './pptx/pptx-extractor'
+import { CsvExtractor } from './csv/csv-extractor'
 
 /**
  * Configuration options for DocumentExtractionService.
@@ -59,6 +65,7 @@ export class DocumentExtractionService {
       this.registry.register(new DocxExtractor())
       this.registry.register(new XlsxExtractor())
       this.registry.register(new PptxExtractor())
+      this.registry.register(new CsvExtractor())
     }
 
     this.boundary = options?.boundary ?? new UtilityProcessExecutionBoundary()
@@ -183,6 +190,19 @@ export class DocumentExtractionService {
     })
 
     return extractionResultToExtractedDocument(result)
+  }
+
+  /**
+   * Extracts and returns the canonical universal structured document model.
+   * Guarantees 100% information preservation of all structural blocks, tables,
+   * lists, code blocks, slide/sheet boundaries, and coordinates.
+   */
+  public async extractUniversal(
+    request: DocumentExtractionRequest,
+    options?: ExtractionResultToUniversalDocumentOptions
+  ): Promise<UniversalDocument> {
+    const result = await this.extract(request)
+    return documentExtractionResultToUniversalDocument(result, options)
   }
 
   /**

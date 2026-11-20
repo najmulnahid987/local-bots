@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import {
   KnowledgeSourceRepository,
+  ExtractedDocumentRepository,
   type CreateKnowledgeChunkInput,
   type KnowledgeSource,
   type KnowledgeChunk
@@ -14,8 +15,12 @@ import { type DocumentSettingsProvider, StaticDocumentSettingsProvider } from '.
 import { ExtractorRegistry, defaultExtractorRegistry } from '../extractors'
 import { DocumentExtractionService } from '../extraction'
 import type { ExtractedDocument } from '../extractors/types'
-import { normalizeText } from '../normalization/text-normalizer'
-import { SemanticChunker } from '../chunking/semantic-chunker'
+import { SemanticChunker, UniversalDocumentChunker } from '../chunking'
+import {
+  type UniversalDocument,
+  validateUniversalDocument,
+  extractedDocumentToUniversalDocument
+} from '../model'
 import {
   type IngestDocumentOptions,
   type IngestDocumentResult,
@@ -42,13 +47,15 @@ const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 export class DocumentIngestionService {
   private readonly db: Database.Database
   private readonly repository: KnowledgeSourceRepository
+  private readonly extractedDocRepo: ExtractedDocumentRepository
   private readonly validator: DocumentFileValidator
   private readonly storageManager: DocumentStorageManager
   private readonly extractorRegistry: ExtractorRegistry
   private readonly extractionService: DocumentExtractionService
   private readonly hasCustomRegistry: boolean
   private readonly settingsProvider: DocumentSettingsProvider
-  private readonly chunker: SemanticChunker
+  private readonly _chunker: SemanticChunker
+  private readonly universalChunker: UniversalDocumentChunker
 
   constructor(options: DocumentIngestionServiceOptions) {
     if (!options?.db) {
@@ -56,6 +63,8 @@ export class DocumentIngestionService {
     }
     this.db = options.db
     this.repository = options.sourceRepository ?? new KnowledgeSourceRepository(this.db)
+    this.extractedDocRepo =
+      options.extractedDocumentRepository ?? new ExtractedDocumentRepository(this.db)
     this.settingsProvider = options.settingsProvider ?? new StaticDocumentSettingsProvider()
     this.validator = options.validator ?? new DocumentFileValidator(this.settingsProvider)
     this.storageManager = options.storageManager ?? new DocumentStorageManager()
@@ -70,7 +79,21 @@ export class DocumentIngestionService {
       new DocumentExtractionService({
         settingsProvider: this.settingsProvider
       })
-    this.chunker = options.chunker ?? new SemanticChunker(this.settingsProvider)
+    this._chunker = options.chunker ?? new SemanticChunker(this.settingsProvider)
+    if (options.universalChunker) {
+      this.universalChunker = options.universalChunker
+    } else if (options.chunker) {
+      this.universalChunker = {
+        chunk: (uDoc: UniversalDocument) =>
+          options.chunker!.chunk(uDoc as unknown as ExtractedDocument)
+      } as unknown as UniversalDocumentChunker
+    } else {
+      this.universalChunker = new UniversalDocumentChunker(this.settingsProvider)
+    }
+  }
+
+  public getLegacyChunker(): SemanticChunker {
+    return this._chunker
   }
 
   /**
@@ -194,33 +217,47 @@ export class DocumentIngestionService {
     // 8. Transition source status from 'queued' to 'processing'
     this.repository.updateStatus(sourceId, knowledgeBaseId, 'processing')
 
-    // 9. Execute Extraction, Normalization, Chunking and Atomic Persistence
+    // 9. Execute Universal Extraction, Normalization, Chunking and Atomic Persistence
     try {
       // 9A. Read original bytes from managed storage
       const fileBytes = await fs.promises.readFile(stored.storagePath)
 
-      // 9B. Format-neutral text extraction
-      const extracted =
-        this.hasCustomRegistry && this.extractorRegistry.hasExtractor(validation.fileType)
-          ? await this.extractorRegistry.extract(validation.fileType, fileBytes)
-          : await this.extractionService.extractLegacy(validation.fileType, fileBytes)
-
-      // 9C. Text normalization
-      const normalizedDoc: ExtractedDocument = {
-        format: extracted.format,
-        text: normalizeText(extracted.text),
-        sections: extracted.sections.map((s) => ({
-          ...s,
-          text: normalizeText(s.text)
-        })),
-        metadata: extracted.metadata
+      // 9B. Format-neutral UniversalDocument extraction
+      let universalDoc: UniversalDocument
+      if (this.hasCustomRegistry && this.extractorRegistry.hasExtractor(validation.fileType)) {
+        const legacyExtracted = await this.extractorRegistry.extract(validation.fileType, fileBytes)
+        universalDoc = extractedDocumentToUniversalDocument(legacyExtracted, {
+          sourceId,
+          knowledgeBaseId,
+          originalFileName: validation.originalFileName,
+          mimeType: validation.mimeType
+        })
+      } else {
+        universalDoc = await this.extractionService.extractUniversal(
+          {
+            bytes: fileBytes,
+            filenameHint: validation.originalFileName,
+            mimeTypeHint: validation.mimeType,
+            formatHint: validation.fileType
+          },
+          {
+            sourceId,
+            knowledgeBaseId,
+            originalFileName: validation.originalFileName,
+            mimeType: validation.mimeType
+          }
+        )
       }
 
-      // 9D. Semantic Chunking
-      const chunkingResult = this.chunker.chunk(normalizedDoc)
+      // Defensive schema and structure validation of UniversalDocument
+      validateUniversalDocument(universalDoc)
 
-      // 9E. Atomic SQLite Chunk Persistence & Source Completion
-      // One transaction inserts all chunks and updates source status to 'completed'.
+      // 9C. Format-Aware Structured Universal Chunking
+      // Directly consumes canonical UniversalDocument without lossy legacy conversions
+      const chunkingResult = this.universalChunker.chunk(universalDoc)
+
+      // 9E. Atomic SQLite Persistence: Extracted Document + Chunks + Source Completion
+      // One transaction inserts the canonical UniversalDocument, all chunks, and updates source status to 'completed'.
       // SQLite triggers automatically synchronize all chunks into knowledge_fts.
       const now = Date.now()
       const chunkInputs: CreateKnowledgeChunkInput[] = chunkingResult.chunks.map((c) => ({
@@ -239,6 +276,7 @@ export class DocumentIngestionService {
       }))
 
       const persistTx = this.db.transaction(() => {
+        this.extractedDocRepo.save(sourceId, universalDoc, now, knowledgeBaseId)
         this.repository.insertChunks(chunkInputs)
         this.repository.complete(sourceId, knowledgeBaseId, now)
       })
@@ -253,6 +291,7 @@ export class DocumentIngestionService {
         sourceId,
         knowledgeBaseId,
         source: completedSource,
+        universalDocument: universalDoc,
         totalChunks: chunkingResult.totalChunks,
         totalTokens: chunkingResult.totalTokens,
         chunkerVersion: chunkingResult.chunkerVersion,
@@ -263,6 +302,11 @@ export class DocumentIngestionService {
       // 1. Ensure zero partial chunks or partial FTS entries remain.
       try {
         this.repository.deleteChunksBySourceId(sourceId, knowledgeBaseId)
+      } catch {
+        // Ignore deletion cleanup error during rollback
+      }
+      try {
+        this.extractedDocRepo.delete(sourceId, knowledgeBaseId)
       } catch {
         // Ignore deletion cleanup error during rollback
       }

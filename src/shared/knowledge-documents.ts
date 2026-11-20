@@ -17,7 +17,15 @@ export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[numbe
 /**
  * Approved document format extensions.
  */
-export const SUPPORTED_DOCUMENT_FORMATS = ['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'] as const
+export const SUPPORTED_DOCUMENT_FORMATS = [
+  'txt',
+  'md',
+  'pdf',
+  'docx',
+  'xlsx',
+  'pptx',
+  'csv'
+] as const
 export type SupportedDocumentFormat = (typeof SUPPORTED_DOCUMENT_FORMATS)[number]
 
 /**

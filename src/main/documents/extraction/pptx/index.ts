@@ -1,4 +1,5 @@
 export * from './pptx-archive-validator'
 export * from './pptx-extractor'
+export * from './pptx-ooxml-parser'
 export * from './pptx-slide-parser'
 export * from './pptx-xml'

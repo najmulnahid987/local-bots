@@ -67,6 +67,17 @@ export interface DocxArchiveValidationResult {
 }
 
 /**
+ * Access interface for reading verified, safe OpenXML package parts.
+ */
+export interface DocxPackage {
+  readonly validationResult: DocxArchiveValidationResult
+  getEntryText(entryPath: string): string | null
+  getEntryBuffer(entryPath: string): Buffer | null
+  hasEntry(entryPath: string): boolean
+  getEntries(): readonly string[]
+}
+
+/**
  * DocxArchiveValidator performs exhaustive, zero-dependency, memory-bounded
  * preflight validation of Microsoft Word (.docx) ZIP packages.
  *
@@ -88,6 +99,14 @@ export class DocxArchiveValidator {
     bytes: Uint8Array | Buffer,
     limits?: DocxArchiveLimits
   ): DocxArchiveValidationResult {
+    return this.openPackage(bytes, limits).validationResult
+  }
+
+  /**
+   * Validates a candidate DOCX buffer and returns a DocxPackage instance
+   * providing secure, bounds-checked entry extraction.
+   */
+  public static openPackage(bytes: Uint8Array | Buffer, limits?: DocxArchiveLimits): DocxPackage {
     const effectiveLimits: Required<DocxArchiveLimits> = {
       maxCompressedBytes:
         limits?.maxCompressedBytes ?? DEFAULT_DOCX_ARCHIVE_LIMITS.maxCompressedBytes,
@@ -340,7 +359,7 @@ export class DocxArchiveValidator {
       )
     }
 
-    return {
+    const validationResult: DocxArchiveValidationResult = {
       valid: true,
       entryCount: totalEntries,
       totalUncompressedSize,
@@ -348,12 +367,14 @@ export class DocxArchiveValidator {
       imageEntries,
       entries: Array.from(seenEntryNames)
     }
+
+    return new DocxPackageImpl(buf, entriesMetadata, validationResult)
   }
 
   /**
-   * Helper extracting the decompressed text of a critical ZIP entry in-memory.
+   * Helper extracting the decompressed buffer of a ZIP entry in-memory with CRC32 verification.
    */
-  private static extractEntryText(buf: Buffer, entry: DocxZipEntryMetadata): string {
+  public static extractEntryBuffer(buf: Buffer, entry: DocxZipEntryMetadata): Buffer {
     const localOffset = entry.localHeaderOffset
     if (localOffset + 30 > buf.length) {
       throw DocumentErrors.extractionInvalidArchive('Local file header offset exceeds buffer.')
@@ -399,6 +420,55 @@ export class DocxArchiveValidator {
       )
     }
 
-    return decompressed.toString('utf8')
+    return decompressed
+  }
+
+  /**
+   * Helper extracting the decompressed text of a critical ZIP entry in-memory.
+   */
+  private static extractEntryText(buf: Buffer, entry: DocxZipEntryMetadata): string {
+    return this.extractEntryBuffer(buf, entry).toString('utf8')
+  }
+}
+
+/**
+ * Concrete implementation of DocxPackage providing safe, bounded access to ZIP parts.
+ */
+class DocxPackageImpl implements DocxPackage {
+  constructor(
+    private readonly buf: Buffer,
+    private readonly entriesMetadata: Map<string, DocxZipEntryMetadata>,
+    public readonly validationResult: DocxArchiveValidationResult
+  ) {}
+
+  public hasEntry(entryPath: string): boolean {
+    const normalized = entryPath.replace(/\\/g, '/').replace(/^\//, '').trim()
+    return this.entriesMetadata.has(normalized)
+  }
+
+  public getEntries(): readonly string[] {
+    return Array.from(this.entriesMetadata.keys())
+  }
+
+  public getEntryBuffer(entryPath: string): Buffer | null {
+    const normalized = entryPath.replace(/\\/g, '/').replace(/^\//, '').trim()
+    const entry = this.entriesMetadata.get(normalized)
+    if (!entry) return null
+    return DocxArchiveValidator.extractEntryBuffer(this.buf, entry)
+  }
+
+  public getEntryText(entryPath: string): string | null {
+    const decompressed = this.getEntryBuffer(entryPath)
+    if (!decompressed) return null
+    const text = decompressed.toString('utf8')
+    const normalized = entryPath.replace(/\\/g, '/').replace(/^\//, '').trim()
+    if (normalized.endsWith('.xml') || normalized.endsWith('.rels')) {
+      if (/<!DOCTYPE/i.test(text) || /<!ENTITY/i.test(text)) {
+        throw DocumentErrors.extractionXxeDetected(
+          `External entity or DOCTYPE detected in ${normalized}.`
+        )
+      }
+    }
+    return text
   }
 }

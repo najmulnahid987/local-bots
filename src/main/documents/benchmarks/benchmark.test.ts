@@ -14,6 +14,8 @@ import { RetrievalEvaluator } from './evaluators/retrieval-evaluator'
 import { ContextBudgetEvaluator } from './evaluators/context-budget-evaluator'
 import { BenchmarkRunner } from './runner'
 import { ExtractorRegistry } from '../extractors/registry'
+import { PdfExtractor } from '../extractors/pdf-extractor'
+import { TesseractTestDouble } from '../extraction/ocr/tesseract-test-double'
 import { defaultDocumentExtractionService } from '../extraction/extraction-service'
 
 describe('Phase 10 — Step 10.2: Quality Evaluation Suite & Baselines', () => {
@@ -277,7 +279,7 @@ describe('Phase 10 — Step 10.2: Quality Evaluation Suite & Baselines', () => {
 
     it('extracts scanned PDF using page-level OCR fallback (DEFECT-05 RESOLVED)', async () => {
       const fix = corpus.get('FIX-PDF-11')!
-      const extractor = registry.getExtractor('pdf')
+      const extractor = new PdfExtractor(undefined, { ocrEngine: new TesseractTestDouble() })
       const extracted = await extractor.extract(fix.contentBytes)
       expect(extracted.format).toBe('pdf')
       expect(extracted.sections.length).toBeGreaterThan(0)

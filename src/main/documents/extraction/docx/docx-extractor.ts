@@ -1,34 +1,32 @@
-import mammoth from 'mammoth'
 import { DocumentErrors } from '../../document-errors'
 import type {
   IDocumentExtractor,
   ExtractorMetadata,
   DocumentExtractionRequest,
   DocumentExtractionContext,
-  DocumentExtractionResult,
-  DocumentExtractionWarning
+  DocumentExtractionResult
 } from '../types'
 import { normalizeFormatExtension } from '../format-detector'
 import { DocxArchiveValidator } from './docx-archive-validator'
-import { DocxHtmlParser } from './docx-html-parser'
+import { DocxOoxmlParser } from './docx-ooxml-parser'
 
 /**
- * High-fidelity, secure Microsoft Word (.docx) text extractor using Mammoth
- * and defensive OpenXML ZIP package preflight validation.
+ * High-fidelity, secure Microsoft Word (.docx) text extractor using direct
+ * OpenXML DOM parsing and defensive ZIP package preflight validation.
  *
  * Responsibilities:
  * 1. Executes DocxArchiveValidator preflight audit on bytes to guarantee ZIP and XML safety.
- * 2. Invokes Mammoth with externalFileAccess: false to strictly prevent filesystem or network access.
- * 3. Safely skips embedded images while emitting structured non-fatal warnings.
- * 4. Parses semantic HTML into normalized ExtractedDocumentBlock instances preserving
- *    headings, tables, lists, and paragraphs with truthful metadata.
+ * 2. Directly parses OOXML relationships, numbering hierarchies, headings, tables, headers/footers,
+ *    footnotes, endnotes, comments, hyperlinks, and drawings without destructive flattening.
+ * 3. Preserves full structural fidelity and authentic provenance coordinates.
+ * 4. Safely skips embedded images while emitting structured non-fatal warnings.
  * 5. Requires isolated utilityProcess worker execution for process crash resilience.
  */
 export class DocxExtractor implements IDocumentExtractor {
   public readonly metadata: ExtractorMetadata = {
-    id: 'mammoth-docx-extractor',
-    name: 'Mammoth Microsoft Word Extractor',
-    version: '1.0.0',
+    id: 'ooxml-docx-extractor',
+    name: 'OpenXML Microsoft Word High-Fidelity Extractor',
+    version: '2.0.0',
     supportedFormats: ['docx'],
     supportedMimeTypes: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
     isHeavy: true,
@@ -50,8 +48,8 @@ export class DocxExtractor implements IDocumentExtractor {
 
     const buf = Buffer.isBuffer(request.bytes) ? request.bytes : Buffer.from(request.bytes)
 
-    // 1. Mandatory Defensive Archive Preflight Audit
-    const preflight = DocxArchiveValidator.validate(buf, {
+    // 1. Mandatory Defensive Archive Preflight Audit & Package Open
+    const pkg = DocxArchiveValidator.openPackage(buf, {
       maxCompressedBytes: context?.limits.maxInputSizeBytes
     })
 
@@ -59,22 +57,14 @@ export class DocxExtractor implements IDocumentExtractor {
       throw DocumentErrors.extractionCancelled()
     }
 
-    // 2. Execute Mammoth with strict external access lockdown
-    const mammothOptions = {
-      externalFileAccess: false,
-      ignoreEmptyParagraphs: true
-    }
-
-    const mammothResult = await mammoth.convertToHtml({ buffer: buf }, mammothOptions)
+    // 2. Direct OOXML DOM Extraction
+    const parsed = DocxOoxmlParser.parse(pkg)
 
     if (context?.signal?.aborted) {
       throw DocumentErrors.extractionCancelled()
     }
 
-    // 3. Parse HTML into normalized ExtractedDocumentBlocks
-    const parsed = DocxHtmlParser.parse(mammothResult.value)
-
-    // Enforce text output size limit
+    // 3. Enforce text output size limit
     const textBytes = Buffer.byteLength(parsed.text, 'utf-8')
     if (context?.limits?.maxOutputSizeBytes && textBytes > context.limits.maxOutputSizeBytes) {
       throw DocumentErrors.extractionOutputLimitExceeded(
@@ -83,47 +73,6 @@ export class DocxExtractor implements IDocumentExtractor {
       )
     }
 
-    // 4. Merge non-fatal extraction warnings
-    const combinedWarnings: DocumentExtractionWarning[] = [...parsed.warnings]
-
-    // Capture Mammoth conversion warnings
-    if (Array.isArray(mammothResult.messages)) {
-      for (const msg of mammothResult.messages) {
-        if (msg.type === 'warning') {
-          combinedWarnings.push({
-            code: 'DOCX_CONVERSION_WARNING',
-            message: msg.message
-          })
-        }
-      }
-    }
-
-    if (
-      preflight.hasImages &&
-      !combinedWarnings.some((w) => w.code === 'EXTRACTION_EMBEDDED_IMAGE_SKIPPED')
-    ) {
-      combinedWarnings.push({
-        code: 'EXTRACTION_EMBEDDED_IMAGE_SKIPPED',
-        message: 'The DOCX document contains embedded images which were skipped during extraction.'
-      })
-    }
-
-    return {
-      format: 'docx',
-      text: parsed.text,
-      blocks: parsed.blocks,
-      metadata: {
-        entryCount: preflight.entryCount,
-        totalUncompressedSize: preflight.totalUncompressedSize,
-        hasImages: preflight.hasImages
-      },
-      warnings: combinedWarnings,
-      quality: {
-        fidelity: 'high',
-        isLossy: preflight.hasImages,
-        isOcr: false
-      },
-      extractor: this.metadata
-    }
+    return parsed
   }
 }

@@ -1,11 +1,16 @@
 import type Database from 'better-sqlite3'
-import type { KnowledgeSource, KnowledgeSourceRepository } from '../../database/repositories'
+import type {
+  KnowledgeSource,
+  KnowledgeSourceRepository,
+  ExtractedDocumentRepository
+} from '../../database/repositories'
 import type { DocumentFileValidator } from '../document-file-validator'
 import type { DocumentStorageManager } from '../document-storage-manager'
 import type { ExtractorRegistry } from '../extractors'
 import type { DocumentExtractionService } from '../extraction'
 import type { DocumentSettingsProvider } from '../document-settings'
-import type { SemanticChunker } from '../chunking'
+import type { SemanticChunker, UniversalDocumentChunker } from '../chunking'
+import type { UniversalDocument } from '../model'
 
 /**
  * Options provided to DocumentIngestionService.ingest().
@@ -57,6 +62,7 @@ export interface IngestDocumentSuccessResult {
   readonly totalTokens: number
   readonly chunkerVersion: string
   readonly relativeFilePath: string
+  readonly universalDocument?: UniversalDocument
 }
 
 /**
@@ -75,7 +81,9 @@ export interface DocumentIngestionServiceOptions {
   readonly extractionService?: DocumentExtractionService
   readonly settingsProvider?: DocumentSettingsProvider
   readonly chunker?: SemanticChunker
+  readonly universalChunker?: UniversalDocumentChunker
   readonly sourceRepository?: KnowledgeSourceRepository
+  readonly extractedDocumentRepository?: ExtractedDocumentRepository
 }
 
 /**

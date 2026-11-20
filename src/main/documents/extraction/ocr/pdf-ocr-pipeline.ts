@@ -5,14 +5,13 @@ import {
   StaticDocumentSettingsProvider
 } from '../../document-settings'
 import type { ExtractedDocument, ExtractedDocumentSection } from '../../extractors/types'
-import type { ExtractedDocumentBlock } from '../types'
+import type { ExtractedDocumentBlock, ExtractionQuality } from '../types'
 import { PdfPageClassifier } from './page-classifier'
 import { PdfPageRenderer } from './page-renderer'
 import { TesseractTsvParser } from './tsv-parser'
 import { OcrTempStorageManager } from './temp-storage-manager'
 import type { IOcrEngine } from './tesseract-engine'
 import { NativeTesseractEngine } from './tesseract-engine'
-import { TesseractTestDouble } from './tesseract-test-double'
 import type { OcrEngineConfig, PageClassificationResult } from './ocr-types'
 import { OCR_DEFAULTS } from './ocr-types'
 
@@ -31,6 +30,7 @@ export interface PdfOcrExtractionResult extends ExtractedDocument {
   readonly pageClassifications: readonly PageClassificationResult[]
   readonly warnings: readonly string[]
   readonly blocks: readonly ExtractedDocumentBlock[]
+  readonly quality?: ExtractionQuality
 }
 
 /**
@@ -64,13 +64,8 @@ export class PdfOcrPipeline {
     if (options?.ocrEngine) {
       this.ocrEngine = options.ocrEngine
     } else {
-      // Check native binary availability; fallback to test double if unavailable
-      const nativeEngine = new NativeTesseractEngine()
-      if (nativeEngine.isAvailable) {
-        this.ocrEngine = nativeEngine
-      } else {
-        this.ocrEngine = new TesseractTestDouble()
-      }
+      // In production, use NativeTesseractEngine. Never silently fall back to TesseractTestDouble!
+      this.ocrEngine = new NativeTesseractEngine()
     }
   }
 
@@ -233,6 +228,12 @@ export class PdfOcrPipeline {
           pageNumber: sec.pageNumber
         }))
 
+        const quality: ExtractionQuality = {
+          fidelity: 'high',
+          isLossy: false,
+          isOcr: false
+        }
+
         return {
           format: 'pdf',
           text: fullText,
@@ -241,6 +242,7 @@ export class PdfOcrPipeline {
           pageClassifications: classifications,
           warnings: classifications.map((c) => c.warning).filter((w): w is string => Boolean(w)),
           blocks,
+          quality,
           metadata: {
             pageCount: totalPages,
             characterCount: fullText.length
@@ -270,6 +272,26 @@ export class PdfOcrPipeline {
 
           if (classification.classification === 'OCR_REQUIRED') {
             ocrPageNumbers.push(pageNum)
+
+            // When native OCR engine is unavailable, never emit synthetic text!
+            if (!this.ocrEngine.isAvailable) {
+              const ocrWarn = `Page ${pageNum}: Scanned content requires OCR, but native Tesseract OCR engine is unavailable.`
+              warnings.push(ocrWarn)
+              finalSections.push({
+                text: `[Page ${pageNum}: Scanned content - OCR unavailable]`,
+                pageNumber: pageNum
+              })
+              finalBlocks.push({
+                type: 'paragraph',
+                text: `[Page ${pageNum}: Scanned content - OCR unavailable]`,
+                pageNumber: pageNum,
+                metadata: {
+                  isScanned: true,
+                  ocrUnavailable: true
+                }
+              })
+              continue
+            }
 
             // Render page to PNG image
             const pngBytes = await this.renderer.renderPageToImage(
@@ -386,15 +408,40 @@ export class PdfOcrPipeline {
         await jobDir.cleanup()
       }
 
-      // Check if document has any text after OCR
-      const hasAnyText = finalSections.some((s) => s.text.trim().length > 0)
-      if (!hasAnyText) {
+      // Check if document has any real text after OCR
+      const hasAnyRealText = finalSections.some(
+        (s) => s.text.trim().length > 0 && !s.text.includes('OCR unavailable')
+      )
+      if (!hasAnyRealText) {
+        if (!this.ocrEngine.isAvailable) {
+          throw DocumentErrors.extractionOcrEngineUnavailable(
+            undefined,
+            'The document consists of scanned images, but native Tesseract OCR is unavailable on this system.'
+          )
+        }
         throw DocumentErrors.extractionNoTextContent(
           'No extractable text found after OCR processing.'
         )
       }
 
       const fullText = finalSections.map((s) => s.text).join('\n\n')
+
+      const hadOcrUnavailable = warnings.some((w) => w.includes('OCR engine is unavailable'))
+      const hasDigitalPages = rawDigitalPages.some(
+        (p) => typeof p === 'string' && p.trim().length > 0
+      )
+      const quality: ExtractionQuality = {
+        fidelity: hadOcrUnavailable
+          ? hasDigitalPages
+            ? 'medium'
+            : 'low'
+          : ocrPageNumbers.length > 0
+            ? 'medium'
+            : 'high',
+        isLossy: hadOcrUnavailable,
+        isOcr: ocrPageNumbers.length > 0 && !hadOcrUnavailable,
+        hasUnparsedElements: hadOcrUnavailable
+      }
 
       return {
         format: 'pdf',
@@ -404,6 +451,7 @@ export class PdfOcrPipeline {
         pageClassifications: classifications,
         warnings,
         blocks: finalBlocks,
+        quality,
         metadata: {
           pageCount: totalPages,
           characterCount: fullText.length

@@ -13,11 +13,12 @@
     "ben.traineddata": {
       "language": "ben",
       "description": "Bengali fast integer LSTM model",
-      "sha256": "pinned-upstream-874164",
-      "sizeBytes": 3816240,
+      "sha256": "31163084c279aaebd376216f0c3d5c17ad4b5fee8db49dae79c20000b5de5964",
+      "sizeBytes": 855841,
       "sourceUrl": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/ben.traineddata"
     }
   },
+  "configsIncluded": true,
   "supportedConfigurations": ["eng", "ben", "eng+ben"],
   "defaultConfiguration": "eng+ben"
 }

@@ -10,198 +10,56 @@ import type { ChunkingResult, DocumentChunk } from './types'
 import { chunkMarkdownSection } from './markdown-table-chunker'
 import { SpreadsheetChunker } from './spreadsheet-chunker'
 import { PresentationChunker } from './presentation-chunker'
+import {
+  estimateTokenCount,
+  chunkTextSlice,
+  findSemanticBreakPoint,
+  findOverlapStartBoundary
+} from './chunking-utils'
+import type { UniversalDocument } from '../model/types'
+import { UniversalDocumentChunker } from './universal-document-chunker'
 
-/**
- * Estimates token count from text length using the approved model-agnostic heuristic:
- * tokenCount = Math.ceil(characterLength / 4).
- *
- * Guarantees:
- * 1. Non-empty text always produces a positive count (>= 1).
- * 2. Empty or whitespace-only text produces 0 if empty.
- * 3. Consistent, deterministic, and local (never calls external tokenizers or AI APIs).
- */
-export function estimateTokenCount(text: string): number {
-  if (!text || text.length === 0) {
-    return 0
-  }
-  return Math.max(1, Math.ceil(text.length / 4))
-}
+export { estimateTokenCount, chunkTextSlice, findSemanticBreakPoint, findOverlapStartBoundary }
 
-/**
- * Scans a text window slice for the highest available semantic boundary in the hierarchy:
- * 1. Paragraph boundary (\n\n)
- * 2. Sentence boundary ([.!?] followed by whitespace or line end)
- * 3. Line break (\n)
- * 4. Word boundary (\s+)
- * 5. -1 if no boundary found (character fallback)
- */
-function findSemanticBreakPoint(slice: string, minAdvance: number): number {
-  // 1. Paragraph boundary (\n\n)
-  const lastPara = slice.lastIndexOf('\n\n')
-  if (lastPara >= minAdvance) {
-    return lastPara + 2
-  }
-
-  // 2. Sentence boundary (. or ! or ? followed by whitespace or line end)
-  const sentenceRegex = /[.!?](?:\s|$)/g
-  let lastSentenceEnd = -1
-  let match: RegExpExecArray | null
-  while ((match = sentenceRegex.exec(slice)) !== null) {
-    const endPos = match.index + match[0].length
-    if (endPos >= minAdvance) {
-      lastSentenceEnd = endPos
-    }
-  }
-  if (lastSentenceEnd !== -1) {
-    return lastSentenceEnd
-  }
-
-  // 3. Line break (\n)
-  const lastLine = slice.lastIndexOf('\n')
-  if (lastLine >= minAdvance) {
-    return lastLine + 1
-  }
-
-  // 4. Word boundary (whitespace)
-  const wordRegex = /\s+/g
-  let lastWordEnd = -1
-  while ((match = wordRegex.exec(slice)) !== null) {
-    const endPos = match.index + match[0].length
-    if (endPos >= minAdvance) {
-      lastWordEnd = endPos
-    }
-  }
-  if (lastWordEnd !== -1) {
-    return lastWordEnd
-  }
-
-  return -1
-}
-
-/**
- * Snaps a desired overlap starting position forward to the nearest clean word or sentence boundary.
- */
-function findOverlapStartBoundary(overlapSlice: string): number {
-  // 1. Sentence break in overlap
-  const sentenceMatch = /[.!?]\s+/.exec(overlapSlice)
-  if (sentenceMatch && sentenceMatch.index + sentenceMatch[0].length < overlapSlice.length) {
-    return sentenceMatch.index + sentenceMatch[0].length
-  }
-  // 2. Word boundary (first whitespace)
-  const spaceIdx = overlapSlice.search(/\s+/)
-  if (spaceIdx !== -1 && spaceIdx < Math.floor(overlapSlice.length / 2)) {
-    const match = /\s+/.exec(overlapSlice.slice(spaceIdx))
-    if (match) {
-      return spaceIdx + match[0].length
-    }
-  }
-  return 0
-}
-
-interface TextSlice {
-  content: string
-  startIndex: number
-  endIndex: number
-}
-
-/**
- * Deterministic sliding-window text chunker.
- * Slices continuous text into overlapping intervals based on target and overlap token limits.
- */
-function chunkTextSlice(text: string, targetTokens: number, overlapTokens: number): TextSlice[] {
-  const targetChars = targetTokens * 4
-  const overlapChars = overlapTokens * 4
-  const slices: TextSlice[] = []
-  let start = 0
-  const length = text.length
-
-  while (start < length) {
-    // If remainder fits in targetChars, take the rest
-    if (length - start <= targetChars) {
-      slices.push({
-        content: text.slice(start),
-        startIndex: start,
-        endIndex: length
-      })
-      break
-    }
-
-    let end = start + targetChars
-    const minAdvance = Math.max(1, Math.min(overlapChars + 1, Math.floor(targetChars / 2)))
-    const searchSlice = text.slice(start, end)
-
-    const bp = findSemanticBreakPoint(searchSlice, minAdvance)
-    if (bp !== -1) {
-      end = start + bp
-    } else {
-      // Character fallback: protect Unicode surrogate pairs
-      if (
-        end < length &&
-        text.charCodeAt(end - 1) >= 0xd800 &&
-        text.charCodeAt(end - 1) <= 0xdbff
-      ) {
-        end--
-      }
-    }
-
-    slices.push({
-      content: text.slice(start, end),
-      startIndex: start,
-      endIndex: end
-    })
-
-    if (end >= length) {
-      break
-    }
-
-    if (overlapChars === 0) {
-      start = end
-    } else {
-      let desiredOverlapStart = end - overlapChars
-      if (desiredOverlapStart <= start) {
-        desiredOverlapStart = start + Math.max(1, Math.floor((end - start) / 2))
-      }
-
-      const overlapSlice = text.slice(desiredOverlapStart, end)
-      const snapOffset = findOverlapStartBoundary(overlapSlice)
-      let nextStart = desiredOverlapStart + snapOffset
-
-      // Strict monotonicity guarantees: avoid zero advance or overshoot
-      if (nextStart <= start) {
-        nextStart = start + 1
-      }
-      if (nextStart >= end) {
-        nextStart = end
-      }
-
-      start = nextStart
-    }
-  }
-
-  return slices
+function isUniversalDocument(doc: unknown): doc is UniversalDocument {
+  return (
+    typeof doc === 'object' &&
+    doc !== null &&
+    'id' in doc &&
+    'blocks' in doc &&
+    'sourceInfo' in doc &&
+    !('sections' in doc)
+  )
 }
 
 /**
  * Deterministic semantic chunking engine.
- * Consumes ExtractedDocument instances and produces bounded, overlapping DocumentChunk arrays.
+ * Consumes ExtractedDocument instances (and UniversalDocument instances) and produces bounded, overlapping DocumentChunk arrays.
  */
 export class SemanticChunker {
   private readonly settingsProvider: DocumentSettingsProvider
+  private readonly universalChunker: UniversalDocumentChunker
 
   constructor(settingsProvider?: DocumentSettingsProvider) {
     this.settingsProvider = settingsProvider ?? new StaticDocumentSettingsProvider()
+    this.universalChunker = new UniversalDocumentChunker(this.settingsProvider)
   }
 
   /**
-   * Chunks an ExtractedDocument into an ordered sequence of DocumentChunk objects.
+   * Chunks an ExtractedDocument or UniversalDocument into an ordered sequence of DocumentChunk objects.
    */
-  public chunk(doc: ExtractedDocument): ChunkingResult {
-    // 1. Guard extracted document structure
+  public chunk(doc: ExtractedDocument | UniversalDocument): ChunkingResult {
+    // 1. Guard input structure
     if (!doc || typeof doc !== 'object') {
       throw DocumentErrors.chunkingInvalidInput('Extracted document must be a valid object.')
     }
 
-    if (!doc.format || !['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'].includes(doc.format)) {
+    // 2. Delegate UniversalDocument to the canonical UniversalDocumentChunker
+    if (isUniversalDocument(doc)) {
+      return this.universalChunker.chunk(doc)
+    }
+
+    if (!doc.format || !['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx', 'csv'].includes(doc.format)) {
       throw DocumentErrors.extractionUnsupportedFormat(String(doc.format))
     }
 
@@ -209,8 +67,8 @@ export class SemanticChunker {
       throw DocumentErrors.chunkingInvalidInput('Extracted document contains no sections to chunk.')
     }
 
-    // 2. Format-specific delegation for spreadsheets and presentations
-    if (doc.format === 'xlsx') {
+    // 3. Format-specific delegation for spreadsheets and presentations
+    if (doc.format === 'xlsx' || doc.format === 'csv') {
       const spreadsheetChunker = new SpreadsheetChunker(this.settingsProvider)
       return spreadsheetChunker.chunk(doc)
     }
@@ -220,7 +78,7 @@ export class SemanticChunker {
       return presentationChunker.chunk(doc)
     }
 
-    // 3. Load and validate chunking configuration
+    // 4. Load and validate chunking configuration
     const settings = this.settingsProvider.getSettings()
     const { chunkTargetTokens, chunkOverlapTokens, chunkerVersion } = settings
 
@@ -251,13 +109,11 @@ export class SemanticChunker {
     const chunks: DocumentChunk[] = []
     let currentIndex = 0
 
-    // 3. Format-specific chunking
+    // Format-specific legacy chunking
     if (doc.format === 'pdf') {
-      // PDF: Page-aware boundary hierarchy; never merges text across PDF pages
       for (const section of doc.sections) {
         const normalized = normalizeText(section.text).trim()
         if (normalized.length === 0) {
-          // Skip blank pages (do not emit empty chunks)
           continue
         }
 
@@ -278,7 +134,6 @@ export class SemanticChunker {
         }
       }
     } else if (doc.format === 'md' || doc.format === 'docx') {
-      // Markdown & DOCX: Heading-aware and table-aware boundary hierarchy
       for (const section of doc.sections) {
         const normalized = normalizeText(section.text).trim()
         if (normalized.length === 0) {
@@ -315,7 +170,7 @@ export class SemanticChunker {
         }
       }
     } else {
-      // TXT: Continuous document with paragraph -> sentence -> line -> word -> character boundaries
+      // TXT
       const fullText = normalizeText(
         doc.sections.map((s: ExtractedDocumentSection) => s.text).join('\n\n')
       ).trim()
@@ -342,7 +197,6 @@ export class SemanticChunker {
       }
     }
 
-    // 4. Ensure non-empty output
     if (chunks.length === 0) {
       throw DocumentErrors.extractionEmptyContent(
         'The document contains no extractable text content to chunk.'

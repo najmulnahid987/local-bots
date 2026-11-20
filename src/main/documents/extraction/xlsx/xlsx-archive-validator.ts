@@ -73,6 +73,17 @@ export interface XlsxArchiveValidationResult {
 }
 
 /**
+ * Handle providing safe, verified access to XLSX archive package parts.
+ */
+export interface XlsxPackage {
+  readonly validationResult: XlsxArchiveValidationResult
+  hasEntry(entryPath: string): boolean
+  getEntries(): readonly string[]
+  getEntryBuffer(entryPath: string): Buffer | null
+  getEntryText(entryPath: string): string | null
+}
+
+/**
  * XlsxArchiveValidator performs exhaustive, zero-dependency, memory-bounded
  * preflight validation of Microsoft Excel (.xlsx) OpenXML ZIP packages.
  *
@@ -96,6 +107,14 @@ export class XlsxArchiveValidator {
     bytes: Uint8Array | Buffer,
     limits?: XlsxArchiveLimits
   ): XlsxArchiveValidationResult {
+    return this.openPackage(bytes, limits).validationResult
+  }
+
+  /**
+   * Validates a candidate XLSX buffer and returns an XlsxPackage instance
+   * providing secure, bounds-checked entry extraction.
+   */
+  public static openPackage(bytes: Uint8Array | Buffer, limits?: XlsxArchiveLimits): XlsxPackage {
     const effectiveLimits: Required<XlsxArchiveLimits> = {
       maxCompressedBytes:
         limits?.maxCompressedBytes ?? DEFAULT_XLSX_ARCHIVE_LIMITS.maxCompressedBytes,
@@ -405,7 +424,7 @@ export class XlsxArchiveValidator {
       )
     }
 
-    return {
+    const validationResult: XlsxArchiveValidationResult = {
       valid: true,
       entryCount: totalEntries,
       totalUncompressedSize,
@@ -413,12 +432,14 @@ export class XlsxArchiveValidator {
       sheetEntries,
       entries: Array.from(seenEntryNames)
     }
+
+    return new XlsxPackageImpl(buf, entriesMetadata, validationResult)
   }
 
   /**
-   * Helper extracting the decompressed text of a critical ZIP entry in-memory.
+   * Helper extracting the decompressed buffer of a ZIP entry in-memory.
    */
-  private static extractEntryText(buf: Buffer, entry: XlsxZipEntryMetadata): string {
+  public static extractEntryBuffer(buf: Buffer, entry: XlsxZipEntryMetadata): Buffer {
     const localOffset = entry.localHeaderOffset
     if (localOffset + 30 > buf.length) {
       throw DocumentErrors.extractionInvalidArchive('Local file header offset exceeds buffer.')
@@ -464,6 +485,55 @@ export class XlsxArchiveValidator {
       )
     }
 
-    return decompressed.toString('utf8')
+    return decompressed
+  }
+
+  /**
+   * Helper extracting the decompressed text of a critical ZIP entry in-memory.
+   */
+  private static extractEntryText(buf: Buffer, entry: XlsxZipEntryMetadata): string {
+    return this.extractEntryBuffer(buf, entry).toString('utf8')
+  }
+}
+
+/**
+ * Concrete implementation of XlsxPackage providing safe, bounded access to ZIP parts.
+ */
+class XlsxPackageImpl implements XlsxPackage {
+  constructor(
+    private readonly buf: Buffer,
+    private readonly entriesMetadata: Map<string, XlsxZipEntryMetadata>,
+    public readonly validationResult: XlsxArchiveValidationResult
+  ) {}
+
+  public hasEntry(entryPath: string): boolean {
+    const normalized = entryPath.replace(/\\/g, '/').replace(/^\//, '').trim()
+    return this.entriesMetadata.has(normalized)
+  }
+
+  public getEntries(): readonly string[] {
+    return Array.from(this.entriesMetadata.keys())
+  }
+
+  public getEntryBuffer(entryPath: string): Buffer | null {
+    const normalized = entryPath.replace(/\\/g, '/').replace(/^\//, '').trim()
+    const entry = this.entriesMetadata.get(normalized)
+    if (!entry) return null
+    return XlsxArchiveValidator.extractEntryBuffer(this.buf, entry)
+  }
+
+  public getEntryText(entryPath: string): string | null {
+    const decompressed = this.getEntryBuffer(entryPath)
+    if (!decompressed) return null
+    const text = decompressed.toString('utf8')
+    const normalized = entryPath.replace(/\\/g, '/').replace(/^\//, '').trim()
+    if (normalized.endsWith('.xml') || normalized.endsWith('.rels')) {
+      if (/<!DOCTYPE/i.test(text) || /<!ENTITY/i.test(text)) {
+        throw DocumentErrors.extractionXxeDetected(
+          `External entity or DOCTYPE detected in ${normalized}.`
+        )
+      }
+    }
+    return text
   }
 }

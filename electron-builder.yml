@@ -13,6 +13,11 @@ asarUnpack:
   - resources/**
   - '**/node_modules/better-sqlite3/**'
   - '**/node_modules/@napi-rs/canvas*/**'
+extraResources:
+  - from: resources/bin
+    to: bin
+  - from: resources/tessdata
+    to: tessdata
 win:
   executableName: local-first-ai-workspace
 nsis:

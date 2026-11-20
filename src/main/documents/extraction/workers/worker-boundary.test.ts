@@ -10,7 +10,10 @@ import {
   buildSyntheticXlsx,
   buildSyntheticPptx
 } from '../../benchmarks/fixtures/office-generator'
-import { buildSyntheticPdf } from '../../benchmarks/fixtures/pdf-generator'
+import {
+  buildSyntheticPdf,
+  createRasterImageFromText
+} from '../../benchmarks/fixtures/pdf-generator'
 
 describe('Worker Execution Boundary (Phase 10 Step 10.5, 10.7 & 10.9)', () => {
   const workerPath = path.resolve(process.cwd(), 'out/main/docx-parser-worker.js')
@@ -302,9 +305,15 @@ describe('Worker Execution Boundary (Phase 10 Step 10.5, 10.7 & 10.9)', () => {
   // 12. Isolated worker execution for PDF OCR
   it('12. executes PDF OCR extraction in isolated worker and returns structured result', async () => {
     const boundary = new UtilityProcessExecutionBoundary(workerPath)
+    const sampleRaster = createRasterImageFromText('Worker Scanned Document Verification', {
+      width: 612,
+      height: 792,
+      fontSize: 28,
+      yOffset: 120
+    })
     const samplePdf = buildSyntheticPdf({
       title: 'Worker Scanned PDF',
-      pages: [{ pageNumber: 1, isImageOnly: true }]
+      pages: [{ pageNumber: 1, rasterImage: sampleRaster, isImageOnly: true }]
     })
 
     const pdfOcrExtractor = {

@@ -14,7 +14,7 @@ import {
 /**
  * Approved document file extensions (without leading dot).
  */
-export const SUPPORTED_EXTENSIONS = ['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'] as const
+export const SUPPORTED_EXTENSIONS = ['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx', 'csv'] as const
 export type SupportedExtension = (typeof SUPPORTED_EXTENSIONS)[number]
 
 /**
@@ -26,7 +26,8 @@ export const SUPPORTED_MIME_TYPES: Record<SupportedExtension, string> = {
   pdf: 'application/pdf',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  csv: 'text/csv'
 } as const
 
 export type SupportedMimeType = (typeof SUPPORTED_MIME_TYPES)[SupportedExtension]
@@ -114,7 +115,8 @@ export class DocumentFileValidator {
       rawExt !== '.pdf' &&
       rawExt !== '.docx' &&
       rawExt !== '.xlsx' &&
-      rawExt !== '.pptx'
+      rawExt !== '.pptx' &&
+      rawExt !== '.csv'
     ) {
       throw DocumentErrors.unsupportedFileType(rawExt || '(none)')
     }
@@ -256,11 +258,14 @@ export class DocumentFileValidator {
     extension: SupportedExtension,
     expectedSize: number
   ): Promise<{ contentHash: string; bytesRead: number }> {
-    const isText = extension === 'txt' || extension === 'md'
+    const isText = extension === 'txt' || extension === 'md' || extension === 'csv'
     const hash = crypto.createHash('sha256')
     const utf8Decoder = isText ? new TextDecoder('utf-8', { fatal: true }) : null
 
     let totalBytesRead = 0
+    let isUtf16Le = false
+    let isUtf16Be = false
+    let checkedBom = false
 
     return new Promise((resolve, reject) => {
       const readStream = fs.createReadStream(filePath)
@@ -276,10 +281,28 @@ export class DocumentFileValidator {
           return
         }
 
+        // BOM inspection on first chunk for CSV/text
+        if (isText && !checkedBom) {
+          checkedBom = true
+          if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+            isUtf16Le = true
+          } else if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+            isUtf16Be = true
+          }
+        }
+
         // Validate text content
-        if (isText && utf8Decoder) {
-          // Check for forbidden control characters in raw bytes
-          for (let i = 0; i < buffer.length; i++) {
+        if (isText && !isUtf16Le && !isUtf16Be && utf8Decoder) {
+          // Check for forbidden control characters in raw bytes (skip UTF-8 BOM 0xEF 0xBB 0xBF if at index 0)
+          const startIdx =
+            totalBytesRead === buffer.length &&
+            buffer.length >= 3 &&
+            buffer[0] === 0xef &&
+            buffer[1] === 0xbb &&
+            buffer[2] === 0xbf
+              ? 3
+              : 0
+          for (let i = startIdx; i < buffer.length; i++) {
             if (isDisallowedControlCharacter(buffer[i])) {
               readStream.destroy()
               reject(DocumentErrors.invalidUtf8())
@@ -302,7 +325,7 @@ export class DocumentFileValidator {
 
       readStream.on('end', () => {
         // Flush any remaining UTF-8 bytes at EOF
-        if (isText && utf8Decoder) {
+        if (isText && !isUtf16Le && !isUtf16Be && utf8Decoder) {
           try {
             utf8Decoder.decode()
           } catch {

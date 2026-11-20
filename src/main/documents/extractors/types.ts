@@ -1,7 +1,7 @@
 /**
  * Supported document formats for text extraction and ingestion.
  */
-export type DocumentFormat = 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx'
+export type DocumentFormat = 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv'
 
 /**
  * A format-neutral structural section of an extracted document.

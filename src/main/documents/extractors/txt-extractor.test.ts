@@ -47,17 +47,25 @@ describe('TxtExtractor (Phase 5 Step 5.4)', () => {
     expect(result.metadata?.lineCount).toBe(4)
   })
 
-  // 4. Multiple paragraphs
-  it('4. preserves paragraphs separated by blank lines', async () => {
+  // 4. Multiple paragraphs (Phase 11 Step 11.4: paragraph segmentation)
+  it('4. preserves paragraphs separated by blank lines as distinct sections', async () => {
     const content = 'Paragraph 1.\n\nParagraph 2 with more details.\n\nParagraph 3 conclusion.'
     const input = Buffer.from(content, 'utf-8')
     const result = await extractor.extract(input)
 
     expect(result.text).toBe(content)
-    expect(result.sections).toHaveLength(1)
-    expect(result.sections[0].text).toContain('\n\n')
+    expect(result.sections).toHaveLength(3)
+    expect(result.sections[0].text).toBe('Paragraph 1.')
     expect(result.sections[0].lineStart).toBe(1)
-    expect(result.sections[0].lineEnd).toBe(5)
+    expect(result.sections[0].lineEnd).toBe(1)
+
+    expect(result.sections[1].text).toBe('Paragraph 2 with more details.')
+    expect(result.sections[1].lineStart).toBe(3)
+    expect(result.sections[1].lineEnd).toBe(3)
+
+    expect(result.sections[2].text).toBe('Paragraph 3 conclusion.')
+    expect(result.sections[2].lineStart).toBe(5)
+    expect(result.sections[2].lineEnd).toBe(5)
   })
 
   // 5. BOM handling

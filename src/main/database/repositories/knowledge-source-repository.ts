@@ -18,6 +18,8 @@ import {
   createKnowledgeSourceSchema,
   createKnowledgeChunkSchema
 } from './types'
+import { ExtractedDocumentRepository } from './extracted-document-repository'
+import type { UniversalDocument } from '../../documents/model'
 
 /**
  * Main-process repository providing typed operations for document sources and chunks.
@@ -25,12 +27,14 @@ import {
  */
 export class KnowledgeSourceRepository {
   private readonly db: Database.Database
+  private readonly extractedDocRepo: ExtractedDocumentRepository
 
   constructor(db: Database.Database) {
     if (!db) {
       throw new RepositoryError('Database instance is required for KnowledgeSourceRepository.')
     }
     this.db = db
+    this.extractedDocRepo = new ExtractedDocumentRepository(db)
   }
 
   /**
@@ -785,5 +789,23 @@ export class KnowledgeSourceRepository {
         `Failed to search knowledge chunks: ${err instanceof Error ? err.message : String(err)}`
       )
     }
+  }
+
+  /**
+   * Retrieves the canonical UniversalDocument persisted for a knowledge source.
+   * Scoped to (sourceId, knowledgeBaseId) if knowledgeBaseId is provided.
+   */
+  public getExtractedDocument(
+    sourceId: string,
+    knowledgeBaseId?: string
+  ): UniversalDocument | null {
+    return this.extractedDocRepo.get(sourceId, knowledgeBaseId)
+  }
+
+  /**
+   * Checks whether a canonical UniversalDocument is persisted for a knowledge source.
+   */
+  public hasExtractedDocument(sourceId: string, knowledgeBaseId?: string): boolean {
+    return this.extractedDocRepo.has(sourceId, knowledgeBaseId)
   }
 }

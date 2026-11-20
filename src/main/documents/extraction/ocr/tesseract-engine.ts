@@ -33,7 +33,7 @@ export interface IOcrEngine {
 export class NativeTesseractEngine implements IOcrEngine {
   private readonly defaultExecutablePath: string
   private readonly defaultTessdataPath: string
-  public readonly version = '5.5.4'
+  public readonly version = '5.5.3'
 
   constructor(executablePath?: string, tessdataPath?: string) {
     this.defaultExecutablePath = executablePath ?? NativeTesseractEngine.resolveBundledExecutable()
@@ -52,7 +52,17 @@ export class NativeTesseractEngine implements IOcrEngine {
       path.resolve(process.cwd(), 'resources/bin/tesseract/tesseract.exe'),
       path.resolve(process.cwd(), 'resources/bin/tesseract/tesseract'),
       path.resolve(__dirname, '../../../../resources/bin/tesseract/tesseract.exe'),
-      path.resolve(process.resourcesPath || '', 'bin/tesseract/tesseract.exe')
+      path.resolve(__dirname, '../../../../resources/bin/tesseract/tesseract'),
+      path.resolve(process.resourcesPath || '', 'bin/tesseract/tesseract.exe'),
+      path.resolve(process.resourcesPath || '', 'bin/tesseract/tesseract'),
+      path.resolve(
+        process.resourcesPath || '',
+        'app.asar.unpacked/resources/bin/tesseract/tesseract.exe'
+      ),
+      path.resolve(
+        process.resourcesPath || '',
+        'app.asar.unpacked/resources/bin/tesseract/tesseract'
+      )
     ]
 
     for (const c of candidates) {
@@ -71,7 +81,8 @@ export class NativeTesseractEngine implements IOcrEngine {
     const candidates = [
       path.resolve(process.cwd(), 'resources/tessdata'),
       path.resolve(__dirname, '../../../../resources/tessdata'),
-      path.resolve(process.resourcesPath || '', 'tessdata')
+      path.resolve(process.resourcesPath || '', 'tessdata'),
+      path.resolve(process.resourcesPath || '', 'app.asar.unpacked/resources/tessdata')
     ]
 
     for (const c of candidates) {

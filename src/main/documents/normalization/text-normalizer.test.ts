@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeText } from './text-normalizer'
+import { normalizeText, normalizeDocumentText } from './text-normalizer'
 
 describe('TextNormalizer (Phase 5 Step 5.6)', () => {
   // 1. BOM removal
@@ -112,5 +112,56 @@ function calculate(a: number, b: number): number {
 
     expect(pass1).toBe(pass2)
     expect(pass2).toBe(pass3)
+  })
+
+  // 13. normalizeDocumentText preserves blank lines without collapsing
+  it('13. normalizeDocumentText preserves all blank lines and paragraph breaks', () => {
+    const multiBlank = 'Para 1\n\n\n\nPara 2\n\n\nPara 3'
+    // normalizeText collapses to max 2 newlines (\n\n)
+    expect(normalizeText(multiBlank)).toBe('Para 1\n\nPara 2\n\nPara 3')
+    // normalizeDocumentText strictly preserves all newlines to maintain line coordinate alignment
+    expect(normalizeDocumentText(multiBlank)).toBe(multiBlank)
+  })
+
+  // 14. Bengali prose with vowel signs and conjuncts
+  it('14. faithfully preserves Bengali characters, vowel signs, and conjunct ligatures', () => {
+    const bengali =
+      'আমাদের সোনার বাংলা, আমি তোমায় ভালোবাসি। চিরদিন তোমার আকাশ, তোমার বাতাস, আমার প্রাণে বাজায় বাঁশি।'
+    const normalized = normalizeDocumentText(bengali)
+    // NFC canonical composition normalizes combining nukta sequences
+    expect(normalized).toBe(bengali.normalize('NFC'))
+    expect(normalized).toContain('বাংলা')
+    expect(normalized).toContain('ভালোবাসি')
+    expect(normalized).toContain('বাঁশি')
+  })
+
+  // 15. Unicode combining characters and decomposed sequence composition (NFC)
+  it('15. correctly composes decomposed Unicode sequences into canonical NFC', () => {
+    // e + combining acute accent (\u0065\u0301) -> é (\u00E9)
+    // o + combining diaeresis (\u006F\u0308) -> ö (\u00F6)
+    const decomposed = 'Caf\u0065\u0301 and c\u006F\u0308rdinate'
+    const composed = 'Caf\u00E9 and c\u00F6rdinate'
+    expect(normalizeDocumentText(decomposed)).toBe(composed)
+  })
+
+  // 16. Emoji and multi-byte Unicode preservation
+  it('16. preserves emojis, flags, and compound symbols without corruption', () => {
+    const emojis = '🤖 AI Agent 🚀 Workspace 🇧🇩 Flag 💡 Idea 📁 Folder'
+    expect(normalizeDocumentText(emojis)).toBe(emojis)
+  })
+
+  // 17. Code indentation and whitespace preservation
+  it('17. preserves exact tabs, indentation, and trailing code spaces', () => {
+    const code = 'function test() {\n\tconst a = 1;\n    const b = 2;  \n\t\treturn a + b;\n}'
+    expect(normalizeDocumentText(code)).toBe(code)
+  })
+
+  // 18. Long lines preservation (>10,000 characters)
+  it('18. never truncates or alters very long lines', () => {
+    const longLine = 'Alpha '.repeat(2500) // 15,000 characters
+    const doc = `Start\n${longLine}\nEnd`
+    const normalized = normalizeDocumentText(doc)
+    expect(normalized).toBe(doc)
+    expect(normalized.length).toBe(doc.length)
   })
 })

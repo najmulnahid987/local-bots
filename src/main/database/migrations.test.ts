@@ -648,6 +648,14 @@ describe('Migration 002: Provider Credential References Schema (Phase 3 Step 3.2
     expect(history[7].version).toBe(8)
     expect(history[7].name).toBe('pptx_persistence_support')
     expect(history[7].checksum).toBe(computeChecksum(migrations[7].sql))
+
+    expect(history[8].version).toBe(9)
+    expect(history[8].name).toBe('extracted_document_persistence')
+    expect(history[8].checksum).toBe(computeChecksum(migrations[8].sql))
+
+    expect(history[9].version).toBe(10)
+    expect(history[9].name).toBe('csv_persistence_support')
+    expect(history[9].checksum).toBe(computeChecksum(migrations[9].sql))
   })
 
   it('14. safely aborts and rolls back Migration 002 if legacy provider rows exist', () => {

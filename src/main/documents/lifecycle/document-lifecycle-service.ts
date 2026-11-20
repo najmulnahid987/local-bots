@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto, { randomUUID } from 'node:crypto'
+import type Database from 'better-sqlite3'
 import {
   type ReindexDocumentRequest,
   type ReindexDocumentResultDto,
@@ -11,6 +12,7 @@ import {
 } from '../../../shared/knowledge-documents'
 import type { CreateKnowledgeChunkInput } from '../../database/repositories/types'
 import { KnowledgeSourceRepository } from '../../database/repositories/knowledge-source-repository'
+import { ExtractedDocumentRepository } from '../../database/repositories/extracted-document-repository'
 import { DocumentStorageManager } from '../document-storage-manager'
 import { DocumentErrors } from '../document-errors'
 import { type DocumentSettingsProvider, StaticDocumentSettingsProvider } from '../document-settings'
@@ -18,7 +20,12 @@ import { ExtractorRegistry, defaultExtractorRegistry } from '../extractors/regis
 import { DocumentExtractionService } from '../extraction'
 import type { ExtractedDocument } from '../extractors/types'
 import { normalizeText } from '../normalization/text-normalizer'
-import { SemanticChunker } from '../chunking/semantic-chunker'
+import { SemanticChunker, UniversalDocumentChunker } from '../chunking'
+import {
+  type UniversalDocument,
+  validateUniversalDocument,
+  extractedDocumentToUniversalDocument
+} from '../model'
 import { toKnowledgeSourceDto, sanitizeDocumentErrorMessage } from '../../ipc/document-validation'
 import type { DocumentLifecycleServiceOptions } from './types'
 
@@ -32,13 +39,16 @@ import type { DocumentLifecycleServiceOptions } from './types'
  * 4. Zero Path & Secret Leakage: Never returns filesystem paths or raw database handles to callers.
  */
 export class DocumentLifecycleService {
+  private readonly db: Database.Database
   private readonly sourceRepository: KnowledgeSourceRepository
+  private readonly extractedDocRepo: ExtractedDocumentRepository
   private readonly storageManager: DocumentStorageManager
   private readonly extractorRegistry: ExtractorRegistry
   private readonly extractionService: DocumentExtractionService
   private readonly hasCustomRegistry: boolean
-  private readonly normalizer: (text: string) => string
-  private readonly chunker: SemanticChunker
+  private readonly _normalizer: (text: string) => string
+  private readonly _chunker: SemanticChunker
+  private readonly universalChunker: UniversalDocumentChunker
   private readonly settingsProvider: DocumentSettingsProvider
 
   // In-memory per-source operation locks: `${knowledgeBaseId}:${sourceId}`
@@ -61,7 +71,10 @@ export class DocumentLifecycleService {
       )
     }
 
+    this.db = options.db
     this.sourceRepository = options.sourceRepository
+    this.extractedDocRepo =
+      options.extractedDocumentRepository ?? new ExtractedDocumentRepository(options.db)
     this.storageManager = options.storageManager
     this.settingsProvider = options.settingsProvider ?? new StaticDocumentSettingsProvider()
     this.hasCustomRegistry = !!options.extractorRegistry
@@ -71,8 +84,26 @@ export class DocumentLifecycleService {
       new DocumentExtractionService({
         settingsProvider: this.settingsProvider
       })
-    this.normalizer = options.normalizer ?? normalizeText
-    this.chunker = options.chunker ?? new SemanticChunker(this.settingsProvider)
+    this._normalizer = options.normalizer ?? normalizeText
+    this._chunker = options.chunker ?? new SemanticChunker(this.settingsProvider)
+    if (options.universalChunker) {
+      this.universalChunker = options.universalChunker
+    } else if (options.chunker) {
+      this.universalChunker = {
+        chunk: (uDoc: UniversalDocument) =>
+          options.chunker!.chunk(uDoc as unknown as ExtractedDocument)
+      } as unknown as UniversalDocumentChunker
+    } else {
+      this.universalChunker = new UniversalDocumentChunker(this.settingsProvider)
+    }
+  }
+
+  public getNormalizer(): (text: string) => string {
+    return this._normalizer
+  }
+
+  public getLegacyChunker(): SemanticChunker {
+    return this._chunker
   }
 
   /**
@@ -162,27 +193,41 @@ export class DocumentLifecycleService {
       // 8. Transition status to 'processing' (excludes document from active search results)
       this.sourceRepository.updateStatus(sourceId, knowledgeBaseId, 'processing', null)
 
-      // 9. Format-neutral text extraction
-      const extracted =
-        this.hasCustomRegistry && this.extractorRegistry.hasExtractor(source.file_type)
-          ? await this.extractorRegistry.extract(source.file_type, fileBytes)
-          : await this.extractionService.extractLegacy(source.file_type, fileBytes)
-
-      // 10. Text normalization
-      const normalizedDoc: ExtractedDocument = {
-        format: extracted.format,
-        text: this.normalizer(extracted.text),
-        sections: extracted.sections.map((s) => ({
-          ...s,
-          text: this.normalizer(s.text)
-        })),
-        metadata: extracted.metadata
+      // 9. Format-neutral UniversalDocument extraction
+      let universalDoc: UniversalDocument
+      if (this.hasCustomRegistry && this.extractorRegistry.hasExtractor(source.file_type)) {
+        const legacyExtracted = await this.extractorRegistry.extract(source.file_type, fileBytes)
+        universalDoc = extractedDocumentToUniversalDocument(legacyExtracted, {
+          sourceId,
+          knowledgeBaseId,
+          originalFileName: source.original_file_name,
+          mimeType: source.mime_type
+        })
+      } else {
+        universalDoc = await this.extractionService.extractUniversal(
+          {
+            bytes: fileBytes,
+            filenameHint: source.original_file_name,
+            mimeTypeHint: source.mime_type,
+            formatHint: source.file_type
+          },
+          {
+            sourceId,
+            knowledgeBaseId,
+            originalFileName: source.original_file_name,
+            mimeType: source.mime_type
+          }
+        )
       }
 
-      // 11. Deterministic semantic chunking
-      const chunkingResult = this.chunker.chunk(normalizedDoc)
+      // Defensive validation of UniversalDocument
+      validateUniversalDocument(universalDoc)
 
-      // 12. Atomic chunk replacement within one SQLite transaction
+      // 10. Format-Aware Structured Universal Chunking
+      // Directly consumes canonical UniversalDocument without lossy legacy conversions
+      const chunkingResult = this.universalChunker.chunk(universalDoc)
+
+      // 12. Atomic UniversalDocument and chunk replacement within one SQLite transaction
       const now = Date.now()
       const chunkInputs: CreateKnowledgeChunkInput[] = chunkingResult.chunks.map((c) => ({
         id: randomUUID(),
@@ -199,7 +244,12 @@ export class DocumentLifecycleService {
         created_at: now
       }))
 
-      this.sourceRepository.replaceChunks(sourceId, knowledgeBaseId, chunkInputs, now)
+      const reindexTx = this.db.transaction(() => {
+        this.extractedDocRepo.save(sourceId, universalDoc, now, knowledgeBaseId)
+        this.sourceRepository.replaceChunks(sourceId, knowledgeBaseId, chunkInputs, now)
+      })
+
+      reindexTx()
 
       // 13. Retrieve updated source with new chunk count
       const updatedSource = this.sourceRepository.getByIdWithChunkCount(sourceId, knowledgeBaseId)!

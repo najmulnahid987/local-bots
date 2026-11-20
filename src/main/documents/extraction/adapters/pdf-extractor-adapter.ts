@@ -1,4 +1,4 @@
-import { PdfExtractor } from '../../extractors/pdf-extractor'
+import { PdfExtractor, type RichPdfExtractedDocument } from '../../extractors/pdf-extractor'
 import type { DocumentSettingsProvider } from '../../document-settings'
 import type {
   IDocumentExtractor,
@@ -45,27 +45,33 @@ export class PdfExtractorAdapter implements IDocumentExtractor {
     context?: DocumentExtractionContext
   ): Promise<DocumentExtractionResult> {
     void context
-    const extracted = await this.innerExtractor.extract(request.bytes)
+    const extracted = (await this.innerExtractor.extract(request.bytes)) as RichPdfExtractedDocument
 
-    const blocks: ExtractedDocumentBlock[] = extracted.sections.map((section) => ({
-      type: 'paragraph',
-      text: section.text,
-      pageNumber: section.pageNumber,
-      lineStart: section.lineStart,
-      lineEnd: section.lineEnd
-    }))
+    const blocks: ExtractedDocumentBlock[] =
+      extracted.blocks && extracted.blocks.length > 0
+        ? [...extracted.blocks]
+        : extracted.sections.map((section) => ({
+            type: 'paragraph',
+            text: section.text,
+            pageNumber: section.pageNumber,
+            lineStart: section.lineStart,
+            lineEnd: section.lineEnd
+          }))
+
+    const warnings = extracted.warnings ? [...extracted.warnings] : []
+    const quality = extracted.quality ?? {
+      fidelity: 'medium',
+      isLossy: true,
+      isOcr: false
+    }
 
     return {
       format: 'pdf',
       text: extracted.text,
       blocks,
       metadata: extracted.metadata ?? {},
-      warnings: [],
-      quality: {
-        fidelity: 'medium',
-        isLossy: true,
-        isOcr: false
-      },
+      warnings,
+      quality,
       extractor: this.metadata
     }
   }

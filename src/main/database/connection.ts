@@ -55,6 +55,7 @@ const REQUIRED_APPLICATION_TABLES: readonly string[] = [
   'import_recovery_journal',
   'knowledge_bases',
   'knowledge_chunks',
+  'knowledge_extracted_documents',
   'knowledge_sources',
   'messages',
   'provider_connections',

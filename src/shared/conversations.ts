@@ -58,7 +58,7 @@ export type MessageContentFormat = (typeof MESSAGE_CONTENT_FORMATS)[number]
 /**
  * Supported document formats for cited knowledge sources.
  */
-export const CITATION_FILE_TYPES = ['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'] as const
+export const CITATION_FILE_TYPES = ['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx', 'csv'] as const
 export type CitationFileType = (typeof CITATION_FILE_TYPES)[number]
 
 /**

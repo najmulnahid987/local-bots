@@ -366,7 +366,7 @@ export interface KnowledgeSource {
   readonly file_name: string
   readonly original_file_name: string
   readonly relative_file_path: string
-  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx'
+  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv'
   readonly mime_type: string
   readonly file_size: number
   readonly content_hash: string
@@ -392,7 +392,7 @@ export interface SearchChunkMatchRow {
   readonly source_id: string
   readonly knowledge_base_id: string
   readonly original_file_name: string
-  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx'
+  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv'
   readonly chunk_index: number
   readonly content: string
   readonly page_number: number | null
@@ -410,7 +410,7 @@ export interface CreateKnowledgeSourceInput {
   readonly file_name: string
   readonly original_file_name: string
   readonly relative_file_path: string
-  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx'
+  readonly file_type: 'txt' | 'md' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv'
   readonly mime_type: string
   readonly file_size: number
   readonly content_hash: string
@@ -466,8 +466,8 @@ export const createKnowledgeSourceSchema = z
       .string()
       .trim()
       .min(1, { message: 'relative_file_path cannot be blank.' }),
-    file_type: z.enum(['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'], {
-      message: "file_type must be 'txt', 'md', 'pdf', 'docx', 'xlsx', or 'pptx'."
+    file_type: z.enum(['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx', 'csv'], {
+      message: "file_type must be 'txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx', or 'csv'."
     }),
     mime_type: z.string().trim().min(1, { message: 'mime_type cannot be blank.' }),
     file_size: z
@@ -682,4 +682,61 @@ export interface UpdateImportRecoveryJournalInput {
   readonly remapping?: Record<string, Record<string, string>>
   readonly counts?: Record<string, number>
   readonly errorMessage?: string | null
+}
+
+/**
+ * Domain entity representing an extracted canonical UniversalDocument record in SQLite.
+ */
+export interface ExtractedDocumentRecord {
+  readonly source_id: string
+  readonly schema_version: number
+  readonly document_json: string
+  readonly document_hash: string
+  readonly document_size_bytes: number
+  readonly block_count: number
+  readonly created_at: number
+  readonly updated_at: number
+}
+
+/**
+ * Caller input for saving or updating an extracted document record.
+ */
+export interface CreateExtractedDocumentInput {
+  readonly source_id: string
+  readonly schema_version?: number
+  readonly document_json: string
+  readonly document_hash: string
+  readonly document_size_bytes: number
+  readonly block_count: number
+  readonly created_at?: number
+  readonly updated_at?: number
+}
+
+export const createExtractedDocumentSchema = z.object({
+  source_id: z.string().uuid({ message: 'source_id must be a valid RFC 4122 UUIDv4.' }),
+  schema_version: z.number().int().min(1).default(1),
+  document_json: z.string().min(1, { message: 'document_json cannot be empty.' }),
+  document_hash: z
+    .string()
+    .length(64, { message: 'document_hash must be a 64-character SHA-256 hex string.' }),
+  document_size_bytes: z.number().int().min(0),
+  block_count: z.number().int().min(0),
+  created_at: z.number().int().positive().optional(),
+  updated_at: z.number().int().positive().optional()
+})
+
+/**
+ * Verification result emitted by ExtractedDocumentRepository.verify().
+ */
+export interface ExtractedDocumentVerificationResult {
+  readonly valid: boolean
+  readonly source_id: string
+  readonly schema_version?: number
+  readonly document_hash?: string
+  readonly computed_hash?: string
+  readonly document_size_bytes?: number
+  readonly computed_size_bytes?: number
+  readonly block_count?: number
+  readonly computed_block_count?: number
+  readonly errors: string[]
 }

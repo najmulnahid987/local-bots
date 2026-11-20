@@ -113,6 +113,16 @@ export interface DocumentExtractionRequest {
    * Optional per-request extraction limit overrides.
    */
   readonly limits?: ExtractionLimits
+
+  /**
+   * Optional extractor-specific options (e.g. CSV hasHeader flag).
+   */
+  readonly options?: Record<string, unknown>
+
+  /**
+   * Optional caller-provided metadata (e.g. source properties).
+   */
+  readonly metadata?: Record<string, unknown>
 }
 
 /**
@@ -176,6 +186,11 @@ export interface ExtractionQuality {
    * Optional numeric confidence score between 0.0 and 1.0 (primarily applicable to OCR).
    */
   readonly confidence?: number
+
+  /**
+   * Whether unparsed or skipped document elements (e.g. images, charts, inline HTML) were detected.
+   */
+  readonly hasUnparsedElements?: boolean
 }
 
 /**
@@ -190,6 +205,8 @@ export type ExtractedDocumentBlockType =
   | 'page_break'
   | 'sheet_boundary'
   | 'slide_boundary'
+  | 'image_reference'
+  | 'unknown'
 
 /**
  * A normalized structural block of content extracted from a document.
@@ -236,6 +253,14 @@ export interface ExtractedDocumentBlock {
   readonly list?: {
     readonly items: readonly string[]
     readonly ordered: boolean
+    readonly itemDetails?: readonly {
+      readonly text: string
+      readonly depth: number
+      readonly itemNumber?: number
+      readonly checked?: boolean
+      readonly lineStart?: number
+      readonly lineEnd?: number
+    }[]
   }
 
   /**
@@ -245,6 +270,7 @@ export interface ExtractedDocumentBlock {
     readonly headers: readonly string[]
     readonly rows: readonly (readonly string[])[]
     readonly caption?: string
+    readonly alignments?: readonly ('left' | 'center' | 'right' | 'none')[]
   }
 
   /**
@@ -252,7 +278,25 @@ export interface ExtractedDocumentBlock {
    */
   readonly code?: {
     readonly language?: string
+    readonly code?: string
   }
+
+  /**
+   * Specific attributes for 'image_reference' blocks.
+   */
+  readonly imageReference?: {
+    readonly elementType: 'image' | 'chart' | 'diagram' | 'vector_graphic' | 'smart_art' | 'unknown'
+    readonly referenceId?: string
+    readonly altText?: string
+    readonly caption?: string
+    readonly extractionStatus?: 'skipped' | 'partial' | 'unsupported' | 'failed'
+    readonly warning?: string
+  }
+
+  /**
+   * Indicates whether this paragraph represents a blockquote.
+   */
+  readonly isQuote?: boolean
 
   /**
    * Specific attributes for spreadsheet 'sheet_boundary' blocks.
@@ -341,7 +385,11 @@ export interface IDocumentExtractor {
 
 /**
  * Converts a modern DocumentExtractionResult into a legacy ExtractedDocument
- * for 100% backward compatibility with existing SemanticChunker and Knowledge Base ingestion.
+ * for backward compatibility with existing legacy chunkers and pipelines.
+ *
+ * @deprecated Lossy compatibility adapter. Flattens structured tables, lists, and code blocks
+ * into newline-delimited text strings. For canonical information-preserving representation,
+ * use `documentExtractionResultToUniversalDocument()` from `../model`.
  */
 export function extractionResultToExtractedDocument(
   result: DocumentExtractionResult

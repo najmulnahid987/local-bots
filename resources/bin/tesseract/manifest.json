@@ -1,8 +1,21 @@
 {
-  "targetVersion": "5.5.4",
-  "provenanceStatus": "BLOCKED_BINARY_UNAVAILABLE",
-  "blockerReason": "Upstream Tesseract 5.5.4 release (tag 5.5.4, commit c1224f7) provides source tarballs but no official Windows x64 binaries. Third-party distributions (UB-Mannheim 5.5.0, winget 5.5.3) are older or unverified. Host machine lacks MSVC/C++ toolchain. Production native binary packaging is marked incomplete per Step 10.12 Part B gate.",
-  "adapterStrategy": "Controlled TesseractTestDouble and NativeTesseractEngine fallback adapter",
+  "targetVersion": "5.5.3",
+  "provenanceStatus": "VERIFIED_PRODUCTION_BINARY",
+  "binarySource": "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe",
+  "installerSha256": "bee9e3434bd94fd65387d9be28cd467a41f61b1275383b55b0f59a1331270ae4",
+  "executable": {
+    "name": "tesseract.exe",
+    "architecture": "x64",
+    "sizeBytes": 1867784,
+    "sha256": "c66f0f12ed76f6aa455dac97684bbc86756d6a732380bee09122454cfda3f420",
+    "version": "5.5.3.20260724",
+    "license": "Apache-2.0"
+  },
+  "runtimeDependencies": {
+    "dllCount": 56,
+    "totalSizeMb": 93.11,
+    "license": "Apache-2.0 / LGPL / BSD / MIT compatible dependencies"
+  },
   "architecturalRequirements": {
     "shell": false,
     "windowsHide": true,

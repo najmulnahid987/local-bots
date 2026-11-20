@@ -162,7 +162,8 @@ export class UtilityProcessExecutionBoundary implements IParserExecutionBoundary
     // Fail-closed enforcement for DOCX parser
     if (
       extractor.metadata.id === 'mammoth-docx-extractor' ||
-      extractor.metadata.id === 'docx-extractor'
+      extractor.metadata.id === 'docx-extractor' ||
+      extractor.metadata.id === 'ooxml-docx-extractor'
     ) {
       if (!fs.existsSync(this.workerPath)) {
         throw DocumentErrors.extractionWorkerUnavailable(

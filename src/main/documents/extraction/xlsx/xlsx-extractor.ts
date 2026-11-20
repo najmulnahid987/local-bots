@@ -1,5 +1,5 @@
 import readXlsxFile, { type Row } from 'read-excel-file/node'
-import { DocumentErrors } from '../../document-errors'
+import { DocumentError, DocumentErrors } from '../../document-errors'
 import type {
   IDocumentExtractor,
   ExtractorMetadata,
@@ -11,6 +11,7 @@ import type {
 } from '../types'
 import { normalizeFormatExtension } from '../format-detector'
 import { XlsxArchiveValidator } from './xlsx-archive-validator'
+import { XlsxOoxmlParser } from './xlsx-ooxml-parser'
 
 /**
  * Converts a 0-based column index to standard Excel column letters (A, B, ..., Z, AA, AB, ...).
@@ -102,7 +103,45 @@ export class XlsxExtractor implements IDocumentExtractor {
       throw DocumentErrors.extractionCancelled()
     }
 
-    // 2. Parse all worksheets via readXlsxFile
+    // 2. Primary High-Fidelity OpenXML Extraction via XlsxOoxmlParser
+    try {
+      const ooxmlParser = new XlsxOoxmlParser()
+      const ooxmlResult = ooxmlParser.parse(buf, {
+        maxCompressedBytes: context?.limits.maxInputSizeBytes
+      })
+      if (ooxmlResult.blocks.length > 0) {
+        if (ooxmlResult.metadata.totalCells === 0) {
+          throw DocumentErrors.extractionNoTextContent(
+            'The workbook contains no readable text content in any worksheet.'
+          )
+        }
+        const textBytes = Buffer.byteLength(ooxmlResult.text, 'utf-8')
+        if (context?.limits?.maxOutputSizeBytes && textBytes > context.limits.maxOutputSizeBytes) {
+          throw DocumentErrors.extractionOutputLimitExceeded(
+            context.limits.maxOutputSizeBytes,
+            textBytes
+          )
+        }
+        return ooxmlResult
+      }
+    } catch (ooxmlErr) {
+      // If error is cancellation, security violation, output limit, or no text content, rethrow immediately
+      if (
+        ooxmlErr instanceof DocumentError &&
+        (ooxmlErr.code === 'EXTRACTION_CANCELLED' ||
+          ooxmlErr.code === 'EXTRACTION_XXE_DETECTED' ||
+          ooxmlErr.code === 'EXTRACTION_ARCHIVE_LIMIT_EXCEEDED' ||
+          ooxmlErr.code === 'EXTRACTION_MACRO_NOT_ALLOWED' ||
+          ooxmlErr.code === 'EXTRACTION_ENCRYPTED_ARCHIVE' ||
+          ooxmlErr.code === 'EXTRACTION_NO_TEXT_CONTENT' ||
+          ooxmlErr.code === 'EXTRACTION_OUTPUT_LIMIT_EXCEEDED')
+      ) {
+        throw ooxmlErr
+      }
+      // Otherwise fallback to readXlsxFile for edge cases
+    }
+
+    // 3. Fallback: Parse worksheets via readXlsxFile
     let sheets: { sheet: string; data: Row[] }[]
     try {
       const parsedSheets = await readXlsxFile(buf, {

@@ -96,6 +96,7 @@ export class FormatDetector {
         lowerMime === 'application/vnd.openxmlformats-officedocument.presentationml.slideshow'
       )
         hintExt = 'pptx'
+      else if (lowerMime === 'text/csv' || lowerMime === 'application/csv') hintExt = 'csv'
     }
 
     // 2. Check Magic Bytes
@@ -203,6 +204,16 @@ export class FormatDetector {
     if (hintExt === 'md') {
       return {
         canonicalFormat: 'md',
+        confidence: 'high',
+        magicBytesMatched: false,
+        isBinary: false
+      }
+    }
+
+    // If hint is explicitly csv
+    if (hintExt === 'csv') {
+      return {
+        canonicalFormat: 'csv',
         confidence: 'high',
         magicBytesMatched: false,
         isBinary: false

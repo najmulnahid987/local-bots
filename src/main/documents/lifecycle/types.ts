@@ -6,10 +6,11 @@ import type {
   DeleteDocumentResultDto
 } from '../../../shared/knowledge-documents'
 import type { KnowledgeSourceRepository } from '../../database/repositories/knowledge-source-repository'
+import type { ExtractedDocumentRepository } from '../../database/repositories/extracted-document-repository'
 import type { DocumentStorageManager } from '../document-storage-manager'
 import type { ExtractorRegistry } from '../extractors/registry'
 import type { DocumentExtractionService } from '../extraction'
-import type { SemanticChunker } from '../chunking/semantic-chunker'
+import type { SemanticChunker, UniversalDocumentChunker } from '../chunking'
 import type { DocumentSettingsProvider } from '../document-settings'
 
 export type {
@@ -30,5 +31,7 @@ export interface DocumentLifecycleServiceOptions {
   readonly extractionService?: DocumentExtractionService
   readonly normalizer?: (text: string) => string
   readonly chunker?: SemanticChunker
+  readonly universalChunker?: UniversalDocumentChunker
   readonly settingsProvider?: DocumentSettingsProvider
+  readonly extractedDocumentRepository?: ExtractedDocumentRepository
 }

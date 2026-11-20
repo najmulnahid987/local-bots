@@ -6,7 +6,7 @@ import Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { runMigrations } from '../../database/migrations/runner'
 import { migrations } from '../../database/migrations'
-import { KnowledgeBaseRepository } from '../../database/repositories'
+import { KnowledgeBaseRepository, KnowledgeSourceRepository } from '../../database/repositories'
 import { DocumentIngestionService } from './document-ingestion-service'
 import { DocumentStorageManager } from '../document-storage-manager'
 import { DocumentFileValidator } from '../document-file-validator'
@@ -1051,5 +1051,119 @@ Managed files are isolated in the originals subdirectory.`
     }
     expect(sources.count).toBe(0)
     expect(chunks.count).toBe(0)
+  })
+
+  // 29. Phase 11 Step 11.3: Universal Document Persistence during Ingestion
+  it('29. persists canonical UniversalDocument in knowledge_extracted_documents alongside chunks during ingestion', async () => {
+    const mdContent =
+      '# Architecture Overview\n\nThis is a structured document with sections.\n\n```typescript\nconst persistent = true;\n```'
+    const filePath = createTestFile('arch.md', mdContent)
+
+    const res = await service.ingest({ knowledgeBaseId: defaultKbId, filePath })
+    expect(res.status).toBe('completed')
+
+    if (res.status === 'completed') {
+      expect(res.universalDocument).toBeDefined()
+      expect(res.universalDocument!.blocks.length).toBeGreaterThanOrEqual(1)
+
+      // Query database repository directly
+      const sourceRepo = new KnowledgeSourceRepository(db)
+      const hasDoc = sourceRepo.hasExtractedDocument(res.sourceId, defaultKbId)
+      expect(hasDoc).toBe(true)
+
+      const extracted = sourceRepo.getExtractedDocument(res.sourceId, defaultKbId)
+      expect(extracted).toBeDefined()
+      expect(extracted!.format).toBe('md')
+      expect(extracted!.blocks.length).toBeGreaterThanOrEqual(1)
+      expect(extracted!.text).toContain('Architecture Overview')
+
+      // Verify row in SQLite table directly
+      const row = db
+        .prepare(
+          'SELECT source_id, schema_version, block_count, document_size_bytes FROM knowledge_extracted_documents WHERE source_id = ?'
+        )
+        .get(res.sourceId) as {
+        source_id: string
+        schema_version: number
+        block_count: number
+        document_size_bytes: number
+      }
+      expect(row).toBeDefined()
+      expect(row.schema_version).toBe(1)
+      expect(row.block_count).toBe(extracted!.blocks.length)
+      expect(row.document_size_bytes).toBeGreaterThan(0)
+    }
+  })
+
+  // 30. Successful CSV ingestion
+  it('30. successfully ingests a CSV (.csv) document, persists UniversalDocument, persists chunks and indexes in FTS5', async () => {
+    const csvContent =
+      'SKU,ProductName,PriceUSD,StockCount\nPROD-001,Widget Alpha,49.99,150\nPROD-002,Widget Beta,89.50,42\n'
+    const filePath = createTestFile('inventory.csv', csvContent)
+
+    const result = await service.ingest({
+      knowledgeBaseId: defaultKbId,
+      filePath
+    })
+
+    expect(result.status).toBe('completed')
+    if (result.status === 'completed') {
+      expect(result.duplicate).toBe(false)
+      expect(result.sourceId).toBeDefined()
+      expect(result.knowledgeBaseId).toBe(defaultKbId)
+      expect(result.totalChunks).toBeGreaterThanOrEqual(1)
+      expect(result.totalTokens).toBeGreaterThan(0)
+      expect(result.relativeFilePath).toMatch(/^originals\/[0-9a-f-]+\.csv$/)
+
+      // Verify source database record
+      const source = service.getSource(result.sourceId, defaultKbId)
+      expect(source).not.toBeNull()
+      expect(source?.indexing_status).toBe('completed')
+      expect(source?.file_type).toBe('csv')
+      expect(source?.original_file_name).toBe('inventory.csv')
+      expect(source?.indexed_at).toBeGreaterThan(0)
+      expect(source?.error_message).toBeNull()
+
+      // Verify physical storage
+      const physicalFile = path.join(documentsDir, defaultKbId, result.relativeFilePath)
+      expect(fs.existsSync(physicalFile)).toBe(true)
+
+      // Verify FTS5 query match
+      const ftsMatches = db
+        .prepare(
+          `
+          SELECT c.id, c.content
+          FROM knowledge_fts f
+          JOIN knowledge_chunks c ON c.id = f.chunk_id
+          WHERE knowledge_fts MATCH 'Widget'
+        `
+        )
+        .all()
+      expect(ftsMatches.length).toBeGreaterThanOrEqual(1)
+
+      // Verify UniversalDocument persistence
+      const sourceRepo = new KnowledgeSourceRepository(db)
+      const extracted = sourceRepo.getExtractedDocument(result.sourceId, defaultKbId)
+      expect(extracted).toBeDefined()
+      expect(extracted?.format).toBe('csv')
+      expect(extracted?.blocks.some((b) => b.type === 'table')).toBe(true)
+    }
+  })
+
+  // 31. Duplicate CSV detection
+  it('31. detects duplicate CSV import in the same Knowledge Base and returns structured duplicate result', async () => {
+    const csvContent = 'Metric,Value\nVisitors,54000\nConversions,3200\n'
+    const file1 = createTestFile('analytics1.csv', csvContent)
+    const file2 = createTestFile('analytics2.csv', csvContent)
+
+    const first = await service.ingest({ knowledgeBaseId: defaultKbId, filePath: file1 })
+    expect(first.status).toBe('completed')
+
+    const second = await service.ingest({ knowledgeBaseId: defaultKbId, filePath: file2 })
+    expect(second.status).toBe('duplicate')
+    if (second.status === 'duplicate') {
+      expect(second.duplicate).toBe(true)
+      expect(second.existingSource.originalFileName).toBe('analytics1.csv')
+    }
   })
 })

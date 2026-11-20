@@ -76,6 +76,17 @@ export interface PptxArchiveValidationResult {
 }
 
 /**
+ * Access interface for reading verified, safe OpenXML PPTX package parts.
+ */
+export interface PptxPackage {
+  readonly validationResult: PptxArchiveValidationResult
+  getEntryText(entryPath: string): string | null
+  getEntryBuffer(entryPath: string): Buffer | null
+  hasEntry(entryPath: string): boolean
+  getEntries(): readonly string[]
+}
+
+/**
  * PptxArchiveValidator performs exhaustive, zero-dependency, memory-bounded
  * preflight validation of Microsoft PowerPoint (.pptx) OpenXML ZIP packages.
  *
@@ -99,6 +110,14 @@ export class PptxArchiveValidator {
     bytes: Uint8Array | Buffer,
     limits?: PptxArchiveLimits
   ): PptxArchiveValidationResult {
+    return this.openPackage(bytes, limits).validationResult
+  }
+
+  /**
+   * Validates a candidate PPTX buffer and returns a PptxPackage instance
+   * providing secure, bounds-checked entry extraction.
+   */
+  public static openPackage(bytes: Uint8Array | Buffer, limits?: PptxArchiveLimits): PptxPackage {
     const effectiveLimits: Required<PptxArchiveLimits> = {
       maxCompressedBytes:
         limits?.maxCompressedBytes ?? DEFAULT_PPTX_ARCHIVE_LIMITS.maxCompressedBytes,
@@ -437,7 +456,7 @@ export class PptxArchiveValidator {
       )
     }
 
-    return {
+    const validationResult: PptxArchiveValidationResult = {
       valid: true,
       entryCount: totalEntries,
       totalUncompressedSize,
@@ -448,6 +467,8 @@ export class PptxArchiveValidator {
       mediaEntries,
       entriesMetadata
     }
+
+    return new PptxPackageImpl(buf, entriesMetadata, validationResult)
   }
 
   /**
@@ -508,5 +529,47 @@ export class PptxArchiveValidator {
     }
 
     return decompressed
+  }
+}
+
+/**
+ * Concrete implementation of PptxPackage providing safe, bounded access to ZIP parts.
+ */
+class PptxPackageImpl implements PptxPackage {
+  constructor(
+    private readonly buf: Buffer,
+    private readonly entriesMetadata: Map<string, PptxZipEntryMetadata>,
+    public readonly validationResult: PptxArchiveValidationResult
+  ) {}
+
+  public hasEntry(entryPath: string): boolean {
+    const normalized = entryPath.replace(/\\/g, '/').replace(/^\//, '').trim()
+    return this.entriesMetadata.has(normalized)
+  }
+
+  public getEntries(): readonly string[] {
+    return Array.from(this.entriesMetadata.keys())
+  }
+
+  public getEntryBuffer(entryPath: string): Buffer | null {
+    const normalized = entryPath.replace(/\\/g, '/').replace(/^\//, '').trim()
+    const entry = this.entriesMetadata.get(normalized)
+    if (!entry) return null
+    return PptxArchiveValidator.extractEntryBuffer(this.buf, entry)
+  }
+
+  public getEntryText(entryPath: string): string | null {
+    const decompressed = this.getEntryBuffer(entryPath)
+    if (!decompressed) return null
+    const text = decompressed.toString('utf8')
+    const normalized = entryPath.replace(/\\/g, '/').replace(/^\//, '').trim()
+    if (normalized.endsWith('.xml') || normalized.endsWith('.rels')) {
+      if (/<!DOCTYPE/i.test(text) || /<!ENTITY/i.test(text)) {
+        throw DocumentErrors.extractionXxeDetected(
+          `External entity or DOCTYPE detected in ${normalized}.`
+        )
+      }
+    }
+    return text
   }
 }

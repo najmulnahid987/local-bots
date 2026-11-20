@@ -1,9 +1,21 @@
-import { getDocumentProxy, extractText, inspectPages } from 'unpdf'
+import { getDocumentProxy, inspectPages } from 'unpdf'
 import { DocumentError, DocumentErrors } from '../document-errors'
 import { type DocumentSettingsProvider, StaticDocumentSettingsProvider } from '../document-settings'
-import type { DocumentExtractor, ExtractedDocument, ExtractedDocumentSection } from './types'
+import type { DocumentExtractor, ExtractedDocument } from './types'
 import { PdfOcrPipeline } from '../extraction/ocr/pdf-ocr-pipeline'
 import type { IOcrEngine } from '../extraction/ocr/tesseract-engine'
+import { PdfLayoutExtractor, type PdfLayoutExtractionResult } from './pdf-layout-extractor'
+import type {
+  ExtractedDocumentBlock,
+  DocumentExtractionWarning,
+  ExtractionQuality
+} from '../extraction/types'
+
+export interface RichPdfExtractedDocument extends ExtractedDocument {
+  readonly blocks?: readonly ExtractedDocumentBlock[]
+  readonly warnings?: readonly DocumentExtractionWarning[]
+  readonly quality?: ExtractionQuality
+}
 
 export interface PdfExtractorOptions {
   readonly enableOcr?: boolean
@@ -45,7 +57,7 @@ export class PdfExtractor implements DocumentExtractor {
   /**
    * Extracts text page-by-page from validated PDF bytes.
    */
-  public async extract(bytes: Uint8Array | Buffer): Promise<ExtractedDocument> {
+  public async extract(bytes: Uint8Array | Buffer): Promise<RichPdfExtractedDocument> {
     // 1. Guard input types
     if (!bytes || !(bytes instanceof Uint8Array || Buffer.isBuffer(bytes))) {
       throw DocumentErrors.extractionMalformedInput('Input must be a valid Buffer or Uint8Array.')
@@ -116,10 +128,12 @@ export class PdfExtractor implements DocumentExtractor {
         throw DocumentErrors.extractionPdfPageLimitExceeded(maxPdfPages, totalPages)
       }
 
-      // 6. Extract text page-by-page (mergePages: false)
-      let result: { totalPages: number; text: string[] }
+      // 6. Extract layout-aware, reading-order-reconstructed text and structured blocks
+      let layoutResult: PdfLayoutExtractionResult
       try {
-        result = await extractText(proxy, { mergePages: false })
+        layoutResult = await PdfLayoutExtractor.extract(proxy, {
+          maxPages: maxPdfPages
+        })
       } catch (extractErr: unknown) {
         if (extractErr instanceof DocumentError) {
           throw extractErr
@@ -131,7 +145,7 @@ export class PdfExtractor implements DocumentExtractor {
         )
       }
 
-      const rawPages = Array.isArray(result.text) ? result.text : [result.text]
+      const rawPages = layoutResult.sections.map((s) => s.text)
 
       // 7. Check if OCR is needed or if document is born-digital
       const hasText = rawPages.some((p) => typeof p === 'string' && p.trim().length > 0)
@@ -157,7 +171,11 @@ export class PdfExtractor implements DocumentExtractor {
           }
 
           // Contains images! Delegate to OCR pipeline
-          return await this.ocrPipeline.extract(bytes)
+          const ocrRes = await this.ocrPipeline.extract(bytes)
+          return {
+            ...ocrRes,
+            warnings: ocrRes.warnings.map((w) => ({ code: 'OCR_WARNING', message: w }))
+          }
         }
 
         // Has digital text. Check if any page is an empty scanned image page (mixed document)
@@ -178,7 +196,11 @@ export class PdfExtractor implements DocumentExtractor {
               (p.imageCount > 0 || p.imageCoverage >= 0.4)
           )
           if (hasScannedPage) {
-            return await this.ocrPipeline.extract(bytes)
+            const ocrRes = await this.ocrPipeline.extract(bytes)
+            return {
+              ...ocrRes,
+              warnings: ocrRes.warnings.map((w) => ({ code: 'OCR_WARNING', message: w }))
+            }
           }
         }
       } else if (!hasText) {
@@ -187,21 +209,17 @@ export class PdfExtractor implements DocumentExtractor {
         )
       }
 
-      // 8. Map to 1-based page sections
-      const sections: ExtractedDocumentSection[] = rawPages.map((pageText, index) => ({
-        text: pageText ?? '',
-        pageNumber: index + 1
-      }))
-
-      const fullText = rawPages.join('\n\n')
-
       return {
         format: 'pdf',
-        text: fullText,
-        sections,
+        text: layoutResult.text,
+        sections: layoutResult.sections,
+        blocks: layoutResult.blocks,
+        warnings: layoutResult.warnings,
+        quality: layoutResult.quality,
         metadata: {
           pageCount: totalPages,
-          characterCount: fullText.length
+          characterCount: layoutResult.text.length,
+          hasMultiColumn: layoutResult.hasMultiColumn
         }
       }
     } finally {
