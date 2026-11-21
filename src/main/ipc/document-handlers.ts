@@ -6,8 +6,10 @@ import {
   type DocumentSearchResultDto,
   type ReindexDocumentResultDto,
   type DeleteDocumentResultDto,
-  type DocumentPreviewDto
+  type DocumentPreviewDto,
+  type PreviewPreservationSummaryDto
 } from '../../shared/ipc'
+import { DocumentPreviewService } from '../documents/preview/document-preview-service'
 import { DocumentIngestionService } from '../documents/ingestion/document-ingestion-service'
 import { DocumentSearchService } from '../documents/search'
 import { DocumentLifecycleService } from '../documents/lifecycle'
@@ -21,6 +23,7 @@ import {
   documentListIpcSchema,
   documentGetIpcSchema,
   documentPreviewIpcSchema,
+  documentPreservationReportIpcSchema,
   documentSearchIpcSchema,
   documentReindexIpcSchema,
   documentDeleteIpcSchema
@@ -91,6 +94,7 @@ export interface DocumentIpcHandlerOptions {
   searchService?: DocumentSearchService
   lifecycleService?: DocumentLifecycleService
   dialogOps?: DocumentDialogOperations
+  previewService?: DocumentPreviewService
 }
 
 /**
@@ -101,6 +105,16 @@ export function registerDocumentIpcHandlers(options: DocumentIpcHandlerOptions):
   const { getMainWindow, ingestionService, sourceRepository, dialogOps } = options
   const searchService = options.searchService ?? new DocumentSearchService({ sourceRepository })
   const lifecycleService = options.lifecycleService
+  const previewService =
+    options.previewService ??
+    new DocumentPreviewService({
+      sourceRepository,
+      extractedDocumentRepository: (
+        sourceRepository as unknown as {
+          extractedDocRepo: import('../database/repositories/extracted-document-repository').ExtractedDocumentRepository
+        }
+      ).extractedDocRepo
+    })
 
   const assertAuthorizedSender = (event: IpcSenderEventLike): BrowserWindowLike => {
     const mainWindow = getMainWindow()
@@ -264,12 +278,22 @@ export function registerDocumentIpcHandlers(options: DocumentIpcHandlerOptions):
         assertAuthorizedSender(event)
         const payload = validateDocumentIpcPayload(documentPreviewIpcSchema, rawPayload)
 
-        const preview = sourceRepository.getPreview(
-          payload.sourceId,
-          payload.knowledgeBaseId,
-          payload.maxChunks
-        )
-        return preview
+        return await previewService.getPreview(payload)
+      } catch (err) {
+        throw formatDocumentIpcError(err)
+      }
+    }
+  )
+
+  // 3c. Get Document Preservation Report
+  ipcMain.removeHandler(KB_DOCS_IPC_CHANNELS.GET_PRESERVATION_REPORT)
+  ipcMain.handle(
+    KB_DOCS_IPC_CHANNELS.GET_PRESERVATION_REPORT,
+    async (event, rawPayload: unknown): Promise<PreviewPreservationSummaryDto | null> => {
+      try {
+        assertAuthorizedSender(event)
+        const payload = validateDocumentIpcPayload(documentPreservationReportIpcSchema, rawPayload)
+        return await previewService.getPreservationReport(payload.knowledgeBaseId, payload.sourceId)
       } catch (err) {
         throw formatDocumentIpcError(err)
       }

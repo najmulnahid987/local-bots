@@ -105,6 +105,15 @@ export class PdfChunker {
             ? (crossPageBlock.metadata?.pageNumbers as number[])
             : undefined
 
+        const sourceSpans = pendingPageBlocks.map((b) => ({
+          blockId: b.id,
+          startOffset: 0,
+          endOffset: b.text.length,
+          offsetConvention: 'utf16_code_units' as const,
+          isPrimary: true,
+          pageNumber: b.location?.pageNumber ?? currentPageNumber
+        }))
+
         chunks.push({
           chunkIndex: currentIndex++,
           content: text,
@@ -114,6 +123,7 @@ export class PdfChunker {
             format: 'pdf',
             sourceBlockIds: blockIds,
             primaryOrderIndexes: orderIndexes,
+            sourceSpans,
             pageNumber: currentPageNumber,
             ...(pageNumbers ? { pageNumbers, isCrossPage: true } : {}),
             ...(isOcr ? { isOcr: true, ocrConfidence: avgConfidence } : {}),
@@ -181,16 +191,34 @@ export class PdfChunker {
 
             const slices = chunkTextSlice(b.text, chunkTargetTokens, chunkOverlapTokens)
             for (const slice of slices) {
+              const hasOverlap = slice.startIndex > 0 && chunkOverlapTokens > 0
+              const overlapTokens = hasOverlap ? chunkOverlapTokens : undefined
+              const slicePage = b.location?.pageNumber ?? currentPageNumber
+              const sourceSpans = [
+                {
+                  blockId: b.id,
+                  startOffset: slice.startIndex,
+                  endOffset: slice.endIndex,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: true,
+                  isRepeatedOverlap: hasOverlap ? true : undefined,
+                  pageNumber: slicePage
+                }
+              ]
+
               chunks.push({
                 chunkIndex: currentIndex++,
                 content: slice.content,
                 tokenCount: estimateTokenCount(slice.content),
-                pageNumber: b.location?.pageNumber ?? currentPageNumber,
+                pageNumber: slicePage,
                 metadata: {
                   format: 'pdf',
                   sourceBlockIds: [b.id],
                   primaryOrderIndexes: [b.orderIndex],
-                  pageNumber: b.location?.pageNumber ?? currentPageNumber,
+                  sourceSpans,
+                  hasOverlap: hasOverlap || undefined,
+                  overlapTokens,
+                  pageNumber: slicePage,
                   ...(pageNumbers
                     ? { pageNumbers, isCrossPage: true }
                     : isCrossPage

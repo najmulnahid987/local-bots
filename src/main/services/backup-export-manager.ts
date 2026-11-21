@@ -23,6 +23,8 @@ import { BotMemoryRepository } from '../database/repositories/bot-memory-reposit
 import { KnowledgeSourceRepository } from '../database/repositories/knowledge-source-repository'
 import { ConversationRepository } from '../database/repositories/conversation-repository'
 import { MessageRepository } from '../database/repositories/message-repository'
+import { ExtractedDocumentRepository } from '../database/repositories/extracted-document-repository'
+import { DocumentValidationRepository } from '../database/repositories/document-validation-repository'
 import { DocumentStorageManager } from '../documents/document-storage-manager'
 import { SecretScanner, defaultSecretScanner } from './secret-scanner'
 import { ZipArchiveWriter, verifyZipArchive } from './zip-archive'
@@ -47,6 +49,8 @@ export interface BackupExportManagerOptions {
   readonly conversationRepository: ConversationRepository
   readonly messageRepository: MessageRepository
   readonly storageManager: DocumentStorageManager
+  readonly extractedDocumentRepository?: ExtractedDocumentRepository
+  readonly documentValidationRepository?: DocumentValidationRepository
   readonly secretScanner?: SecretScanner
   readonly showSaveDialog?: (options: SaveDialogOptionsLike) => Promise<SaveDialogReturnValueLike>
   readonly appVersion?: string
@@ -85,6 +89,8 @@ export class BackupExportManager {
   private readonly conversationRepository: ConversationRepository
   private readonly messageRepository: MessageRepository
   private readonly storageManager: DocumentStorageManager
+  private readonly extractedDocRepo: ExtractedDocumentRepository
+  private readonly validationRepo?: DocumentValidationRepository
   private readonly secretScanner: SecretScanner
   private readonly showSaveDialog: (
     options: SaveDialogOptionsLike
@@ -100,6 +106,10 @@ export class BackupExportManager {
     this.conversationRepository = options.conversationRepository
     this.messageRepository = options.messageRepository
     this.storageManager = options.storageManager
+    this.extractedDocRepo =
+      options.extractedDocumentRepository ?? new ExtractedDocumentRepository(options.db)
+    this.validationRepo =
+      options.documentValidationRepository ?? new DocumentValidationRepository(options.db)
     this.secretScanner = options.secretScanner ?? defaultSecretScanner
     this.appVersion = options.appVersion ?? '1.0.0'
 
@@ -250,7 +260,47 @@ export class BackupExportManager {
       destinationPath = dialogResult.filePath
     }
 
-    // 5. Build ZIP Archive
+    // 5. Gather Extracted Documents & Preservation Reports for sources
+    let extractedDocsCount = 0
+    let preservationReportsCount = 0
+    const extraDocEntries: Array<{ path: string; data: Buffer }> = []
+
+    const enrichedSourcesData: ExportKnowledgeSourceDto[] = sourcesData.map((src) => {
+      let docHash: string | null = null
+      let preservationStatus: string | null = null
+
+      const extractedDoc = this.extractedDocRepo.get(src.id, knowledgeBaseId)
+      if (extractedDoc) {
+        const docBuf = Buffer.from(JSON.stringify(extractedDoc, null, 2), 'utf8')
+        docHash = sha256Hash(docBuf)
+        extraDocEntries.push({
+          path: `extracted-documents/${src.id}.json`,
+          data: docBuf
+        })
+        extractedDocsCount++
+      }
+
+      if (this.validationRepo) {
+        const report = this.validationRepo.getReport(src.id, knowledgeBaseId)
+        if (report) {
+          const reportBuf = Buffer.from(JSON.stringify(report, null, 2), 'utf8')
+          preservationStatus = report.status
+          extraDocEntries.push({
+            path: `preservation-reports/${src.id}.json`,
+            data: reportBuf
+          })
+          preservationReportsCount++
+        }
+      }
+
+      return {
+        ...src,
+        documentHash: docHash,
+        preservationStatus
+      }
+    })
+
+    // 6. Build ZIP Archive
     const counts: ExportCountsDto = {
       bots: botsData.length,
       memories: memoriesData.length,
@@ -258,6 +308,12 @@ export class BackupExportManager {
       conversations: conversationBundles.length,
       messages: conversationBundles.reduce((acc, c) => acc + c.messages.length, 0),
       totalSourceBytes
+    }
+    if (extractedDocsCount > 0) {
+      ;(counts as { extractedDocuments: number }).extractedDocuments = extractedDocsCount
+    }
+    if (preservationReportsCount > 0) {
+      ;(counts as { preservationReports: number }).preservationReports = preservationReportsCount
     }
 
     const archiveWriter = new ZipArchiveWriter()
@@ -267,7 +323,7 @@ export class BackupExportManager {
     const kbJsonBuffer = Buffer.from(JSON.stringify(kbData, null, 2), 'utf8')
     const botsJsonBuffer = Buffer.from(JSON.stringify(botsData, null, 2), 'utf8')
     const memoriesJsonBuffer = Buffer.from(JSON.stringify(memoriesData, null, 2), 'utf8')
-    const sourcesJsonBuffer = Buffer.from(JSON.stringify(sourcesData, null, 2), 'utf8')
+    const sourcesJsonBuffer = Buffer.from(JSON.stringify(enrichedSourcesData, null, 2), 'utf8')
     const conversationsJsonBuffer = Buffer.from(
       JSON.stringify(conversationBundles, null, 2),
       'utf8'
@@ -278,7 +334,8 @@ export class BackupExportManager {
       { path: 'bots.json', data: botsJsonBuffer },
       { path: 'bot-memories.json', data: memoriesJsonBuffer },
       { path: 'sources.json', data: sourcesJsonBuffer },
-      { path: 'conversations.json', data: conversationsJsonBuffer }
+      { path: 'conversations.json', data: conversationsJsonBuffer },
+      ...extraDocEntries
     ]
 
     for (const jsonEntry of jsonEntries) {

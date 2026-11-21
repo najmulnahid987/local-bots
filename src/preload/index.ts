@@ -50,6 +50,8 @@ import {
   type DocumentImportResultDto,
   type DocumentSearchResultDto,
   type DocumentPreviewDto,
+  type GetPreservationReportRequest,
+  type PreviewPreservationSummaryDto,
   type ReindexDocumentResultDto,
   type DeleteDocumentResultDto,
   KnowledgeDocumentBridgeError,
@@ -604,6 +606,16 @@ export function createKnowledgeDocumentsApi(ipc: typeof ipcRenderer): KnowledgeD
       try {
         const id = typeof request === 'string' ? request : request.id
         return await ipc.invoke(KB_DOCS_IPC_CHANNELS.GET_DELETION_PREVIEW, { id })
+      } catch (err) {
+        throw normalizeKnowledgeDocumentBridgeError(err)
+      }
+    },
+
+    getPreservationReport: async (
+      request: GetPreservationReportRequest
+    ): Promise<PreviewPreservationSummaryDto | null> => {
+      try {
+        return await ipc.invoke(KB_DOCS_IPC_CHANNELS.GET_PRESERVATION_REPORT, request)
       } catch (err) {
         throw normalizeKnowledgeDocumentBridgeError(err)
       }

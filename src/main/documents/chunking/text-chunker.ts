@@ -91,6 +91,14 @@ export class TextChunker {
         const firstLoc = currentAccumulation[0].location
         const lastLoc = currentAccumulation[currentAccumulation.length - 1].location
 
+        const sourceSpans = currentAccumulation.map((b) => ({
+          blockId: b.id,
+          startOffset: 0,
+          endOffset: b.text.length,
+          offsetConvention: 'utf16_code_units' as const,
+          isPrimary: true
+        }))
+
         chunks.push({
           chunkIndex: currentIndex++,
           content: text,
@@ -100,6 +108,7 @@ export class TextChunker {
             format: 'txt',
             sourceBlockIds: blockIds,
             primaryOrderIndexes: orderIndexes,
+            sourceSpans,
             contentRole: 'body',
             chunkingStrategy: 'format-aware-universal-v1',
             sourceLocation: firstLoc
@@ -142,6 +151,19 @@ export class TextChunker {
             // Split the oversized paragraph at safe semantic boundaries
             const slices = chunkTextSlice(b.text, chunkTargetTokens, chunkOverlapTokens)
             for (const slice of slices) {
+              const hasOverlap = slice.startIndex > 0 && chunkOverlapTokens > 0
+              const overlapTokens = hasOverlap ? chunkOverlapTokens : undefined
+              const sourceSpans = [
+                {
+                  blockId: b.id,
+                  startOffset: slice.startIndex,
+                  endOffset: slice.endIndex,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: true,
+                  isRepeatedOverlap: hasOverlap ? true : undefined
+                }
+              ]
+
               chunks.push({
                 chunkIndex: currentIndex++,
                 content: slice.content,
@@ -151,6 +173,9 @@ export class TextChunker {
                   format: 'txt',
                   sourceBlockIds: [b.id],
                   primaryOrderIndexes: [b.orderIndex],
+                  sourceSpans,
+                  hasOverlap: hasOverlap || undefined,
+                  overlapTokens,
                   contentRole: 'body',
                   isOversized: true,
                   startIndex: slice.startIndex,
@@ -222,6 +247,15 @@ export class TextChunker {
               format: 'txt',
               sourceBlockIds: [b.id],
               primaryOrderIndexes: [b.orderIndex],
+              sourceSpans: [
+                {
+                  blockId: b.id,
+                  startOffset: 0,
+                  endOffset: tableText.length,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: true
+                }
+              ],
               contentRole: 'table',
               hasTable: true,
               chunkingStrategy: 'format-aware-universal-v1',
@@ -241,6 +275,15 @@ export class TextChunker {
               format: 'txt',
               sourceBlockIds: [b.id],
               primaryOrderIndexes: [b.orderIndex],
+              sourceSpans: [
+                {
+                  blockId: b.id,
+                  startOffset: 0,
+                  endOffset: b.text.length,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: true
+                }
+              ],
               contentRole: 'code',
               chunkingStrategy: 'format-aware-universal-v1',
               sourceLocation: b.location

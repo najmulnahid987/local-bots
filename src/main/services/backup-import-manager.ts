@@ -35,6 +35,8 @@ import { ConversationRepository } from '../database/repositories/conversation-re
 import { MessageRepository } from '../database/repositories/message-repository'
 import { DocumentStorageManager } from '../documents/document-storage-manager'
 import type { DocumentLifecycleService } from '../documents/lifecycle/document-lifecycle-service'
+import { universalDocumentSchema } from '../documents/model/schema'
+import { documentPreservationReportSchema } from '../documents/validation/types'
 import { ArchiveExtractor, type StagedDocumentFile } from './archive-extractor'
 import { SecretScanner, defaultSecretScanner } from './secret-scanner'
 import type { ImportRecoveryService } from './import-recovery-service'
@@ -82,6 +84,8 @@ interface StagedImportSession {
   readonly sourcesData: ExportKnowledgeSourceDto[]
   readonly conversationBundles: ExportConversationBundleDto[]
   readonly stagedDocuments: Map<string, StagedDocumentFile>
+  readonly stagedExtractedDocuments?: Map<string, string>
+  readonly stagedPreservationReports?: Map<string, string>
   readonly createdAt: number
 }
 
@@ -237,9 +241,13 @@ export class BackupImportManager {
         )
       }
 
-      if (manifest.schemaVersion !== EXPORT_ARCHIVE_SCHEMA_VERSION) {
+      if (
+        manifest.schemaVersion !== '1.0.0' &&
+        manifest.schemaVersion !== '1.1.0' &&
+        manifest.schemaVersion !== EXPORT_ARCHIVE_SCHEMA_VERSION
+      ) {
         throw new Error(
-          `Unsupported archive schema version: '${manifest.schemaVersion}'. Expected '${EXPORT_ARCHIVE_SCHEMA_VERSION}'.`
+          `Unsupported archive schema version: '${manifest.schemaVersion}'. Expected '1.0.0' or '1.1.0'.`
         )
       }
 
@@ -328,6 +336,8 @@ export class BackupImportManager {
         sourcesData,
         conversationBundles,
         stagedDocuments,
+        stagedExtractedDocuments: bundle.stagedExtractedDocuments,
+        stagedPreservationReports: bundle.stagedPreservationReports,
         createdAt: Date.now()
       }
       this.sessions.set(sessionId, session)
@@ -648,6 +658,18 @@ export class BackupImportManager {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, NULL)
         `)
 
+        const insertExtractedDocStmt = this.db.prepare(`
+          INSERT INTO knowledge_extracted_documents (
+            source_id, schema_version, document_json, document_hash, document_size_bytes, block_count, created_at, updated_at
+          ) VALUES (?, 1, ?, ?, ?, ?, ?, ?)
+        `)
+
+        const insertValidationReportStmt = this.db.prepare(`
+          INSERT INTO knowledge_document_validation (
+            source_id, schema_version, status, extraction_status, chunk_coverage_status, report_json, report_hash, created_at, updated_at
+          ) VALUES (?, '1.0.0', ?, ?, ?, ?, ?, ?, ?)
+        `)
+
         for (const source of session.sourcesData) {
           const newSourceId = sourceIdMap.get(source.id)!
           insertSourceStmt.run(
@@ -663,6 +685,64 @@ export class BackupImportManager {
             now,
             now
           )
+
+          // Restore extracted document if bundled
+          const stagedDocPath = session.stagedExtractedDocuments?.get(source.id)
+          if (stagedDocPath && fs.existsSync(stagedDocPath)) {
+            try {
+              const rawJson = fs.readFileSync(stagedDocPath, 'utf8')
+              const parsedDoc = universalDocumentSchema.parse(JSON.parse(rawJson))
+              const updatedDoc = {
+                ...parsedDoc,
+                id: newSourceId,
+                sourceInfo: {
+                  ...parsedDoc.sourceInfo,
+                  sourceId: newSourceId,
+                  knowledgeBaseId: finalKnowledgeBaseId
+                }
+              }
+              const serializedJson = JSON.stringify(updatedDoc)
+              const hash = crypto.createHash('sha256').update(serializedJson).digest('hex')
+              insertExtractedDocStmt.run(
+                newSourceId,
+                serializedJson,
+                hash,
+                Buffer.byteLength(serializedJson, 'utf8'),
+                updatedDoc.blocks.length,
+                now,
+                now
+              )
+            } catch (docErr) {
+              console.warn(`Failed to restore extracted document for source ${source.id}:`, docErr)
+            }
+          }
+
+          // Restore preservation report if bundled
+          const stagedReportPath = session.stagedPreservationReports?.get(source.id)
+          if (stagedReportPath && fs.existsSync(stagedReportPath)) {
+            try {
+              const rawJson = fs.readFileSync(stagedReportPath, 'utf8')
+              const parsedReport = documentPreservationReportSchema.parse(JSON.parse(rawJson))
+              const updatedReport = {
+                ...parsedReport,
+                sourceId: newSourceId
+              }
+              const serializedJson = JSON.stringify(updatedReport)
+              const hash = crypto.createHash('sha256').update(serializedJson).digest('hex')
+              insertValidationReportStmt.run(
+                newSourceId,
+                updatedReport.status,
+                updatedReport.extractionStatus,
+                updatedReport.chunkCoverageStatus,
+                serializedJson,
+                hash,
+                now,
+                now
+              )
+            } catch (repErr) {
+              console.warn(`Failed to restore preservation report for source ${source.id}:`, repErr)
+            }
+          }
         }
 
         // 5. Insert Conversations and Messages

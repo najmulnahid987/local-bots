@@ -740,3 +740,58 @@ export interface ExtractedDocumentVerificationResult {
   readonly computed_block_count?: number
   readonly errors: string[]
 }
+
+/**
+ * Domain entity representing a persistent knowledge document preservation validation record.
+ */
+export interface DocumentValidationRecord {
+  readonly source_id: string
+  readonly schema_version: string
+  readonly status: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly extraction_status: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly chunk_coverage_status: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly report_json: string
+  readonly report_hash: string
+  readonly created_at: number
+  readonly updated_at: number
+}
+
+/**
+ * Caller input for creating or updating a document validation record.
+ */
+export interface CreateDocumentValidationInput {
+  readonly source_id: string
+  readonly schema_version?: string
+  readonly status: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly extraction_status: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly chunk_coverage_status: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly report_json: string
+  readonly report_hash: string
+  readonly created_at?: number
+  readonly updated_at?: number
+}
+
+export const createDocumentValidationSchema = z.object({
+  source_id: z.string().uuid({ message: 'source_id must be a valid RFC 4122 UUIDv4.' }),
+  schema_version: z.string().default('1.0.0'),
+  status: z.enum(['complete', 'partial', 'unknown', 'failed']),
+  extraction_status: z.enum(['complete', 'partial', 'unknown', 'failed']),
+  chunk_coverage_status: z.enum(['complete', 'partial', 'unknown', 'failed']),
+  report_json: z.string().min(1, { message: 'report_json cannot be empty.' }),
+  report_hash: z
+    .string()
+    .length(64, { message: 'report_hash must be a 64-character SHA-256 hex string.' }),
+  created_at: z.number().int().positive().optional(),
+  updated_at: z.number().int().positive().optional()
+})
+
+/**
+ * Verification result emitted by DocumentValidationRepository.verifyReport().
+ */
+export interface DocumentValidationVerificationResult {
+  readonly valid: boolean
+  readonly sourceId: string
+  readonly expectedHash?: string
+  readonly computedHash?: string
+  readonly reasons: readonly string[]
+}

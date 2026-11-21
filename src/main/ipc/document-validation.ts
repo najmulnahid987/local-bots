@@ -7,7 +7,8 @@ import {
   getDocumentPreviewRequestSchema,
   searchKnowledgeDocumentsRequestSchema,
   reindexDocumentRequestSchema,
-  deleteDocumentRequestSchema
+  deleteDocumentRequestSchema,
+  getPreservationReportRequestSchema
 } from '../../shared/knowledge-documents'
 import type { KnowledgeSourceWithChunkCount } from '../database/repositories/types'
 
@@ -32,6 +33,8 @@ export const documentListIpcSchema = listKnowledgeDocumentsRequestSchema
 export const documentGetIpcSchema = getKnowledgeDocumentRequestSchema
 
 export const documentPreviewIpcSchema = getDocumentPreviewRequestSchema
+
+export const documentPreservationReportIpcSchema = getPreservationReportRequestSchema
 
 export const documentSearchIpcSchema = searchKnowledgeDocumentsRequestSchema
 

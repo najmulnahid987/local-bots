@@ -50,7 +50,8 @@ export const KB_DOCS_IPC_CHANNELS = {
   SEARCH: 'kb:docs:search',
   REINDEX: 'kb:docs:reindex',
   DELETE: 'kb:docs:delete',
-  GET_DELETION_PREVIEW: 'kb:docs:get-deletion-preview'
+  GET_DELETION_PREVIEW: 'kb:docs:get-deletion-preview',
+  GET_PRESERVATION_REPORT: 'kb:docs:get-preservation-report'
 } as const
 
 export type KbDocsIpcChannel = (typeof KB_DOCS_IPC_CHANNELS)[keyof typeof KB_DOCS_IPC_CHANNELS]

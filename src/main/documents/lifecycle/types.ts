@@ -7,11 +7,13 @@ import type {
 } from '../../../shared/knowledge-documents'
 import type { KnowledgeSourceRepository } from '../../database/repositories/knowledge-source-repository'
 import type { ExtractedDocumentRepository } from '../../database/repositories/extracted-document-repository'
+import type { DocumentValidationRepository } from '../../database/repositories/document-validation-repository'
 import type { DocumentStorageManager } from '../document-storage-manager'
 import type { ExtractorRegistry } from '../extractors/registry'
 import type { DocumentExtractionService } from '../extraction'
 import type { SemanticChunker, UniversalDocumentChunker } from '../chunking'
 import type { DocumentSettingsProvider } from '../document-settings'
+import type { PreservationValidator } from '../validation'
 
 export type {
   ReindexDocumentRequest,
@@ -34,4 +36,6 @@ export interface DocumentLifecycleServiceOptions {
   readonly universalChunker?: UniversalDocumentChunker
   readonly settingsProvider?: DocumentSettingsProvider
   readonly extractedDocumentRepository?: ExtractedDocumentRepository
+  readonly validationRepository?: DocumentValidationRepository
+  readonly preservationValidator?: PreservationValidator
 }

@@ -123,7 +123,8 @@ export class ContextBudgetEvaluator {
       botId: bot.id,
       query: 'BUDGET-TARGET-TEST',
       topK: 5,
-      maxContextTokens: 400
+      maxContextTokens: 400,
+      allowTruncation: true
     })
 
     const selectedChunks = budget400Result.chunks
@@ -155,7 +156,8 @@ export class ContextBudgetEvaluator {
       botId: bot.id,
       query: 'BUDGET-TARGET-TEST',
       topK: 5,
-      maxContextTokens: 200
+      maxContextTokens: 200,
+      allowTruncation: true
     })
 
     observations.push({

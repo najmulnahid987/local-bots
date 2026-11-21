@@ -102,6 +102,14 @@ export class DocxChunker {
         const orderIndexes = pendingBodyBlocks.map((b) => b.orderIndex)
         const path = headingTracker.getHeadingPath()
 
+        const sourceSpans = pendingBodyBlocks.map((b) => ({
+          blockId: b.id,
+          startOffset: 0,
+          endOffset: b.text.length,
+          offsetConvention: 'utf16_code_units' as const,
+          isPrimary: true
+        }))
+
         chunks.push({
           chunkIndex: currentIndex++,
           content: fullText,
@@ -111,6 +119,7 @@ export class DocxChunker {
             format: 'docx',
             sourceBlockIds: blockIds,
             primaryOrderIndexes: orderIndexes,
+            sourceSpans,
             contentRole: 'body',
             heading: headingTracker.getCurrentHeading() ?? null,
             headingLevel: headingTracker.getCurrentLevel() ?? null,
@@ -172,6 +181,19 @@ export class DocxChunker {
       }
 
       const tokenCount = estimateTokenCount(formattedText)
+      const stringNoteId =
+        typeof noteId === 'string'
+          ? noteId
+          : typeof noteId === 'number'
+            ? String(noteId)
+            : undefined
+      const stringCommentId =
+        typeof block.metadata?.commentId === 'string'
+          ? block.metadata.commentId
+          : typeof block.metadata?.commentId === 'number'
+            ? String(block.metadata.commentId)
+            : undefined
+
       chunks.push({
         chunkIndex: currentIndex++,
         content: formattedText,
@@ -181,14 +203,20 @@ export class DocxChunker {
           format: 'docx',
           sourceBlockIds: [block.id],
           primaryOrderIndexes: [block.orderIndex],
+          sourceSpans: [
+            {
+              blockId: block.id,
+              startOffset: 0,
+              endOffset: formattedText.length,
+              offsetConvention: 'utf16_code_units' as const,
+              isPrimary: true,
+              noteId: stringNoteId,
+              commentId: stringCommentId
+            }
+          ],
           contentRole: role,
           isAncillary: true,
-          noteId:
-            typeof noteId === 'string'
-              ? noteId
-              : typeof noteId === 'number'
-                ? String(noteId)
-                : undefined,
+          noteId: stringNoteId,
           author: typeof block.metadata?.author === 'string' ? block.metadata.author : undefined,
           date: typeof block.metadata?.date === 'string' ? block.metadata.date : undefined,
           anchorText:
@@ -246,6 +274,16 @@ export class DocxChunker {
             format: 'docx',
             sourceBlockIds: [table.id],
             primaryOrderIndexes: [table.orderIndex],
+            sourceSpans: [
+              {
+                blockId: table.id,
+                startOffset: 0,
+                endOffset: fullTableText.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: true,
+                rowIndex: 0
+              }
+            ],
             contentRole: 'table',
             hasTable: true,
             rowStart: 0,
@@ -276,6 +314,7 @@ export class DocxChunker {
           const batchTableText = [tableHeaderPrefix, ...currentRowBatch].filter(Boolean).join('\n')
           const chunkContent = prefix ? `${prefix}${batchTableText}` : batchTableText
           const path = headingTracker.getHeadingPath()
+          const hasOverlap = batchStartRow > 0 && tableHeaderTokens > 0
 
           chunks.push({
             chunkIndex: currentIndex++,
@@ -286,6 +325,19 @@ export class DocxChunker {
               format: 'docx',
               sourceBlockIds: [table.id],
               primaryOrderIndexes: [table.orderIndex],
+              sourceSpans: [
+                {
+                  blockId: table.id,
+                  startOffset: 0,
+                  endOffset: batchTableText.length,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: true,
+                  isRepeatedOverlap: hasOverlap ? true : undefined,
+                  rowIndex: batchStartRow
+                }
+              ],
+              hasOverlap: hasOverlap || undefined,
+              overlapTokens: hasOverlap ? tableHeaderTokens : undefined,
               contentRole: 'table',
               hasTable: true,
               rowStart: batchStartRow,
@@ -315,6 +367,7 @@ export class DocxChunker {
         const batchTableText = [tableHeaderPrefix, ...currentRowBatch].filter(Boolean).join('\n')
         const chunkContent = prefix ? `${prefix}${batchTableText}` : batchTableText
         const path = headingTracker.getHeadingPath()
+        const hasOverlap = batchStartRow > 0 && tableHeaderTokens > 0
 
         chunks.push({
           chunkIndex: currentIndex++,
@@ -325,6 +378,19 @@ export class DocxChunker {
             format: 'docx',
             sourceBlockIds: [table.id],
             primaryOrderIndexes: [table.orderIndex],
+            sourceSpans: [
+              {
+                blockId: table.id,
+                startOffset: 0,
+                endOffset: batchTableText.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: true,
+                isRepeatedOverlap: hasOverlap ? true : undefined,
+                rowIndex: batchStartRow
+              }
+            ],
+            hasOverlap: hasOverlap || undefined,
+            overlapTokens: hasOverlap ? tableHeaderTokens : undefined,
             contentRole: 'table',
             hasTable: true,
             rowStart: batchStartRow,
@@ -521,6 +587,8 @@ export class DocxChunker {
             for (const slice of slices) {
               const fullContent = prefix ? `${prefix}${slice.content}` : slice.content
               const path = headingTracker.getHeadingPath()
+              const hasOverlap = slice.startIndex > 0 && chunkOverlapTokens > 0
+              const overlapTokens = hasOverlap ? chunkOverlapTokens : undefined
 
               chunks.push({
                 chunkIndex: currentIndex++,
@@ -531,6 +599,18 @@ export class DocxChunker {
                   format: 'docx',
                   sourceBlockIds: [b.id],
                   primaryOrderIndexes: [b.orderIndex],
+                  sourceSpans: [
+                    {
+                      blockId: b.id,
+                      startOffset: slice.startIndex,
+                      endOffset: slice.endIndex,
+                      offsetConvention: 'utf16_code_units' as const,
+                      isPrimary: true,
+                      isRepeatedOverlap: hasOverlap ? true : undefined
+                    }
+                  ],
+                  hasOverlap: hasOverlap || undefined,
+                  overlapTokens,
                   contentRole: 'body',
                   isOversized: true,
                   startIndex: slice.startIndex,

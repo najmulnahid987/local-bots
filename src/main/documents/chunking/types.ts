@@ -115,12 +115,37 @@ export interface UniversalChunkingOptions {
 }
 
 /**
+ * Exact source-span provenance tracking character offsets and structural coordinates
+ * within a source block.
+ */
+export interface StructuredSourceSpan {
+  readonly blockId: string
+  readonly startOffset: number
+  readonly endOffset: number
+  readonly offsetConvention: 'utf16_code_units' | 'unicode_code_points'
+  readonly isPrimary: boolean
+  readonly isRepeatedOverlap?: boolean
+  readonly pageNumber?: number
+  readonly sheetName?: string
+  readonly rowIndex?: number
+  readonly columnIndex?: number
+  readonly cellCoordinate?: string
+  readonly slideNumber?: number
+  readonly listItemIndex?: number
+  readonly noteId?: string
+  readonly commentId?: string
+}
+
+/**
  * Well-defined structural properties persisted in DocumentChunk.metadata.
  */
 export interface StructuredChunkMetadata extends Record<string, unknown> {
   readonly format?: SupportedDocumentFormat | string
   readonly sourceBlockIds?: readonly string[]
   readonly primaryOrderIndexes?: readonly number[]
+  readonly sourceSpans?: readonly StructuredSourceSpan[]
+  readonly hasOverlap?: boolean
+  readonly overlapTokens?: number
   readonly heading?: string | null
   readonly headingLevel?: number | null
   readonly headingPath?: readonly string[] | null

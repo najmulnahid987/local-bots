@@ -184,6 +184,8 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
       expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.SELECT_AND_IMPORT)).toBe(true)
       expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.LIST)).toBe(true)
       expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.GET)).toBe(true)
+      expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.PREVIEW)).toBe(true)
+      expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.GET_PRESERVATION_REPORT)).toBe(true)
       expect(mockIpcHandlers.has(KB_DOCS_IPC_CHANNELS.SEARCH)).toBe(true)
     })
 
@@ -649,6 +651,25 @@ describe('Phase 5 Step 5.8: Secure Document Management API and IPC Integration',
       }
 
       const handler = mockIpcHandlers.get(KB_DOCS_IPC_CHANNELS.PREVIEW)!
+      await expect(
+        handler(untrustedEvent, {
+          knowledgeBaseId: defaultKbId,
+          sourceId: randomUUID()
+        })
+      ).rejects.toThrow(/UNAUTHORIZED_SENDER/)
+    })
+
+    it('rejects preservation report requests from untrusted sender frame', async () => {
+      const untrustedFrame = {
+        url: `${devOrigin}/malicious.html`
+      } as unknown as WebFrameMainLike
+
+      const untrustedEvent: IpcSenderEventLike = {
+        sender: mockWebContents,
+        senderFrame: untrustedFrame
+      }
+
+      const handler = mockIpcHandlers.get(KB_DOCS_IPC_CHANNELS.GET_PRESERVATION_REPORT)!
       await expect(
         handler(untrustedEvent, {
           knowledgeBaseId: defaultKbId,

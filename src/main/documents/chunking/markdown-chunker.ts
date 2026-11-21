@@ -102,6 +102,14 @@ export class MarkdownChunker {
         const orderIndexes = pendingBlocks.map((b) => b.orderIndex)
         const path = headingTracker.getHeadingPath()
 
+        const sourceSpans = pendingBlocks.map((b) => ({
+          blockId: b.id,
+          startOffset: 0,
+          endOffset: b.text.length,
+          offsetConvention: 'utf16_code_units' as const,
+          isPrimary: true
+        }))
+
         chunks.push({
           chunkIndex: currentIndex++,
           content: fullText,
@@ -111,6 +119,7 @@ export class MarkdownChunker {
             format: 'md',
             sourceBlockIds: blockIds,
             primaryOrderIndexes: orderIndexes,
+            sourceSpans,
             contentRole: 'body',
             heading: headingTracker.getCurrentHeading() ?? null,
             headingLevel: headingTracker.getCurrentLevel() ?? null,
@@ -175,6 +184,16 @@ export class MarkdownChunker {
             format: 'md',
             sourceBlockIds: [table.id],
             primaryOrderIndexes: [table.orderIndex],
+            sourceSpans: [
+              {
+                blockId: table.id,
+                startOffset: 0,
+                endOffset: fullTableText.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: true,
+                rowIndex: 0
+              }
+            ],
             contentRole: 'table',
             hasTable: true,
             rowStart: 0,
@@ -206,6 +225,7 @@ export class MarkdownChunker {
           const batchTableText = [tableHeaderPrefix, ...currentRowBatch].filter(Boolean).join('\n')
           const chunkContent = prefix ? `${prefix}${batchTableText}` : batchTableText
           const path = headingTracker.getHeadingPath()
+          const hasOverlap = batchStartRow > 0 && tableHeaderTokens > 0
 
           chunks.push({
             chunkIndex: currentIndex++,
@@ -216,6 +236,19 @@ export class MarkdownChunker {
               format: 'md',
               sourceBlockIds: [table.id],
               primaryOrderIndexes: [table.orderIndex],
+              sourceSpans: [
+                {
+                  blockId: table.id,
+                  startOffset: 0,
+                  endOffset: batchTableText.length,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: true,
+                  isRepeatedOverlap: hasOverlap ? true : undefined,
+                  rowIndex: batchStartRow
+                }
+              ],
+              hasOverlap: hasOverlap || undefined,
+              overlapTokens: hasOverlap ? tableHeaderTokens : undefined,
               contentRole: 'table',
               hasTable: true,
               rowStart: batchStartRow,
@@ -245,6 +278,7 @@ export class MarkdownChunker {
         const batchTableText = [tableHeaderPrefix, ...currentRowBatch].filter(Boolean).join('\n')
         const chunkContent = prefix ? `${prefix}${batchTableText}` : batchTableText
         const path = headingTracker.getHeadingPath()
+        const hasOverlap = batchStartRow > 0 && tableHeaderTokens > 0
 
         chunks.push({
           chunkIndex: currentIndex++,
@@ -255,6 +289,19 @@ export class MarkdownChunker {
             format: 'md',
             sourceBlockIds: [table.id],
             primaryOrderIndexes: [table.orderIndex],
+            sourceSpans: [
+              {
+                blockId: table.id,
+                startOffset: 0,
+                endOffset: batchTableText.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: true,
+                isRepeatedOverlap: hasOverlap ? true : undefined,
+                rowIndex: batchStartRow
+              }
+            ],
+            hasOverlap: hasOverlap || undefined,
+            overlapTokens: hasOverlap ? tableHeaderTokens : undefined,
             contentRole: 'table',
             hasTable: true,
             rowStart: batchStartRow,
@@ -326,6 +373,16 @@ export class MarkdownChunker {
               format: 'md',
               sourceBlockIds: [list.id],
               primaryOrderIndexes: [list.orderIndex],
+              sourceSpans: [
+                {
+                  blockId: list.id,
+                  startOffset: 0,
+                  endOffset: content.length,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: true,
+                  listItemIndex: batchStartIdx
+                }
+              ],
               contentRole: 'list',
               itemStart: batchStartIdx,
               itemEnd: i - 1,
@@ -364,6 +421,16 @@ export class MarkdownChunker {
             format: 'md',
             sourceBlockIds: [list.id],
             primaryOrderIndexes: [list.orderIndex],
+            sourceSpans: [
+              {
+                blockId: list.id,
+                startOffset: 0,
+                endOffset: content.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: true,
+                listItemIndex: batchStartIdx
+              }
+            ],
             contentRole: 'list',
             itemStart: batchStartIdx,
             itemEnd: formattedItems.length - 1,
@@ -400,6 +467,15 @@ export class MarkdownChunker {
             format: 'md',
             sourceBlockIds: [code.id],
             primaryOrderIndexes: [code.orderIndex],
+            sourceSpans: [
+              {
+                blockId: code.id,
+                startOffset: 0,
+                endOffset: code.text.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: true
+              }
+            ],
             contentRole: 'code',
             language: lang || undefined,
             heading: headingTracker.getCurrentHeading() ?? null,
@@ -436,6 +512,15 @@ export class MarkdownChunker {
               format: 'md',
               sourceBlockIds: [code.id],
               primaryOrderIndexes: [code.orderIndex],
+              sourceSpans: [
+                {
+                  blockId: code.id,
+                  startOffset: 0,
+                  endOffset: content.length,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: true
+                }
+              ],
               contentRole: 'code',
               language: lang || undefined,
               isOversized: true,
@@ -472,6 +557,15 @@ export class MarkdownChunker {
             format: 'md',
             sourceBlockIds: [code.id],
             primaryOrderIndexes: [code.orderIndex],
+            sourceSpans: [
+              {
+                blockId: code.id,
+                startOffset: 0,
+                endOffset: content.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: true
+              }
+            ],
             contentRole: 'code',
             language: lang || undefined,
             isOversized: true,
@@ -539,6 +633,8 @@ export class MarkdownChunker {
             for (const slice of slices) {
               const fullContent = prefix ? `${prefix}${slice.content}` : slice.content
               const path = headingTracker.getHeadingPath()
+              const hasOverlap = slice.startIndex > 0 && chunkOverlapTokens > 0
+              const overlapTokens = hasOverlap ? chunkOverlapTokens : undefined
 
               chunks.push({
                 chunkIndex: currentIndex++,
@@ -549,6 +645,18 @@ export class MarkdownChunker {
                   format: 'md',
                   sourceBlockIds: [b.id],
                   primaryOrderIndexes: [b.orderIndex],
+                  sourceSpans: [
+                    {
+                      blockId: b.id,
+                      startOffset: slice.startIndex,
+                      endOffset: slice.endIndex,
+                      offsetConvention: 'utf16_code_units' as const,
+                      isPrimary: true,
+                      isRepeatedOverlap: hasOverlap ? true : undefined
+                    }
+                  ],
+                  hasOverlap: hasOverlap || undefined,
+                  overlapTokens,
                   contentRole: 'body',
                   isOversized: true,
                   startIndex: slice.startIndex,

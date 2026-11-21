@@ -145,6 +145,9 @@ export interface KnowledgeDocumentApi {
   getDeletionPreview?(
     request: { id: string } | string
   ): Promise<import('./deletion').DeletionPreviewDto>
+  getPreservationReport?(
+    request: GetPreservationReportRequest
+  ): Promise<PreviewPreservationSummaryDto | null>
 }
 
 /**
@@ -250,6 +253,7 @@ export interface ReindexDocumentResultDto {
   readonly totalChunks: number
   readonly totalTokens: number
   readonly chunkerVersion: string
+  readonly preservationReport?: unknown
 }
 
 /**
@@ -295,6 +299,68 @@ export interface DocumentPreviewChunkDto {
 }
 
 /**
+ * Public, renderer-safe Data Transfer Object representing a discrete extracted block.
+ */
+export interface PreviewBlockDto {
+  readonly id: string
+  readonly type: string
+  readonly orderIndex: number
+  readonly text: string
+  readonly location?: {
+    readonly lineStart?: number
+    readonly lineEnd?: number
+    readonly columnStart?: number
+    readonly columnEnd?: number
+    readonly pageNumber?: number
+    readonly paragraphIndex?: number
+    readonly headingContext?: string
+    readonly sheetName?: string
+    readonly sheetIndex?: number
+    readonly rowNumber?: number
+    readonly columnNumber?: number
+    readonly cellCoordinate?: string
+    readonly slideNumber?: number
+    readonly shapeIndex?: number
+    readonly slideTitle?: string
+  }
+  readonly metadata?: Readonly<Record<string, unknown>>
+  readonly level?: number
+  readonly language?: string
+  readonly headers?: readonly string[]
+  readonly rows?: ReadonlyArray<readonly string[]>
+  readonly sheetName?: string
+  readonly sheetIndex?: number
+  readonly slideNumber?: number
+  readonly slideTitle?: string
+}
+
+/**
+ * Public, renderer-safe Data Transfer Object representing preservation summary.
+ */
+export interface PreviewPreservationSummaryDto {
+  readonly status: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly extractionStatus: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly textualFidelity?: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly structuralFidelity?: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly chunkCoverageStatus: 'complete' | 'partial' | 'unknown' | 'failed'
+  readonly totalElements: number
+  readonly elementCountsByType: Readonly<Record<string, number>>
+  readonly dispositionCounts: Readonly<Record<string, number>>
+  readonly coveredBlocks: number
+  readonly totalBlocks: number
+  readonly coverageRatio: number
+  readonly warnings: readonly string[]
+  readonly errors: readonly string[]
+  readonly measurementLimitations: readonly string[]
+  readonly versions: {
+    readonly extractorVersion?: string
+    readonly chunkerVersion: string
+    readonly validatorVersion: string
+  }
+  readonly timestamp: number
+}
+
+/**
  * Public, renderer-safe Data Transfer Object representing a bounded document preview.
  * Excludes internal storage paths, raw database handles, and provider secrets.
  */
@@ -307,6 +373,13 @@ export interface DocumentPreviewDto {
   readonly status: KnowledgeDocumentStatus
   readonly totalChunks: number
   readonly chunks: readonly DocumentPreviewChunkDto[]
+  readonly totalBlocks?: number
+  readonly blocks?: readonly PreviewBlockDto[]
+  readonly preservationReport?: PreviewPreservationSummaryDto | null
+  readonly warnings?: ReadonlyArray<{ readonly code: string; readonly message: string }>
+  readonly isBounded?: boolean
+  readonly offset?: number
+  readonly limit?: number
 }
 
 /**
@@ -316,12 +389,31 @@ export interface GetDocumentPreviewRequest {
   readonly knowledgeBaseId: string
   readonly sourceId: string
   readonly maxChunks?: number
+  readonly offset?: number
+  readonly limit?: number
 }
 
 export const getDocumentPreviewRequestSchema = z
   .object({
     knowledgeBaseId: knowledgeBaseIdSchema,
     sourceId: sourceIdSchema,
-    maxChunks: z.number().int().min(1).max(10).optional().default(3)
+    maxChunks: z.number().int().min(1).max(50).optional().default(10),
+    offset: z.number().int().min(0).optional().default(0),
+    limit: z.number().int().min(1).max(500).optional().default(200)
+  })
+  .strict()
+
+/**
+ * Caller input for retrieving a preservation report for a document.
+ */
+export interface GetPreservationReportRequest {
+  readonly knowledgeBaseId: string
+  readonly sourceId: string
+}
+
+export const getPreservationReportRequestSchema = z
+  .object({
+    knowledgeBaseId: knowledgeBaseIdSchema,
+    sourceId: sourceIdSchema
   })
   .strict()

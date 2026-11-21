@@ -9,6 +9,7 @@ import xlsxPersistenceSupportSql from './007_xlsx_persistence_support.sql?raw'
 import pptxPersistenceSupportSql from './008_pptx_persistence_support.sql?raw'
 import extractedDocumentPersistenceSql from './009_extracted_document_persistence.sql?raw'
 import csvPersistenceSupportSql from './010_csv_persistence_support.sql?raw'
+import createDocumentValidationSql from './011_create_document_validation.sql?raw'
 
 export * from './types'
 export * from './runner'
@@ -26,6 +27,7 @@ export * from './runner'
  * Migration 008 evolves knowledge_sources.file_type to permit 'pptx' persistence.
  * Migration 009 establishes knowledge_extracted_documents for canonical UniversalDocument persistence.
  * Migration 010 evolves knowledge_sources.file_type to permit 'csv' persistence.
+ * Migration 011 establishes knowledge_document_validation for preservation validation persistence.
  */
 export const migrations: readonly Migration[] = [
   {
@@ -82,5 +84,10 @@ export const migrations: readonly Migration[] = [
     name: 'csv_persistence_support',
     sql: csvPersistenceSupportSql,
     disableForeignKeysForTableRebuild: true
+  },
+  {
+    version: 11,
+    name: 'create_document_validation',
+    sql: createDocumentValidationSql
   }
 ]

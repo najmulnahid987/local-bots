@@ -5,6 +5,7 @@ import type {
   ChunkingResult,
   DocumentChunk,
   NonSearchableBlockDisposition,
+  StructuredSourceSpan,
   UniversalChunkingOptions
 } from './types'
 import { estimateTokenCount } from './chunking-utils'
@@ -217,8 +218,10 @@ export class SpreadsheetChunker {
           })
         },
         table: (t: UniversalTableBlock) => {
-          const sheetName = t.sheetName ?? currentSheetName
-          const sheetIndex = t.sheetIndex ?? currentSheetIndex
+          const sheetName =
+            t.sheetName ?? (t.metadata?.sheetName as string | undefined) ?? currentSheetName
+          const sheetIndex =
+            t.sheetIndex ?? (t.metadata?.sheetIndex as number | undefined) ?? currentSheetIndex
 
           // Build parsed row models
           const parsedRows: ParsedSpreadsheetRow[] = []
@@ -422,6 +425,31 @@ export class SpreadsheetChunker {
 
               const finalContent = `${contextLines.join('\n')}\n\n${chunkBodyLines.join('\n')}`
               const finalTokens = estimateTokenCount(finalContent)
+              const hasOverlap = Boolean(isSubsequentChunk && tableHeaderPrefix)
+              const overlapTokens = hasOverlap ? estimateTokenCount(tableHeaderPrefix) : undefined
+
+              const sourceSpans: StructuredSourceSpan[] = chunkRows.map((r) => ({
+                blockId: t.id,
+                startOffset: 0,
+                endOffset: r.rawText.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: true,
+                sheetName,
+                rowIndex: r.rowNumber
+              }))
+
+              if (hasOverlap && headerRow) {
+                sourceSpans.unshift({
+                  blockId: t.id,
+                  startOffset: 0,
+                  endOffset: headerRow.rawText.length,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: false,
+                  isRepeatedOverlap: true,
+                  sheetName,
+                  rowIndex: headerRow.rowNumber
+                })
+              }
 
               chunks.push({
                 chunkIndex: currentIndex++,
@@ -432,6 +460,9 @@ export class SpreadsheetChunker {
                   format: 'xlsx',
                   sourceBlockIds: [t.id],
                   primaryOrderIndexes: [t.orderIndex],
+                  sourceSpans,
+                  hasOverlap: hasOverlap || undefined,
+                  overlapTokens,
                   contentRole: 'table',
                   hasTable: true,
                   sheetName,

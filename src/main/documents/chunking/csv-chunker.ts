@@ -10,6 +10,7 @@ import type {
   ChunkingResult,
   DocumentChunk,
   NonSearchableBlockDisposition,
+  StructuredSourceSpan,
   UniversalChunkingOptions
 } from './types'
 import { estimateTokenCount } from './chunking-utils'
@@ -229,6 +230,29 @@ export class CsvChunker {
             if (currentBatch.length > 0 && batchTokens + recordTokens > chunkTargetTokens) {
               const chunkLines = hasExplicitHeader ? [headerLine, ...currentBatch] : currentBatch
               const chunkContent = chunkLines.join('\n')
+              const hasOverlap = Boolean(hasExplicitHeader && batchStartRecord > 2)
+              const overlapTokens = hasOverlap ? headerTokens : undefined
+
+              const sourceSpans: StructuredSourceSpan[] = currentBatch.map((line, idx) => ({
+                blockId: t.id,
+                startOffset: 0,
+                endOffset: line.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: true,
+                rowIndex: batchStartRecord + idx
+              }))
+
+              if (hasOverlap && headerLine) {
+                sourceSpans.unshift({
+                  blockId: t.id,
+                  startOffset: 0,
+                  endOffset: headerLine.length,
+                  offsetConvention: 'utf16_code_units' as const,
+                  isPrimary: false,
+                  isRepeatedOverlap: true,
+                  rowIndex: 0
+                })
+              }
 
               chunks.push({
                 chunkIndex: currentIndex++,
@@ -239,6 +263,9 @@ export class CsvChunker {
                   format: 'csv',
                   sourceBlockIds: [t.id],
                   primaryOrderIndexes: [t.orderIndex],
+                  sourceSpans,
+                  hasOverlap: hasOverlap || undefined,
+                  overlapTokens,
                   contentRole: 'table',
                   hasTable: true,
                   headerState,
@@ -263,6 +290,29 @@ export class CsvChunker {
           if (currentBatch.length > 0) {
             const chunkLines = hasExplicitHeader ? [headerLine, ...currentBatch] : currentBatch
             const chunkContent = chunkLines.join('\n')
+            const hasOverlap = Boolean(hasExplicitHeader && batchStartRecord > 2)
+            const overlapTokens = hasOverlap ? headerTokens : undefined
+
+            const sourceSpans: StructuredSourceSpan[] = currentBatch.map((line, idx) => ({
+              blockId: t.id,
+              startOffset: 0,
+              endOffset: line.length,
+              offsetConvention: 'utf16_code_units' as const,
+              isPrimary: true,
+              rowIndex: batchStartRecord + idx
+            }))
+
+            if (hasOverlap && headerLine) {
+              sourceSpans.unshift({
+                blockId: t.id,
+                startOffset: 0,
+                endOffset: headerLine.length,
+                offsetConvention: 'utf16_code_units' as const,
+                isPrimary: false,
+                isRepeatedOverlap: true,
+                rowIndex: 0
+              })
+            }
 
             chunks.push({
               chunkIndex: currentIndex++,
@@ -273,6 +323,9 @@ export class CsvChunker {
                 format: 'csv',
                 sourceBlockIds: [t.id],
                 primaryOrderIndexes: [t.orderIndex],
+                sourceSpans,
+                hasOverlap: hasOverlap || undefined,
+                overlapTokens,
                 contentRole: 'table',
                 hasTable: true,
                 headerState,

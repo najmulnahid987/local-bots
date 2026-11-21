@@ -204,4 +204,108 @@ describe('DocumentPreviewModal (Phase 5 Step 5.11)', () => {
     expect(screen.getByText('PPTX')).toBeDefined()
     expect(screen.getByText(/Slide 4/)).toBeDefined()
   })
+
+  it('8. renders canonical blocks, format-specific elements, and preservation report dashboard', async () => {
+    const fullPreview: DocumentPreviewDto = {
+      sourceId,
+      knowledgeBaseId: kbId,
+      originalFileName: 'spec.docx',
+      fileType: 'docx',
+      fileSize: 8192,
+      status: 'completed',
+      totalChunks: 3,
+      chunks: [],
+      totalBlocks: 4,
+      blocks: [
+        {
+          id: 'b-head',
+          type: 'heading',
+          level: 1,
+          orderIndex: 0,
+          text: 'Design Specification'
+        },
+        {
+          id: 'b-para',
+          type: 'paragraph',
+          orderIndex: 1,
+          text: 'This document describes system invariants.'
+        },
+        {
+          id: 'b-code',
+          type: 'code',
+          language: 'typescript',
+          orderIndex: 2,
+          text: 'const x: number = 42;'
+        },
+        {
+          id: 'b-tbl',
+          type: 'table',
+          headers: ['Metric', 'Target'],
+          rows: [['Fidelity', '100%']],
+          orderIndex: 3,
+          text: 'Metric: Fidelity | Target: 100%'
+        }
+      ],
+      preservationReport: {
+        status: 'complete',
+        extractionStatus: 'complete',
+        textualFidelity: 'complete',
+        structuralFidelity: 'complete',
+        chunkCoverageStatus: 'complete',
+        totalElements: 4,
+        elementCountsByType: { heading: 1, paragraph: 1, code: 1, table: 1 },
+        dispositionCounts: {
+          fully_extracted: 4,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        coveredBlocks: 4,
+        totalBlocks: 4,
+        coverageRatio: 1.0,
+        warnings: [],
+        errors: [],
+        measurementLimitations: [],
+        versions: {
+          extractorVersion: '2.0.0',
+          chunkerVersion: '2.0.0',
+          validatorVersion: '1.0.0'
+        },
+        timestamp: Date.now()
+      }
+    }
+    previewMock.mockResolvedValueOnce(fullPreview)
+
+    render(
+      <DocumentPreviewModal
+        isOpen={true}
+        sourceId={sourceId}
+        knowledgeBaseId={kbId}
+        onClose={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByTestId('preview-title')).toBeDefined()
+    expect(screen.getByText('spec.docx')).toBeDefined()
+    expect(screen.getByTestId('preservation-badge-complete')).toBeDefined()
+    expect(screen.getByText(/Preservation: Complete/)).toBeDefined()
+
+    // Full document blocks rendered
+    expect(screen.getByText('Design Specification')).toBeDefined()
+    expect(screen.getByText('This document describes system invariants.')).toBeDefined()
+    expect(screen.getByText('const x: number = 42;')).toBeDefined()
+    expect(screen.getByText('typescript')).toBeDefined()
+    expect(screen.getByText('Target')).toBeDefined()
+    expect(screen.getByText('100%')).toBeDefined()
+
+    // Switch to Preservation Report tab
+    fireEvent.click(screen.getByTestId('tab-preservation-details'))
+    expect(screen.getByTestId('preservation-report-panel')).toBeDefined()
+    expect(screen.getByText(/Overall Status: COMPLETE/)).toBeDefined()
+    expect(screen.getByText(/All textual content, document elements/)).toBeDefined()
+    expect(screen.getByText('Extractor: 2.0.0')).toBeDefined()
+    expect(screen.getByText('Chunker: 2.0.0')).toBeDefined()
+  })
 })

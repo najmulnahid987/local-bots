@@ -5,7 +5,9 @@ import { knowledgeBaseIdSchema } from './knowledge-bases'
  * Format identifier and schema version for Voyaro Knowledge Base export archives.
  */
 export const EXPORT_ARCHIVE_FORMAT = 'voyaro-knowledge-base-export' as const
-export const EXPORT_ARCHIVE_SCHEMA_VERSION = '1.0.0' as const
+export const EXPORT_ARCHIVE_SCHEMA_VERSION = '1.1.0' as const
+export const SUPPORTED_EXPORT_SCHEMA_VERSIONS = ['1.0.0', '1.1.0'] as const
+export type ExportArchiveSchemaVersion = (typeof SUPPORTED_EXPORT_SCHEMA_VERSIONS)[number]
 export const DEFAULT_EXPORT_EXTENSION = '.voyaro-kb.zip' as const
 
 /**
@@ -40,6 +42,8 @@ export interface ExportCountsDto {
   readonly conversations: number
   readonly messages: number
   readonly totalSourceBytes: number
+  readonly extractedDocuments?: number
+  readonly preservationReports?: number
 }
 
 /**
@@ -47,7 +51,7 @@ export interface ExportCountsDto {
  */
 export interface ExportManifestDto {
   readonly format: typeof EXPORT_ARCHIVE_FORMAT
-  readonly schemaVersion: typeof EXPORT_ARCHIVE_SCHEMA_VERSION
+  readonly schemaVersion: ExportArchiveSchemaVersion
   readonly exportedAt: number
   readonly appVersion: string
   readonly knowledgeBase: {
@@ -116,6 +120,8 @@ export interface ExportKnowledgeSourceDto {
   readonly createdAt: number
   readonly updatedAt: number
   readonly indexedAt: number | null
+  readonly documentHash?: string | null
+  readonly preservationStatus?: string | null
 }
 
 /**
@@ -198,14 +204,16 @@ export const exportCountsDtoSchema = z
     sources: z.number().int().nonnegative(),
     conversations: z.number().int().nonnegative(),
     messages: z.number().int().nonnegative(),
-    totalSourceBytes: z.number().int().nonnegative()
+    totalSourceBytes: z.number().int().nonnegative(),
+    extractedDocuments: z.number().int().nonnegative().optional(),
+    preservationReports: z.number().int().nonnegative().optional()
   })
   .strict()
 
 export const exportManifestDtoSchema = z
   .object({
     format: z.literal(EXPORT_ARCHIVE_FORMAT),
-    schemaVersion: z.literal(EXPORT_ARCHIVE_SCHEMA_VERSION),
+    schemaVersion: z.enum(SUPPORTED_EXPORT_SCHEMA_VERSIONS),
     exportedAt: z.number().int().positive(),
     appVersion: z.string().min(1),
     knowledgeBase: z
@@ -268,7 +276,9 @@ export const exportKnowledgeSourceDtoSchema = z
     indexingStatus: z.string(),
     createdAt: z.number().int().positive(),
     updatedAt: z.number().int().positive(),
-    indexedAt: z.number().int().positive().nullable()
+    indexedAt: z.number().int().positive().nullable(),
+    documentHash: z.string().optional().nullable(),
+    preservationStatus: z.string().optional().nullable()
   })
   .strict()
 
@@ -334,7 +344,7 @@ export interface ImportPreviewDto {
   readonly archiveName: string
   readonly archiveSizeBytes: number
   readonly format: typeof EXPORT_ARCHIVE_FORMAT
-  readonly schemaVersion: typeof EXPORT_ARCHIVE_SCHEMA_VERSION
+  readonly schemaVersion: ExportArchiveSchemaVersion
   readonly exportedAt: number
   readonly appVersion: string
   readonly knowledgeBase: {
@@ -407,7 +417,7 @@ export const importPreviewDtoSchema = z
     archiveName: z.string().min(1),
     archiveSizeBytes: z.number().int().nonnegative(),
     format: z.literal(EXPORT_ARCHIVE_FORMAT),
-    schemaVersion: z.literal(EXPORT_ARCHIVE_SCHEMA_VERSION),
+    schemaVersion: z.enum(SUPPORTED_EXPORT_SCHEMA_VERSIONS),
     exportedAt: z.number().int().positive(),
     appVersion: z.string().min(1),
     knowledgeBase: z

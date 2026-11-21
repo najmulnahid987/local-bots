@@ -36,7 +36,7 @@ const EXPECTED_METADATA_ENTRIES = new Set([
 /**
  * Allowed document file extensions.
  */
-const ALLOWED_DOCUMENT_EXTENSIONS = new Set(['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx'])
+const ALLOWED_DOCUMENT_EXTENSIONS = new Set(['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx', 'csv'])
 
 /**
  * UUIDv4 validation regex.
@@ -80,6 +80,8 @@ export interface ExtractedArchiveBundle {
   readonly sourcesRaw: string
   readonly conversationsRaw: string
   readonly stagedDocuments: Map<string, StagedDocumentFile>
+  readonly stagedExtractedDocuments: Map<string, string>
+  readonly stagedPreservationReports: Map<string, string>
   readonly stagingDir: string
   readonly totalUncompressedBytes: number
   readonly entryCount: number
@@ -169,6 +171,44 @@ export function validateArchiveEntryName(rawName: string): string {
     return normalized
   }
 
+  // Check extracted document entries: extracted-documents/<uuid>.json
+  if (normalized.startsWith('extracted-documents/')) {
+    const jsonFile = normalized.slice('extracted-documents/'.length)
+    if (!jsonFile.endsWith('.json')) {
+      throw new ArchiveValidationError(
+        `Extracted document entry missing .json: ${normalized}`,
+        'UNEXPECTED_ENTRY'
+      )
+    }
+    const sourceId = jsonFile.slice(0, -5)
+    if (!UUID_V4_REGEX.test(sourceId)) {
+      throw new ArchiveValidationError(
+        `Extracted document entry contains invalid UUID: ${sourceId}`,
+        'UNEXPECTED_ENTRY'
+      )
+    }
+    return normalized
+  }
+
+  // Check preservation report entries: preservation-reports/<uuid>.json
+  if (normalized.startsWith('preservation-reports/')) {
+    const jsonFile = normalized.slice('preservation-reports/'.length)
+    if (!jsonFile.endsWith('.json')) {
+      throw new ArchiveValidationError(
+        `Preservation report entry missing .json: ${normalized}`,
+        'UNEXPECTED_ENTRY'
+      )
+    }
+    const sourceId = jsonFile.slice(0, -5)
+    if (!UUID_V4_REGEX.test(sourceId)) {
+      throw new ArchiveValidationError(
+        `Preservation report entry contains invalid UUID: ${sourceId}`,
+        'UNEXPECTED_ENTRY'
+      )
+    }
+    return normalized
+  }
+
   throw new ArchiveValidationError(
     `Unexpected archive entry outside allowlist: ${normalized}`,
     'UNEXPECTED_ENTRY'
@@ -249,10 +289,14 @@ export class ArchiveExtractor {
       const stagingDir = path.join(tempBaseDir, `import-staging-${sessionId}`)
       await fs.promises.mkdir(stagingDir, { recursive: true })
       await fs.promises.mkdir(path.join(stagingDir, 'documents'), { recursive: true })
+      await fs.promises.mkdir(path.join(stagingDir, 'extracted-documents'), { recursive: true })
+      await fs.promises.mkdir(path.join(stagingDir, 'preservation-reports'), { recursive: true })
 
       let totalUncompressedBytes = 0
       const rawMetadataMap = new Map<string, string>()
       const stagedDocuments = new Map<string, StagedDocumentFile>()
+      const stagedExtractedDocuments = new Map<string, string>()
+      const stagedPreservationReports = new Map<string, string>()
 
       try {
         // 5. Decompress each entry with limits and verification
@@ -306,6 +350,20 @@ export class ArchiveExtractor {
               sizeBytes: result.sizeBytes,
               sha256: result.sha256
             })
+          } else if (entry.filename.startsWith('extracted-documents/')) {
+            const jsonFile = entry.filename.slice('extracted-documents/'.length)
+            const sourceId = jsonFile.slice(0, -5)
+            const stagedFilePath = path.join(stagingDir, 'extracted-documents', jsonFile)
+            const result = await this.decompressToFile(fd, entry, dataOffset, stagedFilePath)
+            totalUncompressedBytes += result.sizeBytes
+            stagedExtractedDocuments.set(sourceId, stagedFilePath)
+          } else if (entry.filename.startsWith('preservation-reports/')) {
+            const jsonFile = entry.filename.slice('preservation-reports/'.length)
+            const sourceId = jsonFile.slice(0, -5)
+            const stagedFilePath = path.join(stagingDir, 'preservation-reports', jsonFile)
+            const result = await this.decompressToFile(fd, entry, dataOffset, stagedFilePath)
+            totalUncompressedBytes += result.sizeBytes
+            stagedPreservationReports.set(sourceId, stagedFilePath)
           }
         }
 
@@ -317,6 +375,8 @@ export class ArchiveExtractor {
           sourcesRaw: rawMetadataMap.get('sources.json')!,
           conversationsRaw: rawMetadataMap.get('conversations.json')!,
           stagedDocuments,
+          stagedExtractedDocuments,
+          stagedPreservationReports,
           stagingDir,
           totalUncompressedBytes,
           entryCount: cdEntries.length

@@ -5,20 +5,22 @@
  * These primitives are shared across all format-aware chunkers.
  */
 
-/**
- * Estimates token count from text length using the approved model-agnostic heuristic:
- * tokenCount = Math.ceil(characterLength / 4).
- *
- * Guarantees:
- * 1. Non-empty text always produces a positive count (>= 1).
- * 2. Empty or whitespace-only text produces 0 if empty.
- * 3. Consistent, deterministic, and local (never calls external tokenizers or AI APIs).
- */
-export function estimateTokenCount(text: string): number {
-  if (!text || text.length === 0) {
-    return 0
-  }
-  return Math.max(1, Math.ceil(text.length / 4))
+import {
+  TokenEstimator,
+  type TokenEstimate,
+  type TokenEstimateBreakdown,
+  type TokenEstimatorOptions,
+  estimateTokenCount,
+  estimateTokenCountConservative
+} from './token-estimator'
+
+export {
+  TokenEstimator,
+  type TokenEstimate,
+  type TokenEstimateBreakdown,
+  type TokenEstimatorOptions,
+  estimateTokenCount,
+  estimateTokenCountConservative
 }
 
 /**
@@ -107,8 +109,10 @@ export function chunkTextSlice(
   targetTokens: number,
   overlapTokens: number
 ): TextSlice[] {
-  const targetChars = targetTokens * 4
-  const overlapChars = overlapTokens * 4
+  const estimate = TokenEstimator.estimate(text)
+  const charsPerToken = estimate.estimatedTokens > 0 ? text.length / estimate.estimatedTokens : 4
+  const targetChars = Math.max(16, Math.floor(targetTokens * charsPerToken))
+  const overlapChars = Math.floor(overlapTokens * charsPerToken)
   const slices: TextSlice[] = []
   let start = 0
   const length = text.length

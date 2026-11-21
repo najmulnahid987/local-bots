@@ -67,6 +67,22 @@ export interface BotRagRetrievalOptions {
    * within its parent Knowledge Base regardless of optional agent tool permissions.
    */
   readonly requireToolPermission?: boolean
+  /**
+   * If true, enables character-level slicing of oversized chunks that exceed remaining token budget.
+   * Defaults to false: preserves source content integrity without silent truncation, continuing
+   * to evaluate subsequent candidates in the candidate pool that fit within the remaining budget.
+   */
+  readonly allowTruncation?: boolean
+}
+
+/**
+ * Diagnostic exclusion record detailing why a candidate chunk was omitted from the retrieval result.
+ */
+export interface BotRagExclusion {
+  readonly chunkId: string
+  readonly reason: 'exceeds_remaining_budget' | 'candidate_oversized' | string
+  readonly candidateTokens: number
+  readonly remainingTokens: number
 }
 
 /**
@@ -97,6 +113,7 @@ export interface BotRagRetrievalResult {
   readonly citations: readonly CitationDto[]
   readonly totalTokens: number
   readonly reason?: string
+  readonly exclusions?: readonly BotRagExclusion[]
 }
 
 export interface BotRagServiceDependencies {
@@ -270,9 +287,15 @@ export class BotRagService {
     }
 
     // 9. Execute FTS5 search strictly on the authoritative Knowledge Base
+    // Fetch a bounded wider candidate pool to avoid retrieval budget starvation when earlier candidates are oversized
+    const candidatePoolSize = Math.min(100, Math.max(effectiveTopK * 4, 20))
     let rawMatches: SearchChunkMatchRow[]
     try {
-      rawMatches = this.sourceRepo.searchChunks(authoritativeKbId, sanitizedQuery, effectiveTopK)
+      rawMatches = this.sourceRepo.searchChunks(
+        authoritativeKbId,
+        sanitizedQuery,
+        candidatePoolSize
+      )
     } catch {
       throw new BotRagServiceError('Failed to execute knowledge base search.', 'DATABASE_ERROR')
     }
@@ -287,8 +310,10 @@ export class BotRagService {
     }
 
     // 10. Budget enforcement and citation candidate creation
+    const allowTruncation = options.allowTruncation === true
     const chunks: RetrievedChunk[] = []
     const citations: CitationDto[] = []
+    const exclusions: BotRagExclusion[] = []
     let currentTokens = 0
     let citationNumber = 1
 
@@ -310,14 +335,27 @@ export class BotRagService {
       let isTruncated = false
 
       if (chunkTokens > remainingTokens) {
-        // Deterministic truncation strategy: truncate text to fit remaining token budget
-        const allowedChars = remainingTokens * 4
-        if (allowedChars <= 0) {
-          break
+        if (allowTruncation) {
+          // Explicit truncation mode: truncate text to fit remaining token budget
+          const allowedChars = remainingTokens * 4
+          if (allowedChars <= 0) {
+            break
+          }
+          chunkContent = fullContent.slice(0, allowedChars)
+          chunkTokenCount = estimateTokenCount(chunkContent)
+          isTruncated = true
+        } else {
+          // Zero-truncation default: candidate exceeds remaining budget.
+          // Do not truncate and do not terminate loop prematurely; record exclusion and continue
+          // scanning subsequent candidate chunks that fit within the remaining budget.
+          exclusions.push({
+            chunkId: row.chunk_id,
+            reason: 'exceeds_remaining_budget',
+            candidateTokens: chunkTokens,
+            remainingTokens
+          })
+          continue
         }
-        chunkContent = fullContent.slice(0, allowedChars)
-        chunkTokenCount = estimateTokenCount(chunkContent)
-        isTruncated = true
       }
 
       // Metadata extraction
@@ -410,7 +448,8 @@ export class BotRagService {
         status: 'NO_RESULTS',
         chunks: [],
         citations: [],
-        totalTokens: 0
+        totalTokens: 0,
+        ...(exclusions.length > 0 ? { exclusions } : {})
       }
     }
 
@@ -418,7 +457,8 @@ export class BotRagService {
       status: 'SUCCESS',
       chunks,
       citations,
-      totalTokens: currentTokens
+      totalTokens: currentTokens,
+      ...(exclusions.length > 0 ? { exclusions } : {})
     }
   }
 }

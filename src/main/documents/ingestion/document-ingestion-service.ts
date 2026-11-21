@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3'
 import {
   KnowledgeSourceRepository,
   ExtractedDocumentRepository,
+  DocumentValidationRepository,
   type CreateKnowledgeChunkInput,
   type KnowledgeSource,
   type KnowledgeChunk
@@ -21,6 +22,11 @@ import {
   validateUniversalDocument,
   extractedDocumentToUniversalDocument
 } from '../model'
+import {
+  type PreservationValidator,
+  type DocumentPreservationReport,
+  defaultPreservationValidator
+} from '../validation'
 import {
   type IngestDocumentOptions,
   type IngestDocumentResult,
@@ -48,6 +54,7 @@ export class DocumentIngestionService {
   private readonly db: Database.Database
   private readonly repository: KnowledgeSourceRepository
   private readonly extractedDocRepo: ExtractedDocumentRepository
+  private readonly validationRepo: DocumentValidationRepository
   private readonly validator: DocumentFileValidator
   private readonly storageManager: DocumentStorageManager
   private readonly extractorRegistry: ExtractorRegistry
@@ -56,6 +63,7 @@ export class DocumentIngestionService {
   private readonly settingsProvider: DocumentSettingsProvider
   private readonly _chunker: SemanticChunker
   private readonly universalChunker: UniversalDocumentChunker
+  private readonly preservationValidator: PreservationValidator
 
   constructor(options: DocumentIngestionServiceOptions) {
     if (!options?.db) {
@@ -65,6 +73,8 @@ export class DocumentIngestionService {
     this.repository = options.sourceRepository ?? new KnowledgeSourceRepository(this.db)
     this.extractedDocRepo =
       options.extractedDocumentRepository ?? new ExtractedDocumentRepository(this.db)
+    this.validationRepo = options.validationRepository ?? new DocumentValidationRepository(this.db)
+    this.preservationValidator = options.preservationValidator ?? defaultPreservationValidator
     this.settingsProvider = options.settingsProvider ?? new StaticDocumentSettingsProvider()
     this.validator = options.validator ?? new DocumentFileValidator(this.settingsProvider)
     this.storageManager = options.storageManager ?? new DocumentStorageManager()
@@ -256,8 +266,24 @@ export class DocumentIngestionService {
       // Directly consumes canonical UniversalDocument without lossy legacy conversions
       const chunkingResult = this.universalChunker.chunk(universalDoc)
 
-      // 9E. Atomic SQLite Persistence: Extracted Document + Chunks + Source Completion
-      // One transaction inserts the canonical UniversalDocument, all chunks, and updates source status to 'completed'.
+      // 9D. Runtime Preservation Validation (Completeness & Chunk Coverage)
+      const preservationReport = this.preservationValidator.validate({
+        sourceId,
+        format: validation.fileType,
+        rawBytes: fileBytes,
+        universalDocument: universalDoc,
+        chunkingResult
+      })
+
+      // Invariant check: if chunk coverage fatally failed (e.g. invalid spans or missing blocks)
+      if (preservationReport.chunkCoverageStatus === 'failed') {
+        const errorDetails =
+          preservationReport.errors.join('; ') || 'Invalid source spans or missing blocks.'
+        throw new Error(`Document chunk coverage validation failed: ${errorDetails}`)
+      }
+
+      // 9E. Atomic SQLite Persistence: Extracted Document + Validation Report + Chunks + Source Completion
+      // One transaction inserts the canonical UniversalDocument, validation report, all chunks, and updates source status to 'completed'.
       // SQLite triggers automatically synchronize all chunks into knowledge_fts.
       const now = Date.now()
       const chunkInputs: CreateKnowledgeChunkInput[] = chunkingResult.chunks.map((c) => ({
@@ -277,6 +303,7 @@ export class DocumentIngestionService {
 
       const persistTx = this.db.transaction(() => {
         this.extractedDocRepo.save(sourceId, universalDoc, now, knowledgeBaseId)
+        this.validationRepo.saveReport(sourceId, preservationReport, now, knowledgeBaseId)
         this.repository.insertChunks(chunkInputs)
         this.repository.complete(sourceId, knowledgeBaseId, now)
       })
@@ -292,6 +319,7 @@ export class DocumentIngestionService {
         knowledgeBaseId,
         source: completedSource,
         universalDocument: universalDoc,
+        preservationReport,
         totalChunks: chunkingResult.totalChunks,
         totalTokens: chunkingResult.totalTokens,
         chunkerVersion: chunkingResult.chunkerVersion,
@@ -299,7 +327,7 @@ export class DocumentIngestionService {
       }
     } catch (err) {
       // Processing failed after source was registered.
-      // 1. Ensure zero partial chunks or partial FTS entries remain.
+      // 1. Ensure zero partial chunks, extracted docs, or validation records remain.
       try {
         this.repository.deleteChunksBySourceId(sourceId, knowledgeBaseId)
       } catch {
@@ -307,6 +335,11 @@ export class DocumentIngestionService {
       }
       try {
         this.extractedDocRepo.delete(sourceId, knowledgeBaseId)
+      } catch {
+        // Ignore deletion cleanup error during rollback
+      }
+      try {
+        this.validationRepo.deleteReport(sourceId, knowledgeBaseId)
       } catch {
         // Ignore deletion cleanup error during rollback
       }
@@ -351,6 +384,16 @@ export class DocumentIngestionService {
    */
   public getChunks(sourceId: string, knowledgeBaseId?: string): KnowledgeChunk[] {
     return this.repository.getChunksBySourceId(sourceId, knowledgeBaseId)
+  }
+
+  /**
+   * Retrieves the persistent document preservation validation report for a source document.
+   */
+  public getValidationReport(
+    sourceId: string,
+    knowledgeBaseId?: string
+  ): DocumentPreservationReport | null {
+    return this.validationRepo.getReport(sourceId, knowledgeBaseId)
   }
 
   /**

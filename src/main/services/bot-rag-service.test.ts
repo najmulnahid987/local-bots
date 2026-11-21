@@ -908,11 +908,12 @@ describe('BotRagService (Phase 7 Step 7.3)', () => {
       chunks: [{ content: longContent }]
     })
 
-    // Budget restricted to 50 tokens (200 chars)
+    // Budget restricted to 50 tokens (200 chars) with explicit allowTruncation: true
     const result = ragService.retrieve({
       botId: botAId,
       query: 'oversized test marker',
-      maxContextTokens: 50
+      maxContextTokens: 50,
+      allowTruncation: true
     })
 
     expect(result.status).toBe('SUCCESS')
@@ -921,6 +922,72 @@ describe('BotRagService (Phase 7 Step 7.3)', () => {
     expect(result.chunks[0].tokenCount).toBeLessThanOrEqual(50)
     expect(result.totalTokens).toBeLessThanOrEqual(50)
     expect(result.chunks[0].content.length).toBe(50 * 4)
+  })
+
+  it('36b. retrieval skips oversized candidate without truncation and includes subsequent candidate fitting budget', () => {
+    // Ingest two chunks: first is oversized (~250 tokens), second is compact (~30 tokens)
+    const largeContent = 'StarvationTest Marker Large. ' + 'Alpha sentence content. '.repeat(50)
+    const smallContent = 'StarvationTest Marker Small. Beta sentence content.'
+
+    createTestDoc(kbAId, {
+      fileName: 'starvation_test.txt',
+      originalFileName: 'starvation_test.txt',
+      fileType: 'txt',
+      chunks: [{ content: largeContent }, { content: smallContent }]
+    })
+
+    // Budget set to 100 tokens: chunk 1 (~250 tokens) cannot fit, chunk 2 (~15 tokens) fits cleanly
+    const result = ragService.retrieve({
+      botId: botAId,
+      query: 'StarvationTest Marker',
+      maxContextTokens: 100,
+      allowTruncation: false
+    })
+
+    expect(result.status).toBe('SUCCESS')
+    expect(result.chunks.length).toBe(1)
+    expect(result.chunks[0].isTruncated).toBe(false)
+    expect(result.chunks[0].content).toBe(smallContent)
+    expect(result.exclusions).toBeDefined()
+    expect(result.exclusions?.length).toBe(1)
+    expect(result.exclusions?.[0].reason).toBe('exceeds_remaining_budget')
+  })
+
+  it('36c. retrieval candidate pool evaluates bounded wider candidates beyond topK when earlier candidates exceed budget', () => {
+    // Seed 5 chunks: first 3 are large (>150 tokens) with high query term density, next 2 are small (<40 tokens)
+    const large1 = 'WidePoolUniqueTerm '.repeat(20) + 'Data sentence one. '.repeat(40)
+    const large2 = 'WidePoolUniqueTerm '.repeat(20) + 'Data sentence two. '.repeat(40)
+    const large3 = 'WidePoolUniqueTerm '.repeat(20) + 'Data sentence three. '.repeat(40)
+    const small1 = 'WidePoolUniqueTerm Small Four. Compact sentence four.'
+    const small2 = 'WidePoolUniqueTerm Small Five. Compact sentence five.'
+
+    createTestDoc(kbAId, {
+      fileName: 'wide_pool.txt',
+      originalFileName: 'wide_pool.txt',
+      fileType: 'txt',
+      chunks: [
+        { content: large1 },
+        { content: large2 },
+        { content: large3 },
+        { content: small1 },
+        { content: small2 }
+      ]
+    })
+
+    // topK = 2, maxContextTokens = 120. Even though candidates 1-3 are ranked first by BM25, candidates 4 and 5 fit.
+    const result = ragService.retrieve({
+      botId: botAId,
+      query: 'WidePoolUniqueTerm',
+      topK: 2,
+      maxContextTokens: 120
+    })
+
+    expect(result.status).toBe('SUCCESS')
+    expect(result.chunks.length).toBe(2)
+    expect(result.chunks.every((c) => !c.isTruncated)).toBe(true)
+    expect(result.chunks.some((c) => c.content === small1)).toBe(true)
+    expect(result.chunks.some((c) => c.content === small2)).toBe(true)
+    expect(result.exclusions?.length).toBeGreaterThanOrEqual(1)
   })
 
   // ==========================================================================

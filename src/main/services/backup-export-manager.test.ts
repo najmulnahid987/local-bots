@@ -14,6 +14,8 @@ import { BotMemoryRepository } from '../database/repositories/bot-memory-reposit
 import { KnowledgeSourceRepository } from '../database/repositories/knowledge-source-repository'
 import { ConversationRepository } from '../database/repositories/conversation-repository'
 import { MessageRepository } from '../database/repositories/message-repository'
+import { ExtractedDocumentRepository } from '../database/repositories/extracted-document-repository'
+import { DocumentValidationRepository } from '../database/repositories/document-validation-repository'
 import { DocumentStorageManager } from '../documents/document-storage-manager'
 import { BackupExportManager } from './backup-export-manager'
 import {
@@ -359,5 +361,172 @@ describe('BackupExportManager', () => {
     expect(result.success).toBe(false)
     expect(result.cancelled).toBe(true)
     expect(mockShowSaveDialog).toHaveBeenCalled()
+  })
+
+  it('bundles canonical UniversalDocument and DocumentPreservationReport with verified hashes in manifest', async () => {
+    const kb = kbRepo.create({ name: 'Preserved KB' })
+    const sourceId = crypto.randomUUID()
+    const docContent = 'Document markdown body'
+    const docHash = crypto.createHash('sha256').update(docContent).digest('hex')
+
+    const originalFilePath = storageManager.resolveOriginalPath(kb.id, sourceId, 'md')
+    await fs.promises.mkdir(path.dirname(originalFilePath), { recursive: true })
+    await fs.promises.writeFile(originalFilePath, docContent, 'utf8')
+
+    const source = sourceRepo.create({
+      id: sourceId,
+      knowledge_base_id: kb.id,
+      file_name: `${sourceId}.md`,
+      original_file_name: 'doc.md',
+      relative_file_path: `documents/${kb.id}/originals/${sourceId}.md`,
+      file_type: 'md',
+      mime_type: 'text/markdown',
+      file_size: Buffer.byteLength(docContent),
+      content_hash: docHash,
+      indexing_status: 'completed'
+    })
+
+    // Persist canonical UniversalDocument
+    const extractedRepo = new ExtractedDocumentRepository(testCtx.db)
+    extractedRepo.save(
+      source.id,
+      {
+        id: source.id,
+        format: 'md',
+        extractedAt: Date.now(),
+        extractor: { id: 'md-ext', name: 'MD Extractor', version: '2.0.0' },
+        text: 'Document markdown body',
+        blocks: [
+          {
+            id: 'b1',
+            type: 'paragraph',
+            orderIndex: 0,
+            text: 'Document markdown body'
+          }
+        ],
+        metadata: {},
+        warnings: [],
+        quality: { fidelity: 'high', isLossy: false, isOcr: false }
+      },
+      Date.now(),
+      kb.id
+    )
+
+    // Persist DocumentPreservationReport
+    const validationRepo = new DocumentValidationRepository(testCtx.db)
+    validationRepo.saveReport(
+      source.id,
+      {
+        schemaVersion: '1.0.0',
+        sourceId: source.id,
+        format: 'md',
+        timestamp: Date.now(),
+        status: 'complete',
+        extractionStatus: 'complete',
+        textualFidelity: 'complete',
+        structuralFidelity: 'complete',
+        chunkCoverageStatus: 'complete',
+        extractionReport: {
+          status: 'complete',
+          textualFidelity: 'complete',
+          structuralFidelity: 'complete',
+          totalElements: 1,
+          elementCountsByType: { paragraph: 1 },
+          dispositionCounts: {
+            fully_extracted: 1,
+            text_preserved_unparsed: 0,
+            reference_only: 0,
+            partially_extracted: 0,
+            unsupported: 0,
+            failed: 0,
+            unknown: 0
+          },
+          textualCoverage: {
+            expectedChars: 22,
+            extractedChars: 22,
+            coverageRatio: 1,
+            status: 'exact'
+          },
+          unsupportedElements: [],
+          failedElements: [],
+          referenceOnlyElements: [],
+          warnings: [],
+          measurementLimitations: []
+        },
+        chunkReport: {
+          status: 'complete',
+          totalBlocks: 1,
+          coveredBlocks: 1,
+          missingBlockIds: [],
+          nonSearchableBlocks: [],
+          primaryCharacterCoverage: {
+            expectedChars: 22,
+            coveredChars: 22,
+            coverageRatio: 1,
+            missingIntervals: []
+          },
+          repeatedOverlapTokens: 0,
+          contextualTokens: 5,
+          structuralDispositions: {},
+          invalidSpanCount: 0,
+          outOfBoundsSpanCount: 0,
+          warnings: [],
+          errors: []
+        },
+        warnings: [],
+        errors: [],
+        measurementLimitations: [],
+        versions: {
+          extractorVersion: '2.0.0',
+          chunkerVersion: '2.0.0',
+          validatorVersion: '1.0.0'
+        }
+      },
+      Date.now(),
+      kb.id
+    )
+
+    const exportOutPath = path.join(tmpDir, 'preserved-export.voyaro-kb.zip')
+    const exportManager = new BackupExportManager({
+      db: testCtx.db,
+      kbRepository: kbRepo,
+      botRepository: botRepo,
+      botMemoryRepository: botMemoryRepo,
+      knowledgeSourceRepository: sourceRepo,
+      conversationRepository: convRepo,
+      messageRepository: msgRepo,
+      storageManager,
+      extractedDocumentRepository: extractedRepo,
+      documentValidationRepository: validationRepo
+    })
+
+    const result = await exportManager.exportKnowledgeBase(kb.id, exportOutPath)
+    expect(result.success).toBe(true)
+    expect(result.counts?.extractedDocuments).toBe(1)
+    expect(result.counts?.preservationReports).toBe(1)
+
+    // Verify ZIP archive entries
+    const zipArchive = await unzipper.Open.file(exportOutPath)
+    const fileNames = zipArchive.files.map((f) => f.path)
+    expect(fileNames).toContain(`extracted-documents/${source.id}.json`)
+    expect(fileNames).toContain(`preservation-reports/${source.id}.json`)
+
+    // Verify manifest
+    const manifestFile = zipArchive.files.find((f) => f.path === 'manifest.json')!
+    const manifestJson = JSON.parse((await manifestFile.buffer()).toString('utf8'))
+    expect(manifestJson.counts.extractedDocuments).toBe(1)
+    expect(manifestJson.counts.preservationReports).toBe(1)
+
+    const declaredExtracted = manifestJson.files.find(
+      (f: { path: string }) => f.path === `extracted-documents/${source.id}.json`
+    )
+    expect(declaredExtracted).toBeDefined()
+    expect(declaredExtracted.sha256).toMatch(/^[0-9a-f]{64}$/i)
+
+    const declaredReport = manifestJson.files.find(
+      (f: { path: string }) => f.path === `preservation-reports/${source.id}.json`
+    )
+    expect(declaredReport).toBeDefined()
+    expect(declaredReport.sha256).toMatch(/^[0-9a-f]{64}$/i)
   })
 })

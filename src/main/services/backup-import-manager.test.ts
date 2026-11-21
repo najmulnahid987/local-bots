@@ -13,6 +13,8 @@ import { BotMemoryRepository } from '../database/repositories/bot-memory-reposit
 import { KnowledgeSourceRepository } from '../database/repositories/knowledge-source-repository'
 import { ConversationRepository } from '../database/repositories/conversation-repository'
 import { MessageRepository } from '../database/repositories/message-repository'
+import { ExtractedDocumentRepository } from '../database/repositories/extracted-document-repository'
+import { DocumentValidationRepository } from '../database/repositories/document-validation-repository'
 import { DocumentStorageManager } from '../documents/document-storage-manager'
 import { BackupExportManager } from './backup-export-manager'
 import { BackupImportManager } from './backup-import-manager'
@@ -465,6 +467,297 @@ describe('BackupImportManager', () => {
       expect(mockReindex).toHaveBeenCalledTimes(1)
       expect(result.counts?.indexedSources).toBe(1)
       expect(result.counts?.failedSources).toBe(0)
+    })
+
+    it('8b. restores canonical UniversalDocument and DocumentPreservationReport into database upon import', async () => {
+      // 1. Create a source KB with extracted doc and preservation report
+      const presKb = kbRepo.create({ name: 'Preservation Source KB' })
+      const sourceId = crypto.randomUUID()
+      const docContent = '# Preserved Doc\n\nPreserved content.'
+      const docBuf = Buffer.from(docContent, 'utf8')
+      const docHash = crypto.createHash('sha256').update(docBuf).digest('hex')
+
+      const origPath = storageManager.resolveOriginalPath(presKb.id, sourceId, 'md')
+      await fs.promises.mkdir(path.dirname(origPath), { recursive: true })
+      await fs.promises.writeFile(origPath, docBuf)
+
+      sourceRepo.create({
+        id: sourceId,
+        knowledge_base_id: presKb.id,
+        file_name: `${sourceId}.md`,
+        original_file_name: 'preserved.md',
+        relative_file_path: `originals/${sourceId}.md`,
+        file_type: 'md',
+        mime_type: 'text/markdown',
+        file_size: docBuf.length,
+        content_hash: docHash,
+        indexing_status: 'completed'
+      })
+
+      const extractedRepo = new ExtractedDocumentRepository(testCtx.db)
+      extractedRepo.save(
+        sourceId,
+        {
+          id: sourceId,
+          format: 'md',
+          extractedAt: Date.now(),
+          extractor: { id: 'test-md', name: 'Test MD', version: '2.0.0' },
+          text: docContent,
+          blocks: [
+            {
+              id: 'b1',
+              type: 'heading',
+              level: 1,
+              headingPath: ['Preserved Doc'],
+              orderIndex: 0,
+              text: 'Preserved Doc'
+            },
+            {
+              id: 'b2',
+              type: 'paragraph',
+              orderIndex: 1,
+              text: 'Preserved content.'
+            }
+          ],
+          metadata: {},
+          warnings: [],
+          quality: { fidelity: 'high', isLossy: false, isOcr: false }
+        },
+        Date.now(),
+        presKb.id
+      )
+
+      const validationRepo = new DocumentValidationRepository(testCtx.db)
+      validationRepo.saveReport(
+        sourceId,
+        {
+          schemaVersion: '1.0.0',
+          sourceId,
+          format: 'md',
+          timestamp: Date.now(),
+          status: 'complete',
+          extractionStatus: 'complete',
+          textualFidelity: 'complete',
+          structuralFidelity: 'complete',
+          chunkCoverageStatus: 'complete',
+          extractionReport: {
+            status: 'complete',
+            textualFidelity: 'complete',
+            structuralFidelity: 'complete',
+            totalElements: 2,
+            elementCountsByType: { heading: 1, paragraph: 1 },
+            dispositionCounts: {
+              fully_extracted: 2,
+              text_preserved_unparsed: 0,
+              reference_only: 0,
+              partially_extracted: 0,
+              unsupported: 0,
+              failed: 0,
+              unknown: 0
+            },
+            textualCoverage: {
+              expectedChars: 31,
+              extractedChars: 31,
+              coverageRatio: 1,
+              status: 'exact'
+            },
+            unsupportedElements: [],
+            failedElements: [],
+            referenceOnlyElements: [],
+            warnings: [],
+            measurementLimitations: []
+          },
+          chunkReport: {
+            status: 'complete',
+            totalBlocks: 2,
+            coveredBlocks: 2,
+            missingBlockIds: [],
+            nonSearchableBlocks: [],
+            primaryCharacterCoverage: {
+              expectedChars: 31,
+              coveredChars: 31,
+              coverageRatio: 1,
+              missingIntervals: []
+            },
+            repeatedOverlapTokens: 0,
+            contextualTokens: 5,
+            structuralDispositions: {},
+            invalidSpanCount: 0,
+            outOfBoundsSpanCount: 0,
+            warnings: [],
+            errors: []
+          },
+          warnings: [],
+          errors: [],
+          measurementLimitations: [],
+          versions: {
+            extractorVersion: '2.0.0',
+            chunkerVersion: '2.0.0',
+            validatorVersion: '1.0.0'
+          }
+        },
+        Date.now(),
+        presKb.id
+      )
+
+      // Export it
+      const presArchivePath = path.join(tmpDir, 'preserved.voyaro-kb.zip')
+      const presExportManager = new BackupExportManager({
+        db: testCtx.db,
+        kbRepository: kbRepo,
+        botRepository: botRepo,
+        botMemoryRepository: botMemoryRepo,
+        knowledgeSourceRepository: sourceRepo,
+        conversationRepository: convRepo,
+        messageRepository: msgRepo,
+        storageManager,
+        extractedDocumentRepository: extractedRepo,
+        documentValidationRepository: validationRepo
+      })
+      await presExportManager.exportKnowledgeBase(presKb.id, presArchivePath)
+
+      // Import as new KB
+      const previewRes = await importManager.selectAndPreviewArchive(presArchivePath)
+      expect(previewRes.success).toBe(true)
+      const importRes = await importManager.executeImport({
+        sessionId: previewRes.preview!.sessionId,
+        strategy: 'new'
+      })
+      expect(importRes.success).toBe(true)
+
+      const targetKbId = importRes.knowledgeBaseId!
+      const importedSources = sourceRepo.listByKnowledgeBase(targetKbId)
+      expect(importedSources.length).toBe(1)
+      const newSourceId = importedSources[0].id
+
+      // Verify canonical UniversalDocument was restored in SQLite
+      const restoredDoc = extractedRepo.get(newSourceId, targetKbId)
+      expect(restoredDoc).not.toBeNull()
+      expect(restoredDoc?.blocks.length).toBe(2)
+      expect(restoredDoc?.blocks[0].text).toBe('Preserved Doc')
+
+      // Verify DocumentPreservationReport was restored in SQLite
+      const restoredReport = validationRepo.getReport(newSourceId, targetKbId)
+      expect(restoredReport).not.toBeNull()
+      expect(restoredReport?.status).toBe('complete')
+      expect(restoredReport?.extractionReport.totalElements).toBe(2)
+    })
+
+    it('8c. successfully imports legacy 1.0.0 archive without extracted docs or reports and restores original files', async () => {
+      // Build a 1.0.0 archive manually
+      const writer = new ZipArchiveWriter()
+      const manifestObj = {
+        format: 'voyaro-knowledge-base-export',
+        schemaVersion: '1.0.0',
+        exportedAt: Date.now(),
+        appVersion: '1.0.0',
+        knowledgeBase: { id: crypto.randomUUID(), name: 'Legacy 1.0.0 KB' },
+        counts: {
+          bots: 0,
+          memories: 0,
+          sources: 1,
+          conversations: 0,
+          messages: 0,
+          totalSourceBytes: 15
+        },
+        files: [
+          {
+            path: 'knowledge-base.json',
+            sizeBytes: 0,
+            sha256: ''
+          },
+          { path: 'bots.json', sizeBytes: 0, sha256: '' },
+          { path: 'bot-memories.json', sizeBytes: 0, sha256: '' },
+          { path: 'sources.json', sizeBytes: 0, sha256: '' },
+          { path: 'conversations.json', sizeBytes: 0, sha256: '' },
+          { path: 'documents/00000000-0000-4000-8000-000000000001.txt', sizeBytes: 15, sha256: '' }
+        ],
+        excludedCategories: []
+      }
+
+      const kbJson = Buffer.from(
+        JSON.stringify({
+          id: manifestObj.knowledgeBase.id,
+          name: 'Legacy 1.0.0 KB',
+          description: '',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          archivedAt: null
+        }),
+        'utf8'
+      )
+      const botsJson = Buffer.from('[]', 'utf8')
+      const memoriesJson = Buffer.from('[]', 'utf8')
+      const sourcesJson = Buffer.from(
+        JSON.stringify([
+          {
+            id: '00000000-0000-4000-8000-000000000001',
+            fileName: '00000000-0000-4000-8000-000000000001.txt',
+            originalFileName: 'legacy.txt',
+            fileType: 'txt',
+            mimeType: 'text/plain',
+            fileSizeBytes: 15,
+            contentHash: crypto.createHash('sha256').update('Legacy file txt').digest('hex'),
+            indexingStatus: 'completed',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            indexedAt: Date.now()
+          }
+        ]),
+        'utf8'
+      )
+      const convJson = Buffer.from('[]', 'utf8')
+      const docBytes = Buffer.from('Legacy file txt', 'utf8')
+
+      // Update manifest files array with real sizes and sha256 hashes
+      const filesMap: Array<{ path: string; data: Buffer }> = [
+        { path: 'knowledge-base.json', data: kbJson },
+        { path: 'bots.json', data: botsJson },
+        { path: 'bot-memories.json', data: memoriesJson },
+        { path: 'sources.json', data: sourcesJson },
+        { path: 'conversations.json', data: convJson },
+        { path: 'documents/00000000-0000-4000-8000-000000000001.txt', data: docBytes }
+      ]
+
+      manifestObj.files = filesMap.map((f) => ({
+        path: f.path,
+        sizeBytes: f.data.length,
+        sha256: crypto.createHash('sha256').update(f.data).digest('hex')
+      }))
+
+      const manifestBuf = Buffer.from(JSON.stringify(manifestObj, null, 2), 'utf8')
+      writer.addEntry('manifest.json', manifestBuf)
+      for (const f of filesMap) {
+        writer.addEntry(f.path, f.data)
+      }
+
+      const legacyZipPath = path.join(tmpDir, 'legacy-1.0.0.voyaro-kb.zip')
+      await writer.writeToFile(legacyZipPath)
+
+      // Preview and import legacy archive
+      const preview = await importManager.selectAndPreviewArchive(legacyZipPath)
+      expect(preview.success).toBe(true)
+      expect(preview.preview?.schemaVersion).toBe('1.0.0')
+
+      const importResult = await importManager.executeImport({
+        sessionId: preview.preview!.sessionId,
+        strategy: 'new'
+      })
+      expect(importResult.success).toBe(true)
+
+      const targetKbId = importResult.knowledgeBaseId!
+      const targetSources = sourceRepo.listByKnowledgeBase(targetKbId)
+      expect(targetSources.length).toBe(1)
+      expect(targetSources[0].original_file_name).toBe('legacy.txt')
+
+      // Verify original file was restored
+      const restoredPath = storageManager.resolveOriginalPath(
+        targetKbId,
+        targetSources[0].id,
+        'txt'
+      )
+      expect(fs.existsSync(restoredPath)).toBe(true)
+      expect(fs.readFileSync(restoredPath, 'utf8')).toBe('Legacy file txt')
     })
   })
 

@@ -131,6 +131,7 @@ export class PresentationChunker {
         const slideTitle =
           block.location?.slideTitle ??
           boundary.slideTitle ??
+          (block.metadata?.slideTitle as string | undefined) ??
           (block as unknown as { slide?: { title: string } }).slide?.title
         const isHidden =
           (block as unknown as { slide?: { isHidden: boolean } }).slide?.isHidden === true ||
@@ -166,6 +167,11 @@ export class PresentationChunker {
     }
 
     // 2. Process each slide independently
+    const blockLengthMap = new Map<string, number>()
+    for (const b of doc.blocks) {
+      blockLengthMap.set(b.id, b.text.length)
+    }
+
     for (const group of slideGroups) {
       const slideNumber = group.slideNumber
 
@@ -361,6 +367,15 @@ export class PresentationChunker {
       const fullTokens = estimateTokenCount(fullSlideContent)
 
       if (fullTokens <= chunkTargetTokens) {
+        const sourceSpans = contributingBlockIds.map((id) => ({
+          blockId: id,
+          startOffset: 0,
+          endOffset: blockLengthMap.get(id) ?? 0,
+          offsetConvention: 'utf16_code_units' as const,
+          isPrimary: true,
+          slideNumber
+        }))
+
         chunks.push({
           chunkIndex: currentIndex++,
           content: fullSlideContent,
@@ -370,6 +385,7 @@ export class PresentationChunker {
             format: 'pptx',
             sourceBlockIds: contributingBlockIds,
             primaryOrderIndexes: contributingOrderIndexes,
+            sourceSpans,
             slideNumber,
             ...(slideTitle ? { slideTitle, heading: slideTitle } : {}),
             headingPath: slideTitle ? [slideTitle] : [],
@@ -476,6 +492,20 @@ export class PresentationChunker {
         }
 
         const partContent = `${partHeader}\n\n${currentParaBatch.join('\n\n')}`
+        const hasOverlap = partNumber > 1 && Boolean(tableHeaderPrefix)
+        const overlapTokens =
+          hasOverlap && tableHeaderPrefix ? estimateTokenCount(tableHeaderPrefix) : undefined
+
+        const sourceSpans = contributingBlockIds.map((id) => ({
+          blockId: id,
+          startOffset: 0,
+          endOffset: blockLengthMap.get(id) ?? 0,
+          offsetConvention: 'utf16_code_units' as const,
+          isPrimary: true,
+          isRepeatedOverlap: hasOverlap ? true : undefined,
+          slideNumber
+        }))
+
         chunks.push({
           chunkIndex: currentIndex++,
           content: partContent,
@@ -485,6 +515,9 @@ export class PresentationChunker {
             format: 'pptx',
             sourceBlockIds: contributingBlockIds,
             primaryOrderIndexes: contributingOrderIndexes,
+            sourceSpans,
+            hasOverlap: hasOverlap || undefined,
+            overlapTokens,
             slideNumber,
             partNumber,
             ...(slideTitle ? { slideTitle, heading: slideTitle } : {}),
