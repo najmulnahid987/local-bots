@@ -1,6 +1,12 @@
 import { z } from 'zod'
+import {
+  BOT_RESPONSE_POLICIES,
+  DEFAULT_BOT_RESPONSE_POLICY,
+  type BotResponsePolicy
+} from '../../../shared/bots'
 import { type CredentialRef, isValidCredentialRef } from '../../security/credential-vault'
 export type { CredentialRef }
+export { BOT_RESPONSE_POLICIES, DEFAULT_BOT_RESPONSE_POLICY, type BotResponsePolicy }
 
 /**
  * Domain entity representing an isolated Knowledge Base.
@@ -71,6 +77,7 @@ export interface Bot {
   readonly systemPrompt: string
   readonly modelId: string
   readonly status: 'active' | 'archived'
+  readonly responsePolicy: BotResponsePolicy
   readonly toolPermissions: readonly ToolPermission[]
   readonly createdAt: number
   readonly updatedAt: number
@@ -86,6 +93,7 @@ export interface CreateBotInput {
   description?: string
   systemPrompt?: string
   status?: 'active' | 'archived'
+  responsePolicy?: BotResponsePolicy
   providerConnectionId?: string | null
   toolPermissions?: readonly ToolPermission[]
 }
@@ -100,6 +108,7 @@ export interface UpdateBotInput {
   systemPrompt?: string
   modelId?: string
   status?: 'active' | 'archived'
+  responsePolicy?: BotResponsePolicy
   providerConnectionId?: string | null
   toolPermissions?: readonly ToolPermission[]
 }
@@ -203,6 +212,7 @@ export const createBotSchema = z
       .nullable()
       .optional()
       .default(null),
+    responsePolicy: z.enum(BOT_RESPONSE_POLICIES).optional().default(DEFAULT_BOT_RESPONSE_POLICY),
     toolPermissions: toolPermissionsSchema.optional().default([])
   })
   .strict()
@@ -235,6 +245,7 @@ export const updateBotSchema = z
       .uuid({ message: 'providerConnectionId must be a valid UUIDv4 string.' })
       .nullable()
       .optional(),
+    responsePolicy: z.enum(BOT_RESPONSE_POLICIES).optional(),
     toolPermissions: toolPermissionsSchema.optional()
   })
   .strict()
@@ -245,6 +256,7 @@ export const updateBotSchema = z
       data.systemPrompt !== undefined ||
       data.modelId !== undefined ||
       data.status !== undefined ||
+      data.responsePolicy !== undefined ||
       data.providerConnectionId !== undefined ||
       data.toolPermissions !== undefined,
     { message: 'At least one editable Bot field must be provided for update.' }
@@ -527,11 +539,13 @@ import type {
   MessageRole,
   MessageContentFormat,
   MessageMetadataDto,
-  MessageTokenUsageDto
+  MessageTokenUsageDto,
+  ConversationSegmentDto
 } from '../../../shared/conversations'
 
 export type {
   ConversationDto,
+  ConversationSegmentDto,
   MessageDto,
   CitationDto,
   MessageRole,
@@ -541,6 +555,7 @@ export type {
 }
 
 export type Conversation = ConversationDto
+export type ConversationSegment = ConversationSegmentDto
 export type Message = MessageDto
 
 export interface CreateConversationRepositoryInput {
@@ -559,6 +574,7 @@ export interface CreateMessageRepositoryInput {
   conversationId: string
   botId: string
   knowledgeBaseId: string
+  segmentId?: string | null
   role: MessageRole
   content: string
   contentFormat?: MessageContentFormat

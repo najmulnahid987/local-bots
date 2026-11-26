@@ -48,6 +48,72 @@ export const BOT_STATUSES = ['active', 'archived'] as const
 export type BotStatus = (typeof BOT_STATUSES)[number]
 
 /**
+ * Configurable per-Bot response policy governing Knowledge Base usage and general AI behavior.
+ */
+export const BOT_RESPONSE_POLICIES = [
+  'strict_kb_only',
+  'balanced_kb_first',
+  'general_ai_chat'
+] as const
+export type BotResponsePolicy = (typeof BOT_RESPONSE_POLICIES)[number]
+
+/**
+ * Default response policy applied to newly created and migrated Bots.
+ */
+export const DEFAULT_BOT_RESPONSE_POLICY: BotResponsePolicy = 'balanced_kb_first'
+
+export interface BotResponsePolicyMetadata {
+  readonly id: BotResponsePolicy
+  readonly label: string
+  readonly shortLabel: string
+  readonly description: string
+  readonly recommended?: boolean
+}
+
+export const BOT_RESPONSE_POLICY_METADATA: Readonly<
+  Record<BotResponsePolicy, BotResponsePolicyMetadata>
+> = {
+  strict_kb_only: {
+    id: 'strict_kb_only',
+    label: 'Strict Knowledge Base Only',
+    shortLabel: 'Strict KB Only',
+    description:
+      'Answers strictly from retrieved documents in this Knowledge Base and refuses unsupported claims.'
+  },
+  balanced_kb_first: {
+    id: 'balanced_kb_first',
+    label: 'Knowledge Base First (Balanced)',
+    shortLabel: 'KB First (Balanced)',
+    description:
+      'Prioritizes Knowledge Base documents first and clearly separates helpful general AI knowledge when needed.',
+    recommended: true
+  },
+  general_ai_chat: {
+    id: 'general_ai_chat',
+    label: 'General AI Chat',
+    shortLabel: 'General AI Chat',
+    description:
+      'Responds freely as a general assistant while still referencing relevant Knowledge Base documents when helpful.'
+  }
+}
+
+export const botResponsePolicySchema = z.enum(BOT_RESPONSE_POLICIES, {
+  message: 'Response policy must be strict_kb_only, balanced_kb_first, or general_ai_chat.'
+})
+
+export function isBotResponsePolicy(value: unknown): value is BotResponsePolicy {
+  return typeof value === 'string' && (BOT_RESPONSE_POLICIES as readonly string[]).includes(value)
+}
+
+export function resolveBotResponsePolicy(value: unknown): BotResponsePolicy {
+  return isBotResponsePolicy(value) ? value : DEFAULT_BOT_RESPONSE_POLICY
+}
+
+export function getBotResponsePolicyMeta(policy: BotResponsePolicy): BotResponsePolicyMetadata {
+  return BOT_RESPONSE_POLICY_METADATA[policy]
+}
+
+/**
  * Public, renderer-safe Data Transfer Object representing an AI Bot.
  * Excludes internal database internals, credential references, or vault paths.
  */
@@ -60,6 +126,7 @@ export interface BotDto {
   readonly systemPrompt: string
   readonly modelId: string
   readonly status: BotStatus
+  readonly responsePolicy: BotResponsePolicy
   readonly enabledTools: readonly ToolPermission[]
   readonly createdAt: number
   readonly updatedAt: number
@@ -75,6 +142,7 @@ export interface CreateBotRequest {
   readonly modelId: string
   readonly description?: string
   readonly systemPrompt?: string
+  readonly responsePolicy?: BotResponsePolicy
   readonly providerConnectionId?: string | null
   readonly enabledTools?: readonly ToolPermission[]
 }
@@ -88,6 +156,7 @@ export interface UpdateBotRequest {
   readonly name?: string
   readonly description?: string
   readonly systemPrompt?: string
+  readonly responsePolicy?: BotResponsePolicy
   readonly providerConnectionId?: string | null
   readonly modelId?: string
   readonly enabledTools?: readonly ToolPermission[]
@@ -192,6 +261,7 @@ export const createBotRequestSchema = z
       .nullable()
       .optional()
       .default(null),
+    responsePolicy: botResponsePolicySchema.optional().default(DEFAULT_BOT_RESPONSE_POLICY),
     enabledTools: enabledToolsSchema.optional().default([])
   })
   .strict()
@@ -228,6 +298,7 @@ export const updateBotRequestSchema = z
       .uuid({ message: 'providerConnectionId must be a valid UUIDv4 string.' })
       .nullable()
       .optional(),
+    responsePolicy: botResponsePolicySchema.optional(),
     enabledTools: enabledToolsSchema.optional()
   })
   .strict()
@@ -238,6 +309,7 @@ export const updateBotRequestSchema = z
       data.systemPrompt !== undefined ||
       data.modelId !== undefined ||
       data.providerConnectionId !== undefined ||
+      data.responsePolicy !== undefined ||
       data.enabledTools !== undefined,
     { message: 'At least one editable Bot field must be provided for update.' }
   )
@@ -272,6 +344,8 @@ export function toBotDto(input: {
   modelId?: string
   model_id?: string
   status?: string
+  responsePolicy?: string
+  response_policy?: string
   toolPermissions?: readonly string[]
   enabledTools?: readonly string[]
   tool_permissions_json?: string
@@ -302,6 +376,7 @@ export function toBotDto(input: {
   }
 
   const status: BotStatus = input.status === 'archived' ? 'archived' : 'active'
+  const responsePolicy = resolveBotResponsePolicy(input.responsePolicy ?? input.response_policy)
 
   return {
     id: input.id,
@@ -312,6 +387,7 @@ export function toBotDto(input: {
     systemPrompt: input.systemPrompt ?? input.system_prompt ?? '',
     modelId: input.modelId ?? input.model_id ?? '',
     status,
+    responsePolicy,
     enabledTools: Object.freeze(tools),
     createdAt: input.createdAt ?? input.created_at ?? 0,
     updatedAt: input.updatedAt ?? input.updated_at ?? input.createdAt ?? input.created_at ?? 0

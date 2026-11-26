@@ -177,14 +177,17 @@ describe('ConversationManagerService', () => {
   })
 
   describe('listConversations', () => {
-    it('lists conversations belonging to the requested Bot in active workspace', () => {
+    it('lists conversations belonging to the requested Bot in active workspace and enforces single conversation', () => {
       const conv1 = manager.createConversation(sessionId, { botId: activeBotId, title: 'Conv 1' })
       const conv2 = manager.createConversation(sessionId, { botId: activeBotId, title: 'Conv 2' })
 
+      // Single conversation invariant: repeated create returns existing canonical conversation
+      expect(conv2.id).toBe(conv1.id)
+
       const list = manager.listConversations(sessionId, { botId: activeBotId })
-      expect(list.length).toBe(2)
-      expect(list.map((c) => c.id)).toContain(conv1.id)
-      expect(list.map((c) => c.id)).toContain(conv2.id)
+      expect(list.length).toBe(1)
+      expect(list[0].id).toBe(conv1.id)
+      expect(list[0].title).toBe('Conv 1')
     })
 
     it('rejects if botId is missing or belongs to another KB', () => {
@@ -452,8 +455,13 @@ describe('ConversationManagerService', () => {
     })
 
     it('24. rejects citation request when message belongs to another conversation', () => {
+      const otherBot = botRepo.create({
+        knowledgeBaseId: kb1Id,
+        name: 'Other Bot For Citation Test',
+        modelId: 'gpt-4o'
+      })
       const otherConv = manager.createConversation(sessionId, {
-        botId: activeBotId,
+        botId: otherBot.id,
         title: 'Other Conversation'
       })
 
@@ -643,6 +651,183 @@ describe('ConversationManagerService', () => {
           citationNumber: 1
         })
       }).toThrowError(ConversationManagerError)
+    })
+  })
+
+  // ==========================================================================
+  // Step 12.2: Unified Canonical Conversation Open & Clear Conversation
+  // ==========================================================================
+
+  describe('Step 12.2: openBotConversation, getClearPreview, and clearConversation', () => {
+    it('31. opens existing canonical conversation, segments, and >100 messages reliably across reopens', () => {
+      const canonical = convRepo.create({
+        botId: activeBotId,
+        knowledgeBaseId: kb1Id,
+        title: 'Canonical Workspace'
+      })
+      const baseTs = 1700000000000
+      for (let i = 0; i < 105; i++) {
+        const created = msgRepo.create({
+          conversationId: canonical.id,
+          botId: activeBotId,
+          knowledgeBaseId: kb1Id,
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: `Turn ${i}`
+        })
+        dbContext.db
+          .prepare('UPDATE messages SET created_at = ? WHERE id = ?')
+          .run(baseTs + i, created.id)
+      }
+
+      const firstOpen = manager.openBotConversation(sessionId, activeBotId)
+      const secondOpen = manager.openBotConversation(sessionId, activeBotId)
+
+      expect(firstOpen.conversation.id).toBe(canonical.id)
+      expect(secondOpen.conversation.id).toBe(canonical.id)
+      expect(firstOpen.segments).toHaveLength(1)
+      expect(firstOpen.messages).toHaveLength(105)
+      expect(firstOpen.messages[104].content).toBe('Turn 104')
+    })
+
+    it('32. recovers canonical conversation cleanly for an active Bot missing one without duplicating on reopen', () => {
+      // Simulate legacy/missing conversation state for activeBotId (created via botRepo directly)
+      expect(convRepo.getByBotId(activeBotId, kb1Id)).toBeNull()
+
+      const opened = manager.openBotConversation(sessionId, activeBotId)
+      expect(opened.conversation.botId).toBe(activeBotId)
+      expect(opened.conversation.knowledgeBaseId).toBe(kb1Id)
+      expect(opened.segments).toHaveLength(1)
+      expect(opened.segments[0].segmentOrder).toBe(0)
+      expect(opened.messages).toEqual([])
+
+      const reopened = manager.openBotConversation(sessionId, activeBotId)
+      expect(reopened.conversation.id).toBe(opened.conversation.id)
+    })
+
+    it('33. opens archived Bot canonical conversation read-only if it exists, and fails safely if missing', () => {
+      // Archived bot missing a canonical conversation must NOT silently create one
+      expect(convRepo.getByBotId(archivedBotId, kb1Id)).toBeNull()
+      expect(() => manager.openBotConversation(sessionId, archivedBotId)).toThrowError(
+        ConversationManagerError
+      )
+      expect(convRepo.getByBotId(archivedBotId, kb1Id)).toBeNull()
+
+      // When canonical conversation exists, archived Bot opens read-only
+      const archivedConv = convRepo.create({
+        botId: archivedBotId,
+        knowledgeBaseId: kb1Id,
+        title: 'Archived Canonical'
+      })
+      msgRepo.create({
+        conversationId: archivedConv.id,
+        botId: archivedBotId,
+        knowledgeBaseId: kb1Id,
+        role: 'user',
+        content: 'Historical question'
+      })
+
+      const workspace = manager.openBotConversation(sessionId, archivedBotId)
+      expect(workspace.conversation.id).toBe(archivedConv.id)
+      expect(workspace.messages).toHaveLength(1)
+    })
+
+    it('34. rejects opening conversation for cross-KB or nonexistent Bot', () => {
+      expect(() => manager.openBotConversation(sessionId, kb2BotId)).toThrowError(
+        ConversationManagerError
+      )
+      try {
+        manager.openBotConversation(sessionId, kb2BotId)
+      } catch (err) {
+        expect((err as ConversationManagerError).code).toBe('BOT_NOT_FOUND')
+      }
+
+      expect(() =>
+        manager.openBotConversation(sessionId, '00000000-0000-4000-8000-000000009999')
+      ).toThrowError(ConversationManagerError)
+    })
+
+    it('35. getClearPreview reports counts and blocks active operations without mutating state', () => {
+      const opened = manager.openBotConversation(sessionId, activeBotId)
+      msgRepo.create({
+        conversationId: opened.conversation.id,
+        botId: activeBotId,
+        knowledgeBaseId: kb1Id,
+        role: 'user',
+        content: 'Msg 1'
+      })
+      dbContext.db
+        .prepare(
+          `INSERT INTO agent_runs (id, bot_id, conversation_id, knowledge_base_id, selected_model, status, started_at)
+           VALUES (?, ?, ?, ?, 'gpt-4o', 'completed', ?)`
+        )
+        .run('run-preview-1', activeBotId, opened.conversation.id, kb1Id, Date.now())
+
+      const preview = manager.getClearPreview(sessionId, opened.conversation.id)
+      expect(preview).toEqual({
+        conversationId: opened.conversation.id,
+        conversationTitle: opened.conversation.title,
+        botId: activeBotId,
+        botName: 'Alpha Bot',
+        messageCount: 1,
+        segmentCount: 1,
+        agentRunCount: 1,
+        toolEventCount: 0,
+        isBlocked: false
+      })
+
+      const blockedPreview = manager.getClearPreview(sessionId, opened.conversation.id, {
+        isGenerating: true
+      })
+      expect(blockedPreview.isBlocked).toBe(true)
+      expect(blockedPreview.blockReason).toBeTruthy()
+    })
+
+    it('36. clearConversation empties history, preserves canonical ID & agent_run audit, and keeps Bot usable', () => {
+      const opened = manager.openBotConversation(sessionId, activeBotId)
+      msgRepo.create({
+        conversationId: opened.conversation.id,
+        botId: activeBotId,
+        knowledgeBaseId: kb1Id,
+        role: 'user',
+        content: 'Before clear'
+      })
+      dbContext.db
+        .prepare(
+          `INSERT INTO agent_runs (id, bot_id, conversation_id, knowledge_base_id, selected_model, status, started_at)
+           VALUES (?, ?, ?, ?, 'gpt-4o', 'completed', ?)`
+        )
+        .run('run-retain-1', activeBotId, opened.conversation.id, kb1Id, Date.now())
+
+      const result = manager.clearConversation(sessionId, opened.conversation.id)
+      expect(result.conversation.id).toBe(opened.conversation.id)
+      expect(result.deletedMessagesCount).toBe(1)
+      expect(result.preservedAgentRunsCount).toBe(1)
+      expect(result.activeSegment.segmentOrder).toBe(0)
+
+      // Reopen preserves canonical ID and starts empty
+      const afterClear = manager.openBotConversation(sessionId, activeBotId)
+      expect(afterClear.conversation.id).toBe(opened.conversation.id)
+      expect(afterClear.messages).toEqual([])
+      expect(afterClear.segments).toHaveLength(1)
+
+      // Writing a fresh message afterward works cleanly
+      const nextMsg = msgRepo.create({
+        conversationId: opened.conversation.id,
+        botId: activeBotId,
+        knowledgeBaseId: kb1Id,
+        role: 'user',
+        content: 'After clear'
+      })
+      const afterNextMsg = manager.openBotConversation(sessionId, activeBotId)
+      expect(afterNextMsg.messages.map((m) => m.id)).toEqual([nextMsg.id])
+
+      // Cross-KB clear rejected
+      const kb2Session = 'session_kb2'
+      activeContext.activateWorkspace(kb2Session, kb2Id)
+      const kb2Opened = manager.openBotConversation(kb2Session, kb2BotId)
+      expect(() => manager.clearConversation(sessionId, kb2Opened.conversation.id)).toThrowError(
+        ConversationManagerError
+      )
     })
   })
 })

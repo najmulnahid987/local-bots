@@ -66,8 +66,14 @@ import {
   CONVERSATION_IPC_CHANNELS,
   type ConversationApi,
   type ConversationDto,
+  type ConversationSegmentDto,
+  type BotConversationWorkspaceDto,
+  type ClearConversationRequest,
+  type ClearConversationPreviewDto,
+  type ClearConversationResultDto,
+  type GetConversationForBotRequest,
+  type GetSegmentsRequest,
   type MessageDto,
-  type CreateConversationRequest,
   type ListConversationsRequest,
   type ListMessagesRequest,
   type RenameConversationIpcRequest,
@@ -770,9 +776,23 @@ export function normalizeConversationBridgeError(error: unknown): ConversationBr
  */
 export function createConversationApi(ipc: typeof ipcRenderer): ConversationApi {
   return {
-    createConversation: async (request: CreateConversationRequest): Promise<ConversationDto> => {
+    getConversationForBot: async (
+      request: GetConversationForBotRequest | string
+    ): Promise<BotConversationWorkspaceDto> => {
       try {
-        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.CREATE, request)
+        const payload = typeof request === 'string' ? { botId: request } : request
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT, payload)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    getSegments: async (
+      request: GetSegmentsRequest | string
+    ): Promise<readonly ConversationSegmentDto[]> => {
+      try {
+        const payload = typeof request === 'string' ? { conversationId: request } : request
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.GET_SEGMENTS, payload)
       } catch (err) {
         throw normalizeConversationBridgeError(err)
       }
@@ -800,6 +820,28 @@ export function createConversationApi(ipc: typeof ipcRenderer): ConversationApi 
     renameConversation: async (request: RenameConversationIpcRequest): Promise<ConversationDto> => {
       try {
         return await ipc.invoke(CONVERSATION_IPC_CHANNELS.RENAME, request)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    getClearPreview: async (
+      request: ClearConversationRequest | string
+    ): Promise<ClearConversationPreviewDto> => {
+      try {
+        const payload = typeof request === 'string' ? { conversationId: request } : request
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.GET_CLEAR_PREVIEW, payload)
+      } catch (err) {
+        throw normalizeConversationBridgeError(err)
+      }
+    },
+
+    clearConversation: async (
+      request: ClearConversationRequest | string
+    ): Promise<ClearConversationResultDto> => {
+      try {
+        const payload = typeof request === 'string' ? { conversationId: request } : request
+        return await ipc.invoke(CONVERSATION_IPC_CHANNELS.CLEAR, payload)
       } catch (err) {
         throw normalizeConversationBridgeError(err)
       }
@@ -900,13 +942,16 @@ export function createConversationApi(ipc: typeof ipcRenderer): ConversationApi 
             } catch {
               // Ignore port close errors
             }
-            reject(
-              new ConversationBridgeError(
-                chunk.error.message,
-                chunk.error.code,
-                chunk.error.retryable
-              )
+            const bridgeError = new ConversationBridgeError(
+              chunk.error.message,
+              chunk.error.code,
+              chunk.error.retryable
             )
+            if ('partialMessage' in chunk && chunk.partialMessage) {
+              ;(bridgeError as unknown as { partialMessage?: MessageDto }).partialMessage =
+                chunk.partialMessage
+            }
+            reject(bridgeError)
           }
         }
 
@@ -991,13 +1036,16 @@ export function createConversationApi(ipc: typeof ipcRenderer): ConversationApi 
             } catch {
               // Ignore port close errors
             }
-            reject(
-              new ConversationBridgeError(
-                chunk.error.message,
-                chunk.error.code,
-                chunk.error.retryable
-              )
+            const bridgeError = new ConversationBridgeError(
+              chunk.error.message,
+              chunk.error.code,
+              chunk.error.retryable
             )
+            if ('partialMessage' in chunk && chunk.partialMessage) {
+              ;(bridgeError as unknown as { partialMessage?: MessageDto }).partialMessage =
+                chunk.partialMessage
+            }
+            reject(bridgeError)
           }
         }
 

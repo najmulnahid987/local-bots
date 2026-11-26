@@ -1,6 +1,10 @@
 import type Database from 'better-sqlite3'
 import {
   type ConversationDto,
+  type ConversationSegmentDto,
+  type BotConversationWorkspaceDto,
+  type ClearConversationPreviewDto,
+  type ClearConversationResultDto,
   type MessageDto,
   type CreateConversationRequest,
   type ListConversationsRequest,
@@ -9,9 +13,11 @@ import {
   type ResolvedCitationTargetDto,
   createConversationRequestSchema,
   conversationTitleSchema,
-  conversationIdSchema
+  conversationIdSchema,
+  orderMessagesRespectingSegments
 } from '../../shared/conversations'
-import { idSchema, ValidationError } from '../database/repositories/types'
+import { botIdSchema } from '../../shared/bots'
+import { idSchema, RepositoryError, ValidationError } from '../database/repositories/types'
 import { ConversationRepository } from '../database/repositories/conversation-repository'
 import { MessageRepository } from '../database/repositories/message-repository'
 import { BotRepository } from '../database/repositories/bot-repository'
@@ -29,6 +35,7 @@ export type ConversationManagerErrorCode =
   | 'CITATION_NOT_FOUND'
   | 'CITATION_SOURCE_UNAVAILABLE'
   | 'CITATION_CHUNK_UNAVAILABLE'
+  | 'OPERATION_BLOCKED'
   | 'INVALID_INPUT'
   | 'PERSISTENCE_ERROR'
   | 'INTERNAL_ERROR'
@@ -170,7 +177,7 @@ export class ConversationManagerService {
     }
 
     try {
-      return this.conversationRepo.create({
+      return this.conversationRepo.getOrCreate({
         botId: validated.botId,
         knowledgeBaseId: activeKbId,
         title: validated.title
@@ -184,6 +191,258 @@ export class ConversationManagerService {
         'PERSISTENCE_ERROR'
       )
     }
+  }
+
+  /**
+   * Retrieves the single canonical conversation for a Bot in the active Knowledge Base.
+   * Returns null if no conversation exists for the Bot.
+   */
+  public getConversationForBot(sessionId: SessionId, botId: string): ConversationDto | null {
+    const botIdParse = idSchema.safeParse(botId)
+    if (!botIdParse.success) {
+      throw new ConversationManagerError(
+        `Invalid botId: ${botIdParse.error.issues[0].message}`,
+        'INVALID_INPUT'
+      )
+    }
+    const activeKbId = this.getActiveKnowledgeBaseId(sessionId)
+    const bot = this.botRepo.getById(botIdParse.data, activeKbId)
+    if (!bot) {
+      return null
+    }
+    return this.conversationRepo.getByBotId(botIdParse.data, activeKbId)
+  }
+
+  /**
+   * Opens the canonical conversation workspace (conversation, historical segments, and messages)
+   * strictly scoped to the selected Bot within the caller session's active Knowledge Base.
+   *
+   * - Never accepts knowledgeBaseId or conversationId overrides from the client.
+   * - Normal path: returns the existing canonical conversation without mutations.
+   * - Controlled invariant recovery: if an active Bot unexpectedly lacks a conversation row,
+   *   recovers atomically in Main process (archived Bots fail safely without mutation).
+   */
+  public openBotConversation(sessionId: SessionId, botId: string): BotConversationWorkspaceDto {
+    const botIdParse = botIdSchema.safeParse(botId)
+    if (!botIdParse.success) {
+      throw new ConversationManagerError(
+        `Invalid botId: ${botIdParse.error.issues[0].message}`,
+        'INVALID_INPUT'
+      )
+    }
+    const validatedBotId = botIdParse.data
+    const activeKbId = this.getActiveKnowledgeBaseId(sessionId)
+
+    const bot = this.botRepo.getById(validatedBotId, activeKbId)
+    if (!bot) {
+      throw new ConversationManagerError(
+        `Bot with ID '${validatedBotId}' was not found in the active Knowledge Base.`,
+        'BOT_NOT_FOUND'
+      )
+    }
+
+    let conversation = this.conversationRepo.getByBotId(bot.id, activeKbId)
+    let recoveredFromMissingInvariant = false
+
+    if (!conversation) {
+      if (bot.status === 'archived') {
+        throw new ConversationManagerError(
+          `Canonical conversation for archived Bot '${bot.name}' is unavailable.`,
+          'CONVERSATION_NOT_FOUND'
+        )
+      }
+
+      console.warn(
+        `[CONVERSATION_INVARIANT_RECOVERY] Restoring missing canonical conversation for active Bot '${bot.id}' in Main process.`
+      )
+      try {
+        conversation = this.conversationRepo.getOrCreate({
+          botId: bot.id,
+          knowledgeBaseId: activeKbId,
+          title: `${bot.name} Conversation`
+        })
+        recoveredFromMissingInvariant = true
+      } catch (err) {
+        throw new ConversationManagerError(
+          `Failed to recover canonical conversation for Bot '${bot.id}': ${err instanceof Error ? err.message : String(err)}`,
+          'PERSISTENCE_ERROR'
+        )
+      }
+    }
+
+    try {
+      const segments = this.conversationRepo.getSegments(conversation.id)
+      const rawMessages = this.messageRepo.listByConversation(conversation.id, bot.id, activeKbId, {
+        limit: 10000
+      })
+      const messages = orderMessagesRespectingSegments(rawMessages, segments)
+
+      return {
+        conversation,
+        segments,
+        messages,
+        ...(recoveredFromMissingInvariant ? { recoveredFromMissingInvariant: true } : {})
+      }
+    } catch (err) {
+      if (err instanceof ConversationManagerError) throw err
+      throw new ConversationManagerError(
+        `Failed to load conversation workspace: ${err instanceof Error ? err.message : String(err)}`,
+        'PERSISTENCE_ERROR'
+      )
+    }
+  }
+
+  /**
+   * Computes non-destructive preview metrics before clearing a Bot's canonical conversation.
+   */
+  public getClearPreview(
+    sessionId: SessionId,
+    conversationId: string,
+    activeLocks?: { readonly isGenerating?: boolean; readonly isDeleting?: boolean }
+  ): ClearConversationPreviewDto {
+    this.assertValidUuid(conversationId, 'Conversation')
+    const activeKbId = this.getActiveKnowledgeBaseId(sessionId)
+
+    const conversation = this.conversationRepo.getByIdOnly(conversationId)
+    if (!conversation || conversation.knowledgeBaseId !== activeKbId) {
+      throw new ConversationManagerError(
+        `Conversation with ID '${conversationId}' was not found.`,
+        'CONVERSATION_NOT_FOUND'
+      )
+    }
+
+    const bot = this.botRepo.getById(conversation.botId, activeKbId)
+    if (!bot) {
+      throw new ConversationManagerError(
+        `Parent Bot of conversation '${conversationId}' does not belong to the active Knowledge Base.`,
+        'BOT_MISMATCH'
+      )
+    }
+
+    const stats = this.conversationRepo.getClearPreviewStats(conversation.id, bot.id, activeKbId)
+    if (!stats) {
+      throw new ConversationManagerError(
+        `Conversation with ID '${conversationId}' was not found.`,
+        'CONVERSATION_NOT_FOUND'
+      )
+    }
+
+    let isBlocked = false
+    let blockReason: string | undefined
+
+    if (activeLocks?.isGenerating) {
+      isBlocked = true
+      blockReason = 'Stop active generation before clearing this conversation.'
+    } else if (activeLocks?.isDeleting) {
+      isBlocked = true
+      blockReason = 'A conversation operation is already in progress.'
+    } else if (stats.activeAgentRunCount > 0) {
+      isBlocked = true
+      blockReason = 'Stop the active Agent Task before clearing this conversation.'
+    } else if (bot.status === 'archived') {
+      isBlocked = true
+      blockReason = 'Cannot clear conversation history while this Bot is archived.'
+    } else if (conversation.archivedAt !== null) {
+      isBlocked = true
+      blockReason = 'Cannot clear an archived conversation.'
+    }
+
+    return {
+      conversationId: conversation.id,
+      conversationTitle: conversation.title,
+      botId: bot.id,
+      botName: bot.name,
+      messageCount: stats.messageCount,
+      segmentCount: stats.segmentCount,
+      agentRunCount: stats.agentRunCount,
+      toolEventCount: stats.toolEventCount,
+      isBlocked,
+      ...(blockReason ? { blockReason } : {})
+    }
+  }
+
+  /**
+   * Atomically clears all messages and resets historical segment metadata for a canonical
+   * conversation while retaining the conversation identity and preserving Agent Task audit logs.
+   */
+  public clearConversation(
+    sessionId: SessionId,
+    conversationId: string
+  ): ClearConversationResultDto {
+    this.assertValidUuid(conversationId, 'Conversation')
+    const activeKbId = this.getActiveKnowledgeBaseId(sessionId)
+
+    const conversation = this.conversationRepo.getByIdOnly(conversationId)
+    if (!conversation || conversation.knowledgeBaseId !== activeKbId) {
+      throw new ConversationManagerError(
+        `Conversation with ID '${conversationId}' was not found.`,
+        'CONVERSATION_NOT_FOUND'
+      )
+    }
+
+    const bot = this.botRepo.getById(conversation.botId, activeKbId)
+    if (!bot) {
+      throw new ConversationManagerError(
+        `Parent Bot of conversation '${conversationId}' does not belong to the active Knowledge Base.`,
+        'BOT_MISMATCH'
+      )
+    }
+
+    if (bot.status === 'archived') {
+      throw new ConversationManagerError(
+        `Cannot clear conversation: Bot '${bot.name}' is archived.`,
+        'BOT_ARCHIVED'
+      )
+    }
+
+    if (conversation.archivedAt !== null) {
+      throw new ConversationManagerError(
+        `Cannot clear conversation '${conversation.title}': conversation is archived.`,
+        'CONVERSATION_ARCHIVED'
+      )
+    }
+
+    try {
+      const result = this.conversationRepo.clearConversation(conversation.id, bot.id, activeKbId)
+      if (!result) {
+        throw new ConversationManagerError(
+          `Conversation with ID '${conversationId}' was not found.`,
+          'CONVERSATION_NOT_FOUND'
+        )
+      }
+      return result
+    } catch (err) {
+      if (err instanceof ConversationManagerError) throw err
+      if (err instanceof RepositoryError && err.message.toLowerCase().includes('active')) {
+        throw new ConversationManagerError(err.message, 'OPERATION_BLOCKED')
+      }
+      throw new ConversationManagerError(
+        `Failed to clear conversation: ${err instanceof Error ? err.message : String(err)}`,
+        'PERSISTENCE_ERROR'
+      )
+    }
+  }
+
+  /**
+   * Retrieves all historical conversation segments for a conversation in the active Knowledge Base.
+   */
+  public getSegments(sessionId: SessionId, conversationId: string): ConversationSegmentDto[] {
+    const convIdParse = idSchema.safeParse(conversationId)
+    if (!convIdParse.success) {
+      throw new ConversationManagerError(
+        `Invalid conversationId: ${convIdParse.error.issues[0].message}`,
+        'INVALID_INPUT'
+      )
+    }
+    const activeKbId = this.getActiveKnowledgeBaseId(sessionId)
+    const conv = this.conversationRepo.getByIdOnly(convIdParse.data)
+    if (!conv || conv.knowledgeBaseId !== activeKbId) {
+      throw new ConversationManagerError(
+        `Conversation with ID '${conversationId}' does not exist in the active Knowledge Base.`,
+        'CONVERSATION_NOT_FOUND'
+      )
+    }
+    return this.conversationRepo.getSegments(convIdParse.data)
   }
 
   /**

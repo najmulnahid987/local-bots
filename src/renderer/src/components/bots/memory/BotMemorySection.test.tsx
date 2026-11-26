@@ -14,6 +14,7 @@ describe('Renderer: BotMemorySection (Phase 9 Step 9.3)', () => {
     systemPrompt: 'Be concise.',
     providerConnectionId: 'conn-1',
     modelId: 'gpt-4o',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: ['search_knowledge_base'],
     status: 'active',
     createdAt: 1700000000000,

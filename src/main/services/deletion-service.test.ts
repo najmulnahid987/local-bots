@@ -191,7 +191,7 @@ describe('DeletionService (Step 9.8)', () => {
     })
     const conv2 = conversationRepo.create({
       knowledgeBaseId: kb1.id,
-      botId: bot1.id,
+      botId: bot2.id,
       title: 'Conversation Two'
     })
 
@@ -373,7 +373,7 @@ describe('DeletionService (Step 9.8)', () => {
       expect(preview.displayName).toBe('Alpha Researcher')
       expect(preview.parentId).toBe(f.kb1.id)
       expect(preview.parentName).toBe('Alpha Knowledge Base')
-      expect(preview.dependentCounts.conversations).toBe(2)
+      expect(preview.dependentCounts.conversations).toBe(1)
       expect(preview.dependentCounts.messages).toBe(2)
       expect(preview.dependentCounts.agentRuns).toBe(1)
       expect(preview.dependentCounts.memories).toBe(1)

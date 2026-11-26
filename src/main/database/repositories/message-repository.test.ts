@@ -571,4 +571,64 @@ describe('MessageRepository (Phase 7 Step 7.2)', () => {
       expect(msgRepo.getById(msgB.id, convBId, botBId, kbBId)).not.toBeNull()
     })
   })
+
+  // ==========================================================================
+  // Step 12.2: Segment-Ordered Listing & Full History Retrieval (>100 msgs)
+  // ==========================================================================
+
+  describe('Step 12.2: Segment-Aware Ordering and History Completeness', () => {
+    it('orders messages strictly by segment_order then created_at without interleaving overlapping timestamps', () => {
+      const seg0Id = '10000000-0000-4000-8000-000000000000'
+      const seg1Id = '10000000-0000-4000-8000-000000000001'
+      const mS0First = '20000000-0000-4000-8000-000000000001'
+      const mS0Second = '20000000-0000-4000-8000-000000000002'
+      const mS1First = '20000000-0000-4000-8000-000000000003'
+      const mUnseg = '20000000-0000-4000-8000-000000000004'
+      const now = 1700000000000
+
+      db.prepare(
+        `INSERT INTO conversation_segments (id, conversation_id, original_conversation_id, title, segment_order, created_at) VALUES (?, ?, ?, 'Old A', 0, ?)`
+      ).run(seg0Id, convAId, convAId, now)
+      db.prepare(
+        `INSERT INTO conversation_segments (id, conversation_id, original_conversation_id, title, segment_order, created_at) VALUES (?, ?, ?, 'Old B', 1, ?)`
+      ).run(seg1Id, convAId, convAId, now + 100)
+
+      // Interleaved timestamps across segments:
+      // Seg 0 has ts=100 and ts=300; Seg 1 has ts=200; Unsegmented has ts=250.
+      db.prepare(
+        `INSERT INTO messages (id, conversation_id, segment_id, role, content, created_at) VALUES (?, ?, ?, 'user', 'S0-first', ?)`
+      ).run(mS0First, convAId, seg0Id, now + 100)
+      db.prepare(
+        `INSERT INTO messages (id, conversation_id, segment_id, role, content, created_at) VALUES (?, ?, ?, 'assistant', 'S0-second-later-ts', ?)`
+      ).run(mS0Second, convAId, seg0Id, now + 300)
+      db.prepare(
+        `INSERT INTO messages (id, conversation_id, segment_id, role, content, created_at) VALUES (?, ?, ?, 'user', 'S1-earlier-ts', ?)`
+      ).run(mS1First, convAId, seg1Id, now + 200)
+      db.prepare(
+        `INSERT INTO messages (id, conversation_id, segment_id, role, content, created_at) VALUES (?, ?, NULL, 'user', 'Unsegmented', ?)`
+      ).run(mUnseg, convAId, now + 250)
+
+      const listed = msgRepo.listByConversation(convAId, botAId, kbAId)
+      expect(listed.map((m) => m.id)).toEqual([mS0First, mS0Second, mS1First, mUnseg])
+    })
+
+    it('retrieves more than 100 messages without silent default truncation', () => {
+      const baseTs = 1700001000000
+      for (let i = 0; i < 125; i++) {
+        const created = msgRepo.create({
+          conversationId: convAId,
+          botId: botAId,
+          knowledgeBaseId: kbAId,
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: `Message ${i}`
+        })
+        db.prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(baseTs + i, created.id)
+      }
+
+      const listed = msgRepo.listByConversation(convAId, botAId, kbAId)
+      expect(listed).toHaveLength(125)
+      expect(listed[0].content).toBe('Message 0')
+      expect(listed[124].content).toBe('Message 124')
+    })
+  })
 })

@@ -18,6 +18,7 @@ describe('Renderer: ConversationComposer (Agent Task Mode & Permissions)', () =>
     systemPrompt: 'You are helpful.',
     providerConnectionId: 'conn-01',
     modelId: 'gpt-6-luna',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: ['search_knowledge_base', 'read_knowledge_source'],
     status: 'active',
     createdAt: 1700000000000,
@@ -32,6 +33,7 @@ describe('Renderer: ConversationComposer (Agent Task Mode & Permissions)', () =>
     systemPrompt: 'You are helpful.',
     providerConnectionId: 'conn-01',
     modelId: 'gpt-6-luna',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: [
       'search_knowledge_base',
       'read_knowledge_source',
@@ -172,6 +174,161 @@ describe('Renderer: ConversationComposer (Agent Task Mode & Permissions)', () =>
     fireEvent.click(stopBtn)
     await waitFor(() => {
       expect(handleStop).toHaveBeenCalled()
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Step 12.6 Scenarios 29 - 33b: Mode Separation and UI Experience
+  // -------------------------------------------------------------------------
+  describe('Step 12.6 UI Mode Separation Tests (Scenarios 29 - 33b)', () => {
+    const sampleToollessBot: BotDto = {
+      id: 'bot-03',
+      knowledgeBaseId: 'kb-01',
+      name: 'Toolless Bot',
+      description: 'Bot with 0 tools',
+      systemPrompt: 'Conversational',
+      providerConnectionId: 'conn-01',
+      modelId: 'gpt-6-luna',
+      responsePolicy: 'balanced_kb_first',
+      enabledTools: [],
+      status: 'active',
+      createdAt: 1700000000000,
+      updatedAt: 1700000000000
+    }
+
+    it('29. Default mode is chat when composer renders', () => {
+      render(
+        <ConversationComposer
+          bot={sampleBotWithoutWorkspaceTools}
+          onSend={vi.fn()}
+          isGenerating={false}
+        />
+      )
+
+      const chatBtn = screen.getByTestId('composer-mode-chat-btn')
+      const agentBtn = screen.getByTestId('composer-mode-agent-btn')
+
+      expect(chatBtn.getAttribute('aria-pressed')).toBe('true')
+      expect(agentBtn.getAttribute('aria-pressed')).toBe('false')
+      expect(screen.queryByTestId('agent-tools-info')).toBeNull()
+      expect(screen.queryByTestId('agent-no-tools-warning')).toBeNull()
+    })
+
+    it('30. Mode indicator is visible and shows tool badges when Agent mode is selected', () => {
+      render(
+        <ConversationComposer
+          bot={sampleBotWithoutWorkspaceTools}
+          onSend={vi.fn()}
+          isGenerating={false}
+        />
+      )
+
+      const agentBtn = screen.getByTestId('composer-mode-agent-btn')
+      fireEvent.click(agentBtn)
+
+      expect(agentBtn.getAttribute('aria-pressed')).toBe('true')
+      const chatBtn = screen.getByTestId('composer-mode-chat-btn')
+      expect(chatBtn.getAttribute('aria-pressed')).toBe('false')
+
+      // Context panel with enabled tools badge
+      const infoPanel = screen.getByTestId('agent-tools-info')
+      expect(infoPanel).toBeDefined()
+      const countBadge = screen.getByTestId('agent-tools-count-badge')
+      expect(countBadge.textContent).toContain('2 tools enabled')
+    })
+
+    it('31. Explicit mode switch: typing does not switch mode, switching bot resets mode to chat', () => {
+      const { rerender } = render(
+        <ConversationComposer
+          bot={sampleBotWithoutWorkspaceTools}
+          onSend={vi.fn()}
+          isGenerating={false}
+        />
+      )
+
+      // Type text in chat mode
+      const input = screen.getByTestId('message-input')
+      fireEvent.change(input, { target: { value: 'execute task search_knowledge_base' } })
+
+      // Mode remains Chat
+      expect(screen.getByTestId('composer-mode-chat-btn').getAttribute('aria-pressed')).toBe('true')
+      expect(screen.getByTestId('composer-mode-agent-btn').getAttribute('aria-pressed')).toBe(
+        'false'
+      )
+
+      // Explicitly click Agent mode
+      fireEvent.click(screen.getByTestId('composer-mode-agent-btn'))
+      expect(screen.getByTestId('composer-mode-agent-btn').getAttribute('aria-pressed')).toBe(
+        'true'
+      )
+
+      // Rerender with a different bot
+      rerender(
+        <ConversationComposer
+          bot={sampleBotWithWorkspaceTools}
+          onSend={vi.fn()}
+          isGenerating={false}
+        />
+      )
+
+      // Mode resets automatically to Chat
+      expect(screen.getByTestId('composer-mode-chat-btn').getAttribute('aria-pressed')).toBe('true')
+      expect(screen.getByTestId('composer-mode-agent-btn').getAttribute('aria-pressed')).toBe(
+        'false'
+      )
+    })
+
+    it('32. Switching modes does not alter Bot permissions or response policy', () => {
+      const initialTools = [...sampleBotWithoutWorkspaceTools.enabledTools]
+      const initialPolicy = sampleBotWithoutWorkspaceTools.responsePolicy
+
+      render(
+        <ConversationComposer
+          bot={sampleBotWithoutWorkspaceTools}
+          onSend={vi.fn()}
+          isGenerating={false}
+        />
+      )
+
+      // Toggle to Agent
+      fireEvent.click(screen.getByTestId('composer-mode-agent-btn'))
+      // Toggle back to Chat
+      fireEvent.click(screen.getByTestId('composer-mode-chat-btn'))
+
+      // Bot object untouched
+      expect(sampleBotWithoutWorkspaceTools.enabledTools).toEqual(initialTools)
+      expect(sampleBotWithoutWorkspaceTools.responsePolicy).toBe(initialPolicy)
+    })
+
+    it('33b. Bot with 0 enabled tools in Agent mode displays warning and disables submission', () => {
+      const handleDispatch = vi.fn()
+      render(
+        <ConversationComposer
+          bot={sampleToollessBot}
+          onSend={vi.fn()}
+          onDispatchTask={handleDispatch}
+          isGenerating={false}
+        />
+      )
+
+      fireEvent.click(screen.getByTestId('composer-mode-agent-btn'))
+
+      // Shows warning banner
+      const warningBanner = screen.getByTestId('agent-no-tools-warning')
+      expect(warningBanner.textContent).toContain(
+        'This Bot has no enabled tools. Configure tools in Bot settings to execute Agent tasks.'
+      )
+
+      // Type some task text
+      const input = screen.getByTestId('message-input')
+      fireEvent.change(input, { target: { value: 'Perform analysis' } })
+
+      // Dispatch button is disabled
+      const dispatchBtn = screen.getByTestId('dispatch-task-btn')
+      expect(dispatchBtn.getAttribute('disabled')).not.toBeNull()
+
+      fireEvent.click(dispatchBtn)
+      expect(handleDispatch).not.toHaveBeenCalled()
     })
   })
 })

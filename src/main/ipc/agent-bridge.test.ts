@@ -1421,6 +1421,9 @@ describe('Agent IPC Bridge & Preload Integration (Phase 8 Step 8.9)', () => {
       const evt: AgentStreamEvent = {
         type: 'agent_run_started',
         agentRunId: 'run-123',
+        conversationId: 'conv-123',
+        executionMode: 'agent',
+        stage: 'preparing',
         sequenceNumber: 1,
         timestamp: Date.now(),
         botId: bot1Id,

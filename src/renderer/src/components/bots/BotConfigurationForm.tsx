@@ -1,7 +1,12 @@
 import { ReactElement, useState, useEffect, useMemo, FormEvent, ChangeEvent } from 'react'
-import { Loader2, AlertCircle, Wrench } from 'lucide-react'
-import type { ToolPermission } from '../../../../shared/bots'
-import { APPROVED_BOT_TOOLS } from '../../../../shared/bots'
+import { Loader2, AlertCircle, Wrench, BookOpen, Database } from 'lucide-react'
+import type { ToolPermission, BotResponsePolicy } from '../../../../shared/bots'
+import {
+  APPROVED_BOT_TOOLS,
+  BOT_RESPONSE_POLICIES,
+  BOT_RESPONSE_POLICY_METADATA,
+  DEFAULT_BOT_RESPONSE_POLICY
+} from '../../../../shared/bots'
 import type {
   ProviderCatalogDto,
   ProviderConnectionSummary,
@@ -13,6 +18,7 @@ export interface BotFormValues {
   name: string
   description: string
   systemPrompt: string
+  responsePolicy: BotResponsePolicy
   providerConnectionId: string | null
   modelId: string
   enabledTools: ToolPermission[]
@@ -27,6 +33,7 @@ export interface BotConfigurationFormProps {
   readonly error?: string | null
   readonly connections?: readonly ProviderConnectionSummary[]
   readonly catalog?: ProviderCatalogDto | null
+  readonly knowledgeBaseName?: string
 }
 
 const DEFAULT_TOOLS: readonly ToolPermission[] = [
@@ -42,11 +49,13 @@ export function BotConfigurationForm({
   onCancel,
   error = null,
   connections: propConnections,
-  catalog: propCatalog
+  catalog: propCatalog,
+  knowledgeBaseName
 }: BotConfigurationFormProps): ReactElement {
   const initialName = initialValues?.name ?? ''
   const initialDescription = initialValues?.description ?? ''
   const initialSystemPrompt = initialValues?.systemPrompt ?? ''
+  const initialResponsePolicy = initialValues?.responsePolicy ?? DEFAULT_BOT_RESPONSE_POLICY
   const initialProviderConnectionId = initialValues?.providerConnectionId ?? null
   const initialModelId = initialValues?.modelId
   const initialEnabledTools = initialValues?.enabledTools
@@ -118,6 +127,7 @@ export function BotConfigurationForm({
   }, [initialModelId, selectableModels])
 
   const [modelId, setModelId] = useState<string>(initialModel)
+  const [responsePolicy, setResponsePolicy] = useState<BotResponsePolicy>(initialResponsePolicy)
   const [enabledTools, setEnabledTools] = useState<ToolPermission[]>(
     initialEnabledTools ?? [...DEFAULT_TOOLS]
   )
@@ -313,6 +323,7 @@ export function BotConfigurationForm({
       name: name.trim(),
       description: description.trim(),
       systemPrompt: systemPrompt.trim(),
+      responsePolicy,
       providerConnectionId,
       modelId,
       enabledTools
@@ -540,6 +551,69 @@ export function BotConfigurationForm({
               {fieldErrors.modelId}
             </span>
           )}
+        </div>
+      </div>
+
+      {/* Knowledge and Response Behavior Section */}
+      <div className="form-group bot-policy-section" data-testid="bot-response-policy-section">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <BookOpen size={14} className="text-muted" aria-hidden="true" />
+          <label className="form-label" style={{ marginBottom: 0 }}>
+            Knowledge and Response Behavior
+          </label>
+        </div>
+
+        <div className="policy-kb-context" data-testid="parent-kb-indicator">
+          <Database size={13} className="text-muted" aria-hidden="true" />
+          <span>
+            Parent Knowledge Base:{' '}
+            <strong>
+              {knowledgeBaseName ? knowledgeBaseName : 'Scoped to active Knowledge Base'}
+            </strong>
+          </span>
+        </div>
+
+        <span className="form-helper">
+          Choose how this Bot prioritizes retrieved Knowledge Base documents when answering
+          questions in chat. This setting is independent of Enabled Tools.
+        </span>
+
+        <div className="bot-policy-list" role="radiogroup" aria-label="Response Policy">
+          {BOT_RESPONSE_POLICIES.map((policyId) => {
+            const meta = BOT_RESPONSE_POLICY_METADATA[policyId]
+            const isSelected = responsePolicy === policyId
+            return (
+              <label
+                key={policyId}
+                className={`bot-policy-card ${isSelected ? 'selected' : ''}`}
+                data-testid={`policy-option-${policyId}`}
+              >
+                <input
+                  type="radio"
+                  name="bot-response-policy"
+                  value={policyId}
+                  checked={isSelected}
+                  disabled={isSubmitting}
+                  onChange={() => setResponsePolicy(policyId)}
+                  style={{ marginTop: '3px' }}
+                />
+                <div>
+                  <div className="policy-card-header">
+                    <span className="tool-card-title">{meta.label}</span>
+                    {meta.recommended && (
+                      <span
+                        className="policy-recommended-badge"
+                        data-testid="policy-recommended-badge"
+                      >
+                        Recommended
+                      </span>
+                    )}
+                  </div>
+                  <div className="tool-card-desc">{meta.description}</div>
+                </div>
+              </label>
+            )
+          })}
         </div>
       </div>
 

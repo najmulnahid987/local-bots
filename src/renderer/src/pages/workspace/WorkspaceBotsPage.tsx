@@ -223,6 +223,7 @@ export function WorkspaceBotsPage(): ReactElement {
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
         createBotFn={createBot}
+        knowledgeBaseName={knowledgeBase?.name}
       />
 
       <EditBotModal
@@ -230,6 +231,7 @@ export function WorkspaceBotsPage(): ReactElement {
         bot={editingBot}
         onClose={() => setEditingBot(null)}
         updateBotFn={updateBot}
+        knowledgeBaseName={knowledgeBase?.name}
       />
 
       <BotArchiveDialog

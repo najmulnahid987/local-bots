@@ -100,7 +100,8 @@ describe('ConversationPersistenceService (Phase 7 Step 7.6B.2)', () => {
       includedMessageCount: 0,
       excludedMessageCount: 0,
       historyTrimmingOccurred: false,
-      ...overrides
+      ...overrides,
+      responsePolicy: overrides?.responsePolicy ?? 'balanced_kb_first'
     }
   }
 
@@ -237,7 +238,7 @@ describe('ConversationPersistenceService (Phase 7 Step 7.6B.2)', () => {
       expect(message.role).toBe('user')
       expect(message.content).toBe('How do we calculate EBITDA?')
       expect(message.contentFormat).toBe('markdown')
-      expect(message.metadata).toEqual({})
+      expect(message.metadata).toEqual({ executionMode: 'chat' })
       expect(message.tokenUsage).toBeNull()
       expect(message.createdAt).toBeGreaterThan(0)
 
@@ -937,6 +938,135 @@ Based on our verified source [1], this is correct.
       expect(row.metadata_json).not.toContain('apiKey')
       expect(row.metadata_json).not.toContain('authorization')
       expect(row.metadata_json).not.toContain('password')
+    })
+
+    it('47. persists and roundtrips optional groundingMode metadata cleanly', () => {
+      const preparedTurn = createMockPreparedTurn({
+        groundingMode: 'kb_partial_with_general_fallback'
+      })
+      const assistantMsg = persistenceService.persistAssistantMessage(
+        preparedTurn,
+        createMockExecutionResult({
+          assistantText: 'Backed by docs [1], with general background context.'
+        })
+      )
+
+      expect(assistantMsg.metadata.groundingMode).toBe('kb_partial_with_general_fallback')
+      expect(assistantMsg.metadata.citations).toHaveLength(1)
+
+      const reloaded = msgRepo.listByConversation(convAId, botAId, kbAId)
+      const persisted = reloaded.find((m) => m.id === assistantMsg.id)
+      expect(persisted?.metadata.groundingMode).toBe('kb_partial_with_general_fallback')
+    })
+
+    it('48. persists validated claim provenance into SQLite and harmonizes mixed Balanced groundingMode across reloads', () => {
+      const preparedTurn = createMockPreparedTurn({
+        groundingMode: 'kb_grounded',
+        responsePolicy: 'balanced_kb_first'
+      })
+      const assistantMsg = persistenceService.persistAssistantMessage(
+        preparedTurn,
+        createMockExecutionResult({
+          assistantText: 'Compliance follows guidelines [1]. General good practice applies.',
+          validatedClaims: [
+            {
+              claimId: 'claim-1',
+              claimText: 'Compliance follows guidelines.',
+              provenance: 'kb_supported',
+              validationStatus: 'validated',
+              evidenceReferences: [
+                {
+                  knowledgeBaseId: kbAId,
+                  sourceId: citation1.sourceId,
+                  chunkId: citation1.chunkId,
+                  citationNumber: 1,
+                  fileName: citation1.fileName,
+                  fileType: citation1.fileType,
+                  pageNumber: citation1.pageNumber,
+                  headingPath: citation1.headingPath,
+                  chunkIndex: citation1.chunkIndex
+                }
+              ]
+            },
+            {
+              claimId: 'claim-2',
+              claimText: 'General good practice applies.',
+              provenance: 'general_knowledge',
+              validationStatus: 'not_checked',
+              evidenceReferences: []
+            }
+          ]
+        })
+      )
+
+      expect(assistantMsg.metadata.groundingMode).toBe('kb_partial_with_general_fallback')
+      expect(assistantMsg.metadata.claims).toHaveLength(2)
+
+      const reloaded = msgRepo.listByConversation(convAId, botAId, kbAId)
+      const persisted = reloaded.find((m) => m.id === assistantMsg.id)!
+      expect(persisted.metadata.claims).toHaveLength(2)
+      expect(persisted.metadata.claims?.[0].provenance).toBe('kb_supported')
+      expect(persisted.metadata.claims?.[0].evidenceReferences[0].knowledgeBaseId).toBe(kbAId)
+      expect(persisted.metadata.claims?.[1].provenance).toBe('general_knowledge')
+    })
+
+    it('Scenario 32 & 34: persists partial assistant message with isPartial: true, status, and no citations', () => {
+      const preparedTurn = createMockPreparedTurn()
+      const partialMsg = persistenceService.persistPartialAssistantMessage(
+        preparedTurn,
+        'This is a partial streamed response that was interrupted...',
+        {
+          status: 'cancelled',
+          finishReason: 'abort',
+          interruptedReason: 'Cancelled by user',
+          durationMs: 450,
+          tokenUsage: { promptTokens: 10, completionTokens: 12, totalTokens: 22 }
+        }
+      )
+
+      expect(partialMsg.content).toBe('This is a partial streamed response that was interrupted...')
+      expect(partialMsg.role).toBe('assistant')
+      expect(partialMsg.metadata.isPartial).toBe(true)
+      expect(partialMsg.metadata.status).toBe('cancelled')
+      expect(partialMsg.metadata.interruptedReason).toBe('Cancelled by user')
+      expect(partialMsg.metadata.citations).toEqual([])
+      expect(partialMsg.metadata.claims).toBeUndefined()
+      expect(partialMsg.tokenUsage).toEqual({
+        promptTokens: 10,
+        completionTokens: 12,
+        totalTokens: 22
+      })
+
+      // Check SQLite persistence
+      const reloaded = msgRepo.listByConversation(convAId, botAId, kbAId)
+      const found = reloaded.find((m) => m.id === partialMsg.id)!
+      expect(found).toBeDefined()
+      expect(found.metadata.isPartial).toBe(true)
+      expect(found.metadata.status).toBe('cancelled')
+    })
+
+    it('Scenario 33: rejects empty partial text for partial assistant persistence', () => {
+      const preparedTurn = createMockPreparedTurn()
+      expect(() =>
+        persistenceService.persistPartialAssistantMessage(preparedTurn, '   ', {
+          status: 'cancelled'
+        })
+      ).toThrow(ConversationPersistenceError)
+    })
+
+    it('MessageRepository.delete deletes a message and updates segment count', () => {
+      const preparedTurn = createMockPreparedTurn()
+      const msg = persistenceService.persistPartialAssistantMessage(preparedTurn, 'To be deleted', {
+        status: 'cancelled'
+      })
+
+      expect(msgRepo.getById(msg.id, convAId, botAId, kbAId)).not.toBeNull()
+      const deleted = msgRepo.delete(msg.id)
+      expect(deleted).toBe(true)
+      expect(msgRepo.getById(msg.id, convAId, botAId, kbAId)).toBeNull()
+
+      // Subsequent delete returns false
+      expect(msgRepo.delete(msg.id)).toBe(false)
     })
   })
 })

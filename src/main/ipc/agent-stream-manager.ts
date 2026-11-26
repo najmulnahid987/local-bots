@@ -1,4 +1,5 @@
 import { AGENT_IPC_CHANNELS, type AgentStreamEvent } from '../../shared/agents'
+import type { StreamLifecycleStage } from '../../shared/conversations'
 import { type BrowserWindowLike } from '../security'
 import {
   type MessagePortMainLike,
@@ -12,12 +13,15 @@ export const MAX_CONCURRENT_AGENT_STREAMS_PER_WINDOW = 5
 export interface AgentStreamSession {
   readonly agentRunId: string
   readonly conversationId: string
+  readonly botId?: string
   readonly window: BrowserWindowLike
   readonly senderFrame: WebFrameWithPostMessage
   readonly abortController: AbortController
   readonly port: MessagePortMainLike
+  stage: StreamLifecycleStage
   sequenceNumber: number
   isCleanedUp: boolean
+  hasEmittedTerminal: boolean
 }
 
 export interface AgentStreamManagerOptions {
@@ -26,6 +30,14 @@ export interface AgentStreamManagerOptions {
 }
 
 export type AgentStreamEventInput =
+  | {
+      type: 'agent_stage_change'
+      stage: import('../../shared/conversations').StreamLifecycleStage
+    }
+  | {
+      type: 'agent_text_delta'
+      textDelta: string
+    }
   | {
       type: 'agent_run_started'
       botId: string
@@ -130,7 +142,13 @@ export class AgentStreamManager {
    * Returns whether a specific agentRunId has an active stream.
    */
   public hasStream(agentRunId: string): boolean {
-    return this.activeStreams.has(agentRunId)
+    const session = this.activeStreams.get(agentRunId)
+    return Boolean(
+      session &&
+      !session.isCleanedUp &&
+      !session.hasEmittedTerminal &&
+      !session.abortController.signal.aborted
+    )
   }
 
   /**
@@ -146,7 +164,8 @@ export class AgentStreamManager {
     senderFrame: WebFrameWithPostMessage,
     agentRunId: string,
     conversationId: string,
-    onCancelRequested?: (agentRunId: string) => void
+    onCancelRequested?: (agentRunId: string) => void,
+    botId?: string
   ): {
     abortSignal: AbortSignal
     emitEvent: (input: AgentStreamEventInput) => void
@@ -160,12 +179,15 @@ export class AgentStreamManager {
     const session: AgentStreamSession = {
       agentRunId,
       conversationId,
+      botId,
       window,
       senderFrame,
       abortController,
       port: port1,
+      stage: 'preparing',
       sequenceNumber: 1,
-      isCleanedUp: false
+      isCleanedUp: false,
+      hasEmittedTerminal: false
     }
 
     this.activeStreams.set(agentRunId, session)
@@ -218,14 +240,29 @@ export class AgentStreamManager {
    */
   public postEvent(agentRunId: string, input: AgentStreamEventInput): void {
     const session = this.activeStreams.get(agentRunId)
-    if (!session || session.isCleanedUp) {
+    if (!session || session.isCleanedUp || session.hasEmittedTerminal) {
       return
+    }
+
+    const nextStage = this.resolveStage(input, session.stage)
+    session.stage = nextStage
+
+    const isTerminal =
+      input.type === 'agent_run_completed' ||
+      input.type === 'agent_run_failed' ||
+      input.type === 'agent_run_cancelled'
+
+    if (isTerminal) {
+      session.hasEmittedTerminal = true
     }
 
     const event: AgentStreamEvent = {
       ...input,
       agentRunId: session.agentRunId,
       conversationId: session.conversationId,
+      ...(session.botId ? { botId: session.botId } : {}),
+      executionMode: 'agent',
+      stage: nextStage,
       sequenceNumber: session.sequenceNumber++,
       timestamp: Date.now()
     } as AgentStreamEvent
@@ -238,17 +275,39 @@ export class AgentStreamManager {
       return
     }
 
-    // Check if terminal event
-    const isTerminal =
-      input.type === 'agent_run_completed' ||
-      input.type === 'agent_run_failed' ||
-      input.type === 'agent_run_cancelled'
-
     if (isTerminal) {
       // Allow the message to flush before closing
       setTimeout(() => {
         this.cleanupSession(agentRunId)
       }, 20)
+    }
+  }
+
+  private resolveStage(
+    input: AgentStreamEventInput,
+    current: StreamLifecycleStage
+  ): StreamLifecycleStage {
+    switch (input.type) {
+      case 'agent_stage_change':
+        return input.stage
+      case 'agent_run_started':
+        return 'preparing'
+      case 'agent_iteration_started':
+      case 'agent_text_delta':
+      case 'tool_call_started':
+      case 'tool_call_completed':
+      case 'tool_call_failed':
+      case 'approval_requested':
+      case 'approval_resolved':
+        return 'streaming'
+      case 'agent_run_completed':
+        return 'completed'
+      case 'agent_run_failed':
+        return 'failed'
+      case 'agent_run_cancelled':
+        return 'cancelled'
+      default:
+        return current
     }
   }
 

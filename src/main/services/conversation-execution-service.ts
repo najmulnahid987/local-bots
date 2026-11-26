@@ -8,7 +8,7 @@ import type {
   ProviderId,
   TokenUsage
 } from '../providers/types'
-import type { CitationDto } from '../../shared/conversations'
+import type { CitationDto, ClaimProvenanceDto } from '../../shared/conversations'
 
 // ============================================================================
 // Error Contracts
@@ -74,6 +74,7 @@ export interface ConversationExecutionResult {
   readonly conversationId: string
   readonly citationCandidates: readonly CitationDto[]
   readonly citationMap: ReadonlyMap<number, CitationDto>
+  readonly validatedClaims?: readonly ClaimProvenanceDto[]
 }
 
 export interface StreamExecutionOptions {

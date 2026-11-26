@@ -18,6 +18,7 @@ describe('Renderer: BotUnarchiveDialog (Phase 6 Step 6.5)', () => {
     systemPrompt: 'Archived prompt',
     providerConnectionId: 'conn-1',
     modelId: 'gpt-6-luna',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: ['search_knowledge_base'],
     status: 'archived',
     createdAt: 1690000000000,

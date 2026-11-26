@@ -926,7 +926,7 @@ describe('ConversationContextManager (Phase 7 Step 7.5)', () => {
     // Set limit where Turn 1 (200 tokens) + memory (~100 tokens) + system/q (~415 tokens) = ~715 tokens fits,
     // but both turns (~915 tokens) cannot fit.
     const result = ConversationContextManager.selectContext({
-      bot: defaultBot,
+      bot: { ...defaultBot, responsePolicy: 'strict_kb_only' },
       history,
       question: 'Current question',
       retrievalResult: createMockRetrieval([]),
@@ -959,7 +959,7 @@ describe('ConversationContextManager (Phase 7 Step 7.5)', () => {
     // Limit where bare system prompt (~400 tokens) + question (~10 tokens) = ~415 tokens fits within available (500 tokens),
     // but with memory (~665 tokens) it exceeds 500 tokens.
     const result = ConversationContextManager.selectContext({
-      bot: defaultBot,
+      bot: { ...defaultBot, responsePolicy: 'strict_kb_only' },
       history,
       question: 'Important user question',
       retrievalResult: createMockRetrieval([]),

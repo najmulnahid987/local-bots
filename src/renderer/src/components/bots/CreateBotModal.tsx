@@ -12,6 +12,7 @@ export interface CreateBotModalProps {
   readonly createBotFn?: (request: CreateBotRequest) => Promise<BotDto>
   readonly connections?: readonly ProviderConnectionSummary[]
   readonly catalog?: ProviderCatalogDto | null
+  readonly knowledgeBaseName?: string
 }
 
 function sanitizeErrorMessage(err: unknown): string {
@@ -34,7 +35,8 @@ export function CreateBotModal({
   onSuccess,
   createBotFn,
   connections,
-  catalog
+  catalog,
+  knowledgeBaseName
 }: CreateBotModalProps): ReactElement | null {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -58,6 +60,7 @@ export function CreateBotModal({
       systemPrompt: values.systemPrompt.length > 0 ? values.systemPrompt : undefined,
       providerConnectionId: values.providerConnectionId,
       modelId: values.modelId,
+      responsePolicy: values.responsePolicy,
       enabledTools: values.enabledTools
     }
 
@@ -128,6 +131,7 @@ export function CreateBotModal({
             onCancel={onClose}
             connections={connections}
             catalog={catalog}
+            knowledgeBaseName={knowledgeBaseName}
           />
         </div>
       </div>

@@ -48,8 +48,8 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     expect(migrationRow.applied_at).toBeGreaterThan(0)
   })
 
-  // Test B — Verify all 15 core tables exist
-  it('Test B: creates all 15 core application relational tables', () => {
+  // Test B — Verify all 16 core tables exist
+  it('Test B: creates all 16 core application relational tables', () => {
     runMigrations(db, migrations)
 
     const expectedTables = [
@@ -57,6 +57,7 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'app_settings',
       'bot_memories',
       'bots',
+      'conversation_segments',
       'conversations',
       'deletion_recovery_journal',
       'import_recovery_journal',
@@ -81,8 +82,8 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
     expect(actualTables).toEqual(expectedTables)
   })
 
-  // Test C — Verify all 29 indexes exist
-  it('Test C: creates all 29 explicit performance indexes', () => {
+  // Test C — Verify all 32 indexes exist
+  it('Test C: creates all 32 explicit performance indexes', () => {
     runMigrations(db, migrations)
 
     const expectedIndexes = [
@@ -93,6 +94,8 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'idx_bot_memories_kb',
       'idx_bots_kb',
       'idx_bots_provider',
+      'idx_conversation_segments_conv',
+      'idx_conversation_segments_orig',
       'idx_conversations_bot',
       'idx_conversations_kb',
       'idx_conversations_updated',
@@ -112,6 +115,7 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       'idx_knowledge_sources_kb',
       'idx_knowledge_sources_status',
       'idx_messages_conversation',
+      'idx_messages_segment',
       'idx_provider_connections_provider',
       'idx_provider_connections_ref',
       'idx_tool_events_run'
@@ -952,13 +956,13 @@ describe('Core SQLite Schema Migration (001_initial_schema)', () => {
       expect(setting).toBeDefined()
       expect(setting.value).toBe('My Persistent Workspace')
 
-      // Verify all 15 tables still exist
+      // Verify all 16 tables still exist
       const tableCount = db2
         .prepare(
           "SELECT count(*) as c FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations' AND name NOT LIKE 'knowledge_fts%'"
         )
         .get() as { c: number }
-      expect(tableCount.c).toBe(15)
+      expect(tableCount.c).toBe(16)
 
       manager.close()
     } finally {

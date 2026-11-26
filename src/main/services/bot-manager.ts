@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3'
 import {
   toBotDto,
   createBotRequestSchema,
@@ -18,6 +19,7 @@ import {
 import { BotRepository } from '../database/repositories/bot-repository'
 import { KnowledgeBaseRepository } from '../database/repositories/knowledge-base-repository'
 import { ProviderConnectionRepository } from '../database/repositories/provider-connection-repository'
+import { ConversationRepository } from '../database/repositories/conversation-repository'
 import { ProviderRegistry, providerRegistry } from '../providers/provider-registry'
 import { assertBotModelCompatibility } from '../providers/capability-validator'
 import { ProviderManagerError } from '../providers/provider-manager/errors'
@@ -33,6 +35,8 @@ export interface BotManagerServiceOptions {
   readonly botRepo: BotRepository
   readonly kbRepo: KnowledgeBaseRepository
   readonly connectionRepo: ProviderConnectionRepository
+  readonly conversationRepo?: ConversationRepository
+  readonly db?: Database.Database
   readonly registry?: ProviderRegistry
   readonly activeContext?: ActiveWorkspaceContext
 }
@@ -52,6 +56,8 @@ export class BotManagerService {
   private readonly botRepo: BotRepository
   private readonly kbRepo: KnowledgeBaseRepository
   private readonly connectionRepo: ProviderConnectionRepository
+  private readonly conversationRepo?: ConversationRepository
+  private readonly db?: Database.Database
   private readonly registry: ProviderRegistry
   private readonly activeContext: ActiveWorkspaceContext
 
@@ -59,6 +65,8 @@ export class BotManagerService {
     this.botRepo = options.botRepo
     this.kbRepo = options.kbRepo
     this.connectionRepo = options.connectionRepo
+    this.conversationRepo = options.conversationRepo
+    this.db = options.db
     this.registry = options.registry ?? providerRegistry
     this.activeContext =
       options.activeContext ?? new ActiveWorkspaceContext({ kbRepo: this.kbRepo })
@@ -179,12 +187,32 @@ export class BotManagerService {
       modelId: data.modelId,
       description: data.description,
       systemPrompt: data.systemPrompt,
+      responsePolicy: data.responsePolicy,
       providerConnectionId: data.providerConnectionId,
       toolPermissions: data.enabledTools,
       status: 'active'
     }
 
-    const created = this.botRepo.create(createInput)
+    // Atomically create the Bot and its single canonical conversation within a single transaction
+    const dbInstance =
+      this.db ??
+      (this.botRepo as unknown as { db?: Database.Database })?.db ??
+      (this.conversationRepo as unknown as { db?: Database.Database })?.db
+
+    const runTx = <T>(fn: () => T): (() => T) => (dbInstance ? dbInstance.transaction(fn) : fn)
+
+    const created = runTx(() => {
+      const bot = this.botRepo.create(createInput)
+      if (this.conversationRepo) {
+        this.conversationRepo.getOrCreate({
+          botId: bot.id,
+          knowledgeBaseId: bot.knowledgeBaseId,
+          title: `${bot.name} Conversation`
+        })
+      }
+      return bot
+    })()
+
     return toBotDto(created)
   }
 
@@ -244,6 +272,9 @@ export class BotManagerService {
     if (data.modelId !== undefined) updateInput.modelId = data.modelId
     if (data.providerConnectionId !== undefined) {
       updateInput.providerConnectionId = data.providerConnectionId
+    }
+    if (data.responsePolicy !== undefined) {
+      updateInput.responsePolicy = data.responsePolicy
     }
     if (data.enabledTools !== undefined) {
       updateInput.toolPermissions = data.enabledTools

@@ -1,7 +1,10 @@
+import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import {
+  BOT_RESPONSE_POLICIES,
   type Bot,
+  type BotResponsePolicy,
   type CreateBotInput,
   type UpdateBotInput,
   type ListBotsOptions,
@@ -23,6 +26,7 @@ interface BotRow {
   system_prompt: string
   model_id: string
   status: 'active' | 'archived'
+  response_policy: BotResponsePolicy
   tool_permissions_json: string
   created_at: number
   updated_at: number
@@ -60,6 +64,7 @@ export class BotRepository {
       description,
       systemPrompt,
       status,
+      responsePolicy,
       providerConnectionId,
       toolPermissions
     } = parseResult.data
@@ -94,10 +99,10 @@ export class BotRepository {
       const stmt = this.db.prepare(`
         INSERT INTO bots (
           id, knowledge_base_id, provider_connection_id, name, description,
-          system_prompt, model_id, status, tool_permissions_json, created_at, updated_at
+          system_prompt, model_id, status, response_policy, tool_permissions_json, created_at, updated_at
         ) VALUES (
           @id, @knowledge_base_id, @provider_connection_id, @name, @description,
-          @system_prompt, @model_id, @status, @tool_permissions_json, @created_at, @updated_at
+          @system_prompt, @model_id, @status, @response_policy, @tool_permissions_json, @created_at, @updated_at
         )
       `)
 
@@ -110,6 +115,7 @@ export class BotRepository {
         system_prompt: systemPrompt ?? '',
         model_id: modelId,
         status: status ?? 'active',
+        response_policy: responsePolicy,
         tool_permissions_json: toolPermissionsJson,
         created_at: now,
         updated_at: now
@@ -124,6 +130,7 @@ export class BotRepository {
         systemPrompt: systemPrompt ?? '',
         modelId,
         status: status ?? 'active',
+        responsePolicy,
         toolPermissions: [...toolPermissions],
         createdAt: now,
         updatedAt: now
@@ -146,7 +153,7 @@ export class BotRepository {
     try {
       const stmt = this.db.prepare(`
         SELECT id, knowledge_base_id, provider_connection_id, name, description,
-               system_prompt, model_id, status, tool_permissions_json, created_at, updated_at
+               system_prompt, model_id, status, response_policy, tool_permissions_json, created_at, updated_at
         FROM bots
         WHERE id = ? AND knowledge_base_id = ?
       `)
@@ -178,7 +185,7 @@ export class BotRepository {
     try {
       const stmt = this.db.prepare(`
         SELECT id, knowledge_base_id, provider_connection_id, name, description,
-               system_prompt, model_id, status, tool_permissions_json, created_at, updated_at
+               system_prompt, model_id, status, response_policy, tool_permissions_json, created_at, updated_at
         FROM bots
         WHERE id = ?
       `)
@@ -211,7 +218,7 @@ export class BotRepository {
       if (options?.status) {
         const stmt = this.db.prepare(`
           SELECT id, knowledge_base_id, provider_connection_id, name, description,
-                 system_prompt, model_id, status, tool_permissions_json, created_at, updated_at
+                 system_prompt, model_id, status, response_policy, tool_permissions_json, created_at, updated_at
           FROM bots
           WHERE knowledge_base_id = ? AND status = ?
           ORDER BY created_at DESC
@@ -220,7 +227,7 @@ export class BotRepository {
       } else {
         const stmt = this.db.prepare(`
           SELECT id, knowledge_base_id, provider_connection_id, name, description,
-                 system_prompt, model_id, status, tool_permissions_json, created_at, updated_at
+                 system_prompt, model_id, status, response_policy, tool_permissions_json, created_at, updated_at
           FROM bots
           WHERE knowledge_base_id = ?
           ORDER BY created_at DESC
@@ -264,6 +271,7 @@ export class BotRepository {
       systemPrompt,
       modelId,
       status,
+      responsePolicy,
       providerConnectionId,
       toolPermissions
     } = parseResult.data
@@ -315,6 +323,10 @@ export class BotRepository {
     if (toolPermissions !== undefined) {
       setClauses.push('tool_permissions_json = @tool_permissions_json')
       params.tool_permissions_json = JSON.stringify(toolPermissions)
+    }
+    if (responsePolicy !== undefined) {
+      setClauses.push('response_policy = @response_policy')
+      params.response_policy = responsePolicy
     }
 
     try {
@@ -375,6 +387,13 @@ export class BotRepository {
       )
     }
 
+    const policyParse = z.enum(BOT_RESPONSE_POLICIES).safeParse(row.response_policy)
+    if (!policyParse.success) {
+      throw new RepositoryError(
+        `Data integrity violation: Invalid response policy detected for Bot '${row.id}'.`
+      )
+    }
+
     return {
       id: row.id,
       knowledgeBaseId: row.knowledge_base_id,
@@ -384,6 +403,7 @@ export class BotRepository {
       systemPrompt: row.system_prompt,
       modelId: row.model_id,
       status: row.status,
+      responsePolicy: policyParse.data,
       toolPermissions: permParse.data as ToolPermission[],
       createdAt: row.created_at,
       updatedAt: row.updated_at

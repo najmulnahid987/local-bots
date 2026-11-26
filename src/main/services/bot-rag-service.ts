@@ -73,6 +73,31 @@ export interface BotRagRetrievalOptions {
    * to evaluate subsequent candidates in the candidate pool that fit within the remaining budget.
    */
   readonly allowTruncation?: boolean
+  /**
+   * If true, allows relaxed OR term matching across non-stopword content terms
+   * when strict AND matching returns zero rows (used by balanced_kb_first for
+   * natural-language and partially covered queries). Defaults to false.
+   */
+  readonly enablePartialFallback?: boolean
+}
+
+export type BotRagEvidenceOutcome =
+  | 'relevant_evidence'
+  | 'partial_evidence'
+  | 'no_relevant_evidence'
+  | 'no_usable_kb'
+  | 'not_attempted'
+
+export type BotRagMatchStrategy = 'exact' | 'content_terms' | 'relaxed_terms' | 'none' | 'skipped'
+
+export interface BotRagEvidenceAssessment {
+  readonly outcome: BotRagEvidenceOutcome
+  readonly kbReadySourceCount: number
+  readonly kbChunkCount: number
+  readonly queryContentTermCount: number
+  readonly matchedContentTermCount: number
+  readonly termCoverageRatio: number
+  readonly matchStrategy: BotRagMatchStrategy
 }
 
 /**
@@ -114,6 +139,179 @@ export interface BotRagRetrievalResult {
   readonly totalTokens: number
   readonly reason?: string
   readonly exclusions?: readonly BotRagExclusion[]
+  readonly assessment?: BotRagEvidenceAssessment
+}
+
+const QUERY_STOPWORDS = new Set<string>([
+  'a',
+  'an',
+  'and',
+  'any',
+  'are',
+  'as',
+  'at',
+  'be',
+  'been',
+  'being',
+  'both',
+  'but',
+  'by',
+  'can',
+  'could',
+  'describe',
+  'did',
+  'do',
+  'does',
+  'each',
+  'else',
+  'explain',
+  'few',
+  'for',
+  'from',
+  'had',
+  'has',
+  'have',
+  'he',
+  'help',
+  'here',
+  'how',
+  'i',
+  'if',
+  'in',
+  'into',
+  'is',
+  'it',
+  'its',
+  'just',
+  'know',
+  'may',
+  'me',
+  'might',
+  'more',
+  'most',
+  'must',
+  'my',
+  'need',
+  'no',
+  'nor',
+  'not',
+  'now',
+  'of',
+  'off',
+  'on',
+  'once',
+  'only',
+  'or',
+  'other',
+  'our',
+  'out',
+  'over',
+  'own',
+  'please',
+  'same',
+  'shall',
+  'she',
+  'should',
+  'so',
+  'some',
+  'such',
+  'tell',
+  'than',
+  'that',
+  'the',
+  'their',
+  'them',
+  'then',
+  'there',
+  'these',
+  'they',
+  'this',
+  'those',
+  'through',
+  'to',
+  'too',
+  'under',
+  'until',
+  'up',
+  'very',
+  'want',
+  'was',
+  'we',
+  'were',
+  'what',
+  'when',
+  'where',
+  'which',
+  'while',
+  'who',
+  'whom',
+  'whose',
+  'why',
+  'will',
+  'with',
+  'work',
+  'works',
+  'would',
+  'yes',
+  'you',
+  'your'
+])
+
+function extractMeaningfulContentTerms(rawQuery: string): string[] {
+  const sanitized = sanitizeFts5SearchQuery(rawQuery)
+  if (!sanitized) return []
+  const matches = sanitized.match(/"([^"]+)"/g)
+  if (!matches) return []
+
+  const seen = new Set<string>()
+  const terms: string[] = []
+  for (const rawQuoted of matches) {
+    const token = rawQuoted.slice(1, -1).toLowerCase()
+    if (token.length < 2 || QUERY_STOPWORDS.has(token) || seen.has(token)) {
+      continue
+    }
+    seen.add(token)
+    terms.push(token)
+  }
+  return terms
+}
+
+function approximateStem(word: string): string {
+  if (word.length <= 3) return word
+  return word.replace(/(ations?|ization|ments?|ness|ies|ing|ed|es|s)$/i, '')
+}
+
+function quoteFtsTerms(terms: readonly string[], joiner: ' ' | ' OR '): string {
+  return terms.map((t) => `"${t}"`).join(joiner)
+}
+
+function countMatchedTermsInTexts(
+  contentTerms: readonly string[],
+  texts: readonly string[]
+): number {
+  if (contentTerms.length === 0 || texts.length === 0) {
+    return 0
+  }
+
+  const chunkWords = new Set<string>()
+  const chunkStems = new Set<string>()
+  for (const text of texts) {
+    const words = text.toLowerCase().match(/[\p{L}\p{N}_]+/gu)
+    if (!words) continue
+    for (const w of words) {
+      chunkWords.add(w)
+      chunkStems.add(approximateStem(w))
+    }
+  }
+
+  let matched = 0
+  for (const term of contentTerms) {
+    const stem = approximateStem(term)
+    if (chunkWords.has(term) || (stem.length >= 3 && chunkStems.has(stem))) {
+      matched++
+    }
+  }
+  return matched
 }
 
 export interface BotRagServiceDependencies {
@@ -269,9 +467,34 @@ export class BotRagService {
           chunks: [],
           citations: [],
           totalTokens: 0,
-          reason: "Bot does not have 'search_knowledge_base' permission enabled."
+          reason: "Bot does not have 'search_knowledge_base' permission enabled.",
+          assessment: {
+            outcome: 'not_attempted',
+            kbReadySourceCount: 0,
+            kbChunkCount: 0,
+            queryContentTermCount: 0,
+            matchedContentTermCount: 0,
+            termCoverageRatio: 0,
+            matchStrategy: 'skipped'
+          }
         }
       }
+    }
+
+    // 7.5. Inspect searchable Knowledge Base readiness strictly for authoritative KB
+    let kbReadySourceCount: number
+    let kbChunkCount: number
+    try {
+      if (typeof this.sourceRepo.getSearchableStats === 'function') {
+        const stats = this.sourceRepo.getSearchableStats(authoritativeKbId)
+        kbReadySourceCount = stats.readySourceCount
+        kbChunkCount = stats.chunkCount
+      } else {
+        kbChunkCount = this.sourceRepo.countChunks(authoritativeKbId)
+        kbReadySourceCount = kbChunkCount > 0 ? 1 : 0
+      }
+    } catch {
+      throw new BotRagServiceError('Failed to check knowledge base readiness.', 'DATABASE_ERROR')
     }
 
     // 8. Sanitize FTS5 query
@@ -282,20 +505,97 @@ export class BotRagService {
         chunks: [],
         citations: [],
         totalTokens: 0,
-        reason: 'Search query contains no searchable terms after FTS5 sanitization.'
+        reason: 'Search query contains no searchable terms after FTS5 sanitization.',
+        assessment: {
+          outcome: kbChunkCount === 0 ? 'no_usable_kb' : 'no_relevant_evidence',
+          kbReadySourceCount,
+          kbChunkCount,
+          queryContentTermCount: 0,
+          matchedContentTermCount: 0,
+          termCoverageRatio: 0,
+          matchStrategy: 'skipped'
+        }
       }
     }
+
+    const contentTerms = extractMeaningfulContentTerms(options.query)
 
     // 9. Execute FTS5 search strictly on the authoritative Knowledge Base
     // Fetch a bounded wider candidate pool to avoid retrieval budget starvation when earlier candidates are oversized
     const candidatePoolSize = Math.min(100, Math.max(effectiveTopK * 4, 20))
     let rawMatches: SearchChunkMatchRow[]
+    let matchStrategy: BotRagMatchStrategy = 'exact'
     try {
       rawMatches = this.sourceRepo.searchChunks(
         authoritativeKbId,
         sanitizedQuery,
         candidatePoolSize
       )
+
+      if ((!rawMatches || rawMatches.length === 0) && kbChunkCount === 0) {
+        return {
+          status: 'NO_RESULTS',
+          chunks: [],
+          citations: [],
+          totalTokens: 0,
+          reason: 'Assigned Knowledge Base has no indexed documents.',
+          assessment: {
+            outcome: 'no_usable_kb',
+            kbReadySourceCount,
+            kbChunkCount: 0,
+            queryContentTermCount: contentTerms.length,
+            matchedContentTermCount: 0,
+            termCoverageRatio: 0,
+            matchStrategy: 'skipped'
+          }
+        }
+      }
+
+      // Natural-language fallback 1: strip conversational stopwords while preserving AND semantics
+      if ((!rawMatches || rawMatches.length === 0) && contentTerms.length >= 1) {
+        const contentAndQuery = quoteFtsTerms(contentTerms, ' ')
+        if (contentAndQuery !== sanitizedQuery) {
+          rawMatches = this.sourceRepo.searchChunks(
+            authoritativeKbId,
+            contentAndQuery,
+            candidatePoolSize
+          )
+          if (rawMatches && rawMatches.length > 0) {
+            matchStrategy = 'content_terms'
+          }
+        }
+      }
+
+      // Natural-language fallback 2: relaxed OR search across content terms for Balanced partial coverage
+      if (
+        (!rawMatches || rawMatches.length === 0) &&
+        options.enablePartialFallback &&
+        contentTerms.length >= 2
+      ) {
+        const relaxedOrQuery = quoteFtsTerms(contentTerms, ' OR ')
+        const relaxedCandidates = this.sourceRepo.searchChunks(
+          authoritativeKbId,
+          relaxedOrQuery,
+          candidatePoolSize
+        )
+        if (relaxedCandidates && relaxedCandidates.length > 0) {
+          const scoredCandidates = relaxedCandidates
+            .map((row) => ({
+              row,
+              matchedCount: countMatchedTermsInTexts(contentTerms, [
+                row.content,
+                row.original_file_name
+              ])
+            }))
+            .filter((item) => item.matchedCount > 0)
+            .sort((a, b) => b.matchedCount - a.matchedCount || a.row.rank_score - b.row.rank_score)
+
+          if (scoredCandidates.length > 0) {
+            rawMatches = scoredCandidates.map((item) => item.row)
+            matchStrategy = 'relaxed_terms'
+          }
+        }
+      }
     } catch {
       throw new BotRagServiceError('Failed to execute knowledge base search.', 'DATABASE_ERROR')
     }
@@ -305,7 +605,16 @@ export class BotRagService {
         status: 'NO_RESULTS',
         chunks: [],
         citations: [],
-        totalTokens: 0
+        totalTokens: 0,
+        assessment: {
+          outcome: 'no_relevant_evidence',
+          kbReadySourceCount,
+          kbChunkCount,
+          queryContentTermCount: contentTerms.length,
+          matchedContentTermCount: 0,
+          termCoverageRatio: 0,
+          matchStrategy: 'none'
+        }
       }
     }
 
@@ -449,16 +758,59 @@ export class BotRagService {
         chunks: [],
         citations: [],
         totalTokens: 0,
-        ...(exclusions.length > 0 ? { exclusions } : {})
+        ...(exclusions.length > 0 ? { exclusions } : {}),
+        assessment: {
+          outcome: 'no_relevant_evidence',
+          kbReadySourceCount,
+          kbChunkCount,
+          queryContentTermCount: contentTerms.length,
+          matchedContentTermCount: 0,
+          termCoverageRatio: 0,
+          matchStrategy: 'none'
+        }
       }
     }
+
+    const matchedContentTermCount =
+      contentTerms.length === 0
+        ? 0
+        : countMatchedTermsInTexts(
+            contentTerms,
+            chunks.map((c) => `${c.fileName} ${c.content}`)
+          )
+
+    const effectiveMatchedCount =
+      matchStrategy === 'relaxed_terms'
+        ? matchedContentTermCount
+        : contentTerms.length > 0
+          ? Math.max(matchedContentTermCount, contentTerms.length)
+          : 0
+
+    const termCoverageRatio =
+      contentTerms.length === 0
+        ? 1
+        : Number(Math.min(1, effectiveMatchedCount / contentTerms.length).toFixed(4))
+
+    const outcome: BotRagEvidenceOutcome =
+      matchStrategy === 'relaxed_terms' && termCoverageRatio < 0.75
+        ? 'partial_evidence'
+        : 'relevant_evidence'
 
     return {
       status: 'SUCCESS',
       chunks,
       citations,
       totalTokens: currentTokens,
-      ...(exclusions.length > 0 ? { exclusions } : {})
+      ...(exclusions.length > 0 ? { exclusions } : {}),
+      assessment: {
+        outcome,
+        kbReadySourceCount,
+        kbChunkCount,
+        queryContentTermCount: contentTerms.length,
+        matchedContentTermCount: effectiveMatchedCount,
+        termCoverageRatio,
+        matchStrategy
+      }
     }
   }
 }

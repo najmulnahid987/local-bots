@@ -1,4 +1,5 @@
 import type { UniversalDocument } from '../model/types'
+import { normalizeDocumentText } from '../normalization/text-normalizer'
 import type {
   SourceElementInventory,
   ExtractionCompletenessResult,
@@ -18,6 +19,8 @@ const MAX_DIAGNOSTIC_ELEMENTS = 50
  * 3. Reference-only or unsupported elements explicitly mark the extraction as 'partial'.
  * 4. Failed elements mark the extraction as 'failed'.
  * 5. Diagnostic records are safely bounded in memory to prevent output-bomb explosion.
+ * 6. Character counts alone never prove textual equality. Exact content comparison under documented
+ *    normalization is required.
  */
 export class ExtractionCompletenessEvaluator {
   /**
@@ -33,8 +36,11 @@ export class ExtractionCompletenessEvaluator {
     const warnings: string[] = []
     const limitations = [...(inventory.measurementLimitations ?? [])]
 
-    // 1. Textual coverage calculation
-    const expectedChars = inventory.expectedSearchableCharacters ?? document.text.length
+    // 1. Textual coverage & content equality evaluation
+    const expectedChars =
+      inventory.expectedNormalizedText !== undefined
+        ? inventory.expectedNormalizedText.length
+        : (inventory.expectedSearchableCharacters ?? document.text.length)
     const extractedBlockChars = document.blocks.reduce((acc, b) => acc + b.text.length, 0)
     const extractedChars =
       document.blocks.length > 0 && inventory.expectedSearchableCharacters !== undefined
@@ -44,12 +50,55 @@ export class ExtractionCompletenessEvaluator {
 
     let textStatus: 'exact' | 'normalized_match' | 'partial' | 'unknown'
     let textualFidelity: ValidationStatus
-    if (inventory.expectedSearchableCharacters !== undefined) {
-      if (extractedChars === expectedChars) {
+
+    if (inventory.expectedNormalizedText !== undefined) {
+      const normalizedExpected = normalizeDocumentText(inventory.expectedNormalizedText)
+      const normalizedExtracted = normalizeDocumentText(document.text)
+
+      if (normalizedExpected === normalizedExtracted) {
         textStatus = 'exact'
         textualFidelity = 'complete'
       } else {
-        // Strict: character count differences never report complete
+        textStatus = 'partial'
+        textualFidelity =
+          normalizedExtracted.length === 0 && normalizedExpected.length > 0 ? 'failed' : 'partial'
+
+        if (normalizedExpected.length === normalizedExtracted.length) {
+          warnings.push(
+            `Extracted text differs from expected source content despite equal character count (${normalizedExpected.length} chars). Substitution or content corruption detected.`
+          )
+        } else if (normalizedExtracted.length < normalizedExpected.length) {
+          if (
+            normalizedExpected.endsWith(normalizedExtracted) &&
+            !normalizedExpected.startsWith(normalizedExtracted)
+          ) {
+            warnings.push('Extracted text is missing source content at the beginning.')
+          } else if (
+            normalizedExpected.startsWith(normalizedExtracted) &&
+            !normalizedExpected.endsWith(normalizedExtracted)
+          ) {
+            warnings.push('Extracted text is missing source content at the end.')
+          } else {
+            warnings.push(
+              `Extracted text is missing source content (expected ${normalizedExpected.length} chars, got ${normalizedExtracted.length} chars).`
+            )
+          }
+        } else {
+          warnings.push(
+            `Extracted text contains unexpected extra or duplicated characters (expected ${normalizedExpected.length} chars, got ${normalizedExtracted.length} chars).`
+          )
+        }
+      }
+    } else if (inventory.expectedSearchableCharacters !== undefined) {
+      if (extractedChars === expectedChars) {
+        // Rule: Equal character count alone CANNOT prove equality when source text is not available!
+        textStatus = 'unknown'
+        textualFidelity = 'unknown'
+        limitations.push(
+          `Equal character count (${extractedChars} chars) detected, but exact source text content was not provided for verification; textual fidelity evaluated as unknown.`
+        )
+      } else {
+        // Character count difference strictly proves incomplete or missing text!
         textStatus = 'partial'
         textualFidelity = extractedChars === 0 && expectedChars > 0 ? 'failed' : 'partial'
         warnings.push(
@@ -62,7 +111,7 @@ export class ExtractionCompletenessEvaluator {
       textualFidelity = 'unknown'
     }
 
-    // 2. Identify and bound diagnostic lists, and check block presence
+    // 2. Identify and bound diagnostic lists, and check block presence & order
     const docBlockIds = new Set(document.blocks.map((b) => b.id))
     let missingBlockElements = 0
     const unsupportedElements: SourceElementRecord[] = []
@@ -89,6 +138,38 @@ export class ExtractionCompletenessEvaluator {
         referenceOnlyElements.length < MAX_DIAGNOSTIC_ELEMENTS
       ) {
         referenceOnlyElements.push(elem)
+      }
+    }
+
+    // Check block ordering monotonically
+    let blocksInOrder = true
+    for (let i = 1; i < document.blocks.length; i++) {
+      if (document.blocks[i].orderIndex < document.blocks[i - 1].orderIndex) {
+        blocksInOrder = false
+        warnings.push(
+          `Block ordering violation: block '${document.blocks[i].id}' (orderIndex ${document.blocks[i].orderIndex}) appears after block '${document.blocks[i - 1].id}' (orderIndex ${document.blocks[i - 1].orderIndex}).`
+        )
+        break
+      }
+    }
+
+    // Check mapping order against inventory source elements
+    const mappedBlockIndices: number[] = []
+    for (const elem of inventory.sourceElements) {
+      if (elem.blockId) {
+        const blk = document.blocks.find((b) => b.id === elem.blockId)
+        if (blk) {
+          mappedBlockIndices.push(blk.orderIndex)
+        }
+      }
+    }
+    for (let i = 1; i < mappedBlockIndices.length; i++) {
+      if (mappedBlockIndices[i] < mappedBlockIndices[i - 1]) {
+        blocksInOrder = false
+        warnings.push(
+          'Reordered source blocks detected: extracted block order diverges from source element order.'
+        )
+        break
       }
     }
 
@@ -125,7 +206,8 @@ export class ExtractionCompletenessEvaluator {
       dispositionCounts.text_preserved_unparsed > 0 ||
       dispositionCounts.unsupported > 0 ||
       dispositionCounts.reference_only > 0 ||
-      dispositionCounts.partially_extracted > 0
+      dispositionCounts.partially_extracted > 0 ||
+      !blocksInOrder
     ) {
       structuralFidelity = 'partial'
     } else if (dispositionCounts.unknown > 0) {
@@ -158,6 +240,7 @@ export class ExtractionCompletenessEvaluator {
       structuralFidelity === 'partial' ||
       dispositionCounts.failed > 0 ||
       missingBlockElements > 0 ||
+      !blocksInOrder ||
       document.quality.isLossy
     ) {
       status = 'partial'

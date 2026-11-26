@@ -58,6 +58,7 @@ export interface SourceElementInventory {
   readonly elementCountsByType: Readonly<Record<string, number>>
   readonly dispositionCounts: Readonly<Record<ExtractionDisposition, number>>
   readonly expectedSearchableCharacters?: number
+  readonly expectedNormalizedText?: string
   readonly measurementLimitations?: readonly string[]
 }
 

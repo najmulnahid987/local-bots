@@ -930,9 +930,15 @@ describe('ConversationService (Phase 7 Step 7.6A)', () => {
       }
     })
 
-    it('39. Same Bot can prepare different independent conversations', () => {
+    it('39. Sibling Bots in the same Knowledge Base can prepare independent conversations', () => {
+      const botA2 = botRepo.create({
+        knowledgeBaseId: kbAId,
+        name: 'Bot Alpha 2',
+        modelId: 'gpt-6-luna',
+        providerConnectionId: defaultConnId
+      })
       const convA2 = conversationRepo.create({
-        botId: botAId,
+        botId: botA2.id,
         knowledgeBaseId: kbAId,
         title: 'Conversation Alpha 2'
       })
@@ -947,7 +953,7 @@ describe('ConversationService (Phase 7 Step 7.6A)', () => {
 
       messageRepo.create({
         conversationId: convA2.id,
-        botId: botAId,
+        botId: botA2.id,
         knowledgeBaseId: kbAId,
         role: 'user',
         content: 'Conversation 2 history message'
@@ -960,7 +966,7 @@ describe('ConversationService (Phase 7 Step 7.6A)', () => {
       })
 
       const turn2 = conversationService.prepareTurn(sessionA, {
-        botId: botAId,
+        botId: botA2.id,
         conversationId: convA2.id,
         question: 'Question 2'
       })
@@ -1136,6 +1142,147 @@ describe('ConversationService (Phase 7 Step 7.6A)', () => {
       expect(turn.memoryContext?.includedCount).toBe(1)
       expect(turn.memoryContext?.excludedCount).toBe(0)
       expect(turn.memoryContext?.configuredBudget).toBe(1500)
+    })
+
+    it('34. propagates persisted Bot responsePolicy into PreparedConversationTurn and systemInstruction (Step 12.3)', () => {
+      const strictBot = botRepo.create({
+        knowledgeBaseId: kbAId,
+        providerConnectionId: defaultConnId,
+        name: 'Strict Turn Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'strict_kb_only'
+      })
+      const strictConv = conversationRepo.create({
+        botId: strictBot.id,
+        knowledgeBaseId: kbAId,
+        title: 'Strict Conv'
+      })
+      const generalBot = botRepo.create({
+        knowledgeBaseId: kbAId,
+        providerConnectionId: defaultConnId,
+        name: 'General Turn Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'general_ai_chat'
+      })
+      const generalConv = conversationRepo.create({
+        botId: generalBot.id,
+        knowledgeBaseId: kbAId,
+        title: 'General Conv'
+      })
+
+      const balancedTurn = conversationService.prepareTurn(sessionA, {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'Test policy check'
+      })
+      expect(balancedTurn.responsePolicy).toBe('balanced_kb_first')
+      expect(balancedTurn.systemInstruction).toContain(
+        '## 3. Response Policy: Knowledge Base First (Balanced)'
+      )
+
+      const strictTurn = conversationService.prepareTurn(sessionA, {
+        botId: strictBot.id,
+        conversationId: strictConv.id,
+        question: 'Test policy check'
+      })
+      expect(strictTurn.responsePolicy).toBe('strict_kb_only')
+      expect(strictTurn.systemInstruction).toContain('## 3. Mandatory Knowledge Base Only Policy')
+
+      const generalTurn = conversationService.prepareTurn(sessionA, {
+        botId: generalBot.id,
+        conversationId: generalConv.id,
+        question: 'Test policy check'
+      })
+      expect(generalTurn.responsePolicy).toBe('general_ai_chat')
+      expect(generalTurn.systemInstruction).toContain('## 3. Response Policy: General AI Chat')
+    })
+
+    it('35. Balanced KB First handles relevant, partial, empty-search, no-usable-KB, and technical error outcomes distinctly', () => {
+      // Case 4: Assigned KB A has no indexed docs -> general_fallback_no_usable_kb (KB B docs remain isolated!)
+      createDocChunk(kbBId, 'BetaOnly', 'Confidential Beta telemetry protocol limit is 99ms.')
+      const noUsableTurn = conversationService.prepareTurn(sessionA, {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'What is our telemetry protocol limit?'
+      })
+      expect(noUsableTurn.retrievalStatus).toBe('NO_RESULTS')
+      expect(noUsableTurn.retrievalAssessment?.outcome).toBe('no_usable_kb')
+      expect(noUsableTurn.groundingMode).toBe('general_fallback_no_usable_kb')
+      expect(noUsableTurn.citationCandidates).toHaveLength(0)
+      expect(noUsableTurn.systemInstruction).toContain('No Usable Knowledge Base Content')
+
+      // Seed KB A with vacation carryover policy
+      createDocChunk(kbAId, 'VacationPolicy', 'Vacation carryover limit is 5 unused days annually.')
+
+      // Case 1: Conversational natural-language query matching KB A -> kb_grounded
+      const relevantTurn = conversationService.prepareTurn(sessionA, {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'What is our vacation carryover limit?'
+      })
+      expect(relevantTurn.retrievalStatus).toBe('SUCCESS')
+      expect(relevantTurn.retrievalAssessment?.outcome).toBe('relevant_evidence')
+      expect(relevantTurn.groundingMode).toBe('kb_grounded')
+      expect(relevantTurn.citationCandidates).toHaveLength(1)
+      expect(relevantTurn.systemInstruction).toContain('Relevant Knowledge Base Evidence Found')
+
+      // Case 3: Multi-topic query partially covered in KB A -> kb_partial_with_general_fallback
+      const partialTurn = conversationService.prepareTurn(sessionA, {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'What is the vacation carryover limit and orbital thruster docking timeout?'
+      })
+      expect(partialTurn.retrievalStatus).toBe('SUCCESS')
+      expect(partialTurn.retrievalAssessment?.outcome).toBe('partial_evidence')
+      expect(partialTurn.groundingMode).toBe('kb_partial_with_general_fallback')
+      expect(partialTurn.citationCandidates).toHaveLength(1)
+      expect(partialTurn.systemInstruction).toContain('Partial Knowledge Base Evidence Found')
+
+      // Case 2: Populated KB A has no relevant match -> general_fallback_no_kb_evidence
+      const noHitTurn = conversationService.prepareTurn(sessionA, {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'Explain stellar nucleosynthesis in red dwarfs'
+      })
+      expect(noHitTurn.retrievalStatus).toBe('NO_RESULTS')
+      expect(noHitTurn.retrievalAssessment?.outcome).toBe('no_relevant_evidence')
+      expect(noHitTurn.groundingMode).toBe('general_fallback_no_kb_evidence')
+      expect(noHitTurn.systemInstruction).toContain('No Relevant Documents Found')
+
+      // Case 5: Technical retrieval failure NEVER degrades to general fallback
+      vi.spyOn(sourceRepo, 'searchChunks').mockImplementationOnce(() => {
+        throw new Error('Simulated FTS5 I/O failure')
+      })
+      expect(() =>
+        conversationService.prepareTurn(sessionA, {
+          botId: botAId,
+          conversationId: convAId,
+          question: 'Trigger retrieval failure'
+        })
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'RETRIEVAL_ERROR'
+        })
+      )
+    })
+
+    it('37. Balanced KB First strips/ignores forged caller knowledgeBaseId or responsePolicy overrides without leaking cross-KB data', () => {
+      createDocChunk(kbBId, 'BetaPrivate', 'Secret Beta key alpha-beta-gamma.')
+      const tamperedRequest = {
+        botId: botAId,
+        conversationId: convAId,
+        question: 'Secret Beta key alpha-beta-gamma',
+        knowledgeBaseId: kbBId,
+        responsePolicy: 'general_ai_chat'
+      } as unknown as PrepareTurnRequest
+
+      const turn = conversationService.prepareTurn(sessionA, tamperedRequest)
+      expect(turn.responsePolicy).toBe('balanced_kb_first')
+      expect(turn.retrievalStatus).toBe('NO_RESULTS')
+      expect(turn.retrievalAssessment?.outcome).toBe('no_usable_kb')
+      expect(turn.groundingMode).toBe('general_fallback_no_usable_kb')
+      expect(turn.citationCandidates).toHaveLength(0)
+      expect(JSON.stringify(turn)).not.toContain('Secret Beta key alpha-beta-gamma.')
     })
   })
 })

@@ -99,7 +99,7 @@ describe('export-archive shared contracts', () => {
     expect(result.success).toBe(true)
   })
 
-  it('validates exportBotDto', () => {
+  it('validates exportBotDto with explicit and legacy optional responsePolicy', () => {
     const valid = {
       id: validUuid,
       name: 'Researcher Bot',
@@ -107,12 +107,31 @@ describe('export-archive shared contracts', () => {
       systemPrompt: 'You are helpful',
       modelId: 'gpt-4o',
       status: 'active' as const,
+      responsePolicy: 'strict_kb_only' as const,
       toolPermissions: ['search_documents'],
       createdAt: 1700000000000,
       updatedAt: 1700000005000
     }
-    const result = exportBotDtoSchema.safeParse(valid)
-    expect(result.success).toBe(true)
+    expect(exportBotDtoSchema.safeParse(valid).success).toBe(true)
+
+    const legacy = {
+      id: validUuid,
+      name: 'Legacy Bot',
+      description: 'Legacy export without policy',
+      systemPrompt: 'You are helpful',
+      modelId: 'gpt-4o',
+      status: 'active' as const,
+      toolPermissions: ['search_documents'],
+      createdAt: 1700000000000,
+      updatedAt: 1700000005000
+    }
+    expect(exportBotDtoSchema.safeParse(legacy).success).toBe(true)
+
+    const invalidPolicy = {
+      ...legacy,
+      responsePolicy: 'unrestricted_mode'
+    }
+    expect(exportBotDtoSchema.safeParse(invalidPolicy).success).toBe(false)
   })
 
   it('validates exportBotMemoryDto', () => {

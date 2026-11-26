@@ -70,8 +70,11 @@ describe('Renderer: useConversationMessages Hook (Phase 7 Step 7.8)', () => {
     })
 
     const api: ConversationApi = {
+      getConversationForBot: vi.fn(),
+      getSegments: vi.fn(),
+      getClearPreview: vi.fn(),
+      clearConversation: vi.fn(),
       listMessages: listMessagesMock,
-      createConversation: vi.fn(),
       listConversations: vi.fn(),
       renameConversation: vi.fn(),
       deleteConversation: vi.fn(),
@@ -272,5 +275,56 @@ describe('Renderer: useConversationMessages Hook (Phase 7 Step 7.8)', () => {
       await slowPromise
     })
     // No error or warning on unmount
+  })
+
+  it('9. preserves historical segment order without interleaving overlapping timestamps', async () => {
+    const seg0Msg: MessageDto = {
+      ...userMsg,
+      id: 'msg-seg0',
+      segmentId: 'seg-0',
+      createdAt: 1700000090000
+    }
+    const seg1Msg: MessageDto = {
+      ...assistantMsg,
+      id: 'msg-seg1',
+      segmentId: 'seg-1',
+      createdAt: 1700000010000
+    }
+    const { api } = createMockApi([seg1Msg, seg0Msg])
+
+    const segments = [
+      {
+        id: 'seg-0',
+        conversationId,
+        originalConversationId: conversationId,
+        title: 'First Historical Thread',
+        segmentOrder: 0,
+        firstMessageCreatedAt: null,
+        lastMessageCreatedAt: null,
+        createdAt: 1700000000000,
+        archivedAt: null,
+        messageCount: 1
+      },
+      {
+        id: 'seg-1',
+        conversationId,
+        originalConversationId: conversationId,
+        title: 'Second Historical Thread',
+        segmentOrder: 1,
+        firstMessageCreatedAt: null,
+        lastMessageCreatedAt: null,
+        createdAt: 1700000005000,
+        archivedAt: null,
+        messageCount: 1
+      }
+    ]
+
+    const { result } = renderHook(() => useConversationMessages({ conversationId, segments, api }))
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(result.current.messages.map((m) => m.id)).toEqual(['msg-seg0', 'msg-seg1'])
   })
 })

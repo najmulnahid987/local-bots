@@ -1,12 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import {
+  APPROVED_BOT_TOOLS,
+  BOT_RESPONSE_POLICIES,
+  DEFAULT_BOT_RESPONSE_POLICY,
+  BOT_RESPONSE_POLICY_METADATA,
+  botResponsePolicySchema,
+  isBotResponsePolicy,
+  resolveBotResponsePolicy,
+  getBotResponsePolicyMeta,
   toBotDto,
   createBotRequestSchema,
   updateBotRequestSchema,
   botIdSchema,
   listBotsRequestSchema,
   BotBridgeError,
-  APPROVED_BOT_TOOLS,
   type BotDto,
   type CreateBotRequest,
   type UpdateBotRequest
@@ -44,6 +51,7 @@ describe('Shared Bot Contracts (Step 6.1)', () => {
         systemPrompt: 'You are an analytical assistant.',
         modelId: 'gpt-6-luna',
         status: 'active',
+        responsePolicy: 'balanced_kb_first',
         enabledTools: ['search_knowledge_base', 'read_project_file'],
         createdAt: 1700000000000,
         updatedAt: 1700000050000
@@ -92,6 +100,7 @@ describe('Shared Bot Contracts (Step 6.1)', () => {
         modelId: 'gpt-6.1-sol',
         description: 'Specialized in TypeScript security',
         systemPrompt: 'Focus on defensive programming.',
+        responsePolicy: 'strict_kb_only',
         providerConnectionId: validProviderConnectionId,
         enabledTools: ['read_project_file', 'search_project_files']
       }
@@ -111,6 +120,7 @@ describe('Shared Bot Contracts (Step 6.1)', () => {
       expect(parsed.modelId).toBe('gemini-3.8-flash')
       expect(parsed.description).toBe('')
       expect(parsed.systemPrompt).toBe('')
+      expect(parsed.responsePolicy).toBe('balanced_kb_first')
       expect(parsed.providerConnectionId).toBeNull()
       expect(parsed.enabledTools).toEqual([])
     })
@@ -307,6 +317,73 @@ describe('Shared Bot Contracts (Step 6.1)', () => {
       expect(error.name).toBe('BotBridgeError')
       expect(error.code).toBe('BOT_NOT_FOUND')
       expect(error.message).toBe('Bot not found in workspace')
+    })
+  })
+
+  describe('Bot Response Policies (Step 12.3)', () => {
+    it('25. defines exact supported policy identifiers and balanced_kb_first default', () => {
+      expect(BOT_RESPONSE_POLICIES).toEqual([
+        'strict_kb_only',
+        'balanced_kb_first',
+        'general_ai_chat'
+      ])
+      expect(DEFAULT_BOT_RESPONSE_POLICY).toBe('balanced_kb_first')
+      expect(BOT_RESPONSE_POLICY_METADATA.balanced_kb_first.recommended).toBe(true)
+      expect(getBotResponsePolicyMeta('strict_kb_only').label).toBe('Strict Knowledge Base Only')
+      expect(getBotResponsePolicyMeta('balanced_kb_first').label).toBe(
+        'Knowledge Base First (Balanced)'
+      )
+      expect(getBotResponsePolicyMeta('general_ai_chat').label).toBe('General AI Chat')
+    })
+
+    it('26. validates, resolves, and converts explicit and legacy responsePolicy values', () => {
+      expect(isBotResponsePolicy('strict_kb_only')).toBe(true)
+      expect(isBotResponsePolicy('balanced_kb_first')).toBe(true)
+      expect(isBotResponsePolicy('general_ai_chat')).toBe(true)
+      expect(isBotResponsePolicy('unknown_mode')).toBe(false)
+      expect(resolveBotResponsePolicy('general_ai_chat')).toBe('general_ai_chat')
+      expect(resolveBotResponsePolicy(undefined)).toBe('balanced_kb_first')
+      expect(resolveBotResponsePolicy('bad_value')).toBe('balanced_kb_first')
+
+      expect(botResponsePolicySchema.safeParse('strict_kb_only').success).toBe(true)
+      expect(botResponsePolicySchema.safeParse('invalid_policy').success).toBe(false)
+
+      const snakeDto = toBotDto({
+        id: validBotId,
+        knowledge_base_id: validKbId,
+        name: 'Strict Snake Bot',
+        model_id: 'gpt-6-luna',
+        response_policy: 'strict_kb_only'
+      })
+      expect(snakeDto.responsePolicy).toBe('strict_kb_only')
+    })
+
+    it('27. accepts and validates responsePolicy updates independently in request schemas', () => {
+      for (const policy of BOT_RESPONSE_POLICIES) {
+        const created = createBotRequestSchema.parse({
+          name: `Bot ${policy}`,
+          modelId: 'gpt-6-luna',
+          responsePolicy: policy
+        })
+        expect(created.responsePolicy).toBe(policy)
+
+        const updated = updateBotRequestSchema.parse({ responsePolicy: policy })
+        expect(updated.responsePolicy).toBe(policy)
+      }
+
+      expect(() =>
+        createBotRequestSchema.parse({
+          name: 'Bad Policy Bot',
+          modelId: 'gpt-6-luna',
+          responsePolicy: 'unrestricted'
+        })
+      ).toThrow()
+
+      expect(() =>
+        updateBotRequestSchema.parse({
+          responsePolicy: 'unrestricted'
+        })
+      ).toThrow()
     })
   })
 })

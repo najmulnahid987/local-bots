@@ -1080,4 +1080,133 @@ describe('BotRagService (Phase 7 Step 7.3)', () => {
     expect(resultSerialized).not.toContain('credential_ref')
     expect(resultSerialized).not.toContain('encrypted_blob')
   })
+
+  // ==========================================================================
+  // Step 12.4: Balanced Evidence Assessment & Natural Language Fallback (41 - 45)
+  // ==========================================================================
+
+  it('41. retrieves relevant KB evidence for conversational natural-language queries with stopwords', () => {
+    createTestDoc(kbAId, {
+      fileName: 'vacation.txt',
+      originalFileName: 'Vacation Policy.txt',
+      fileType: 'txt',
+      chunks: [{ content: 'Maximum annual vacation carryover limit is 5 unused days per year.' }]
+    })
+
+    const result = ragService.retrieve({
+      botId: botAId,
+      query: 'What is our vacation carryover limit?',
+      enablePartialFallback: true
+    })
+
+    expect(result.status).toBe('SUCCESS')
+    expect(result.chunks).toHaveLength(1)
+    expect(result.assessment?.outcome).toBe('relevant_evidence')
+    expect(result.assessment?.termCoverageRatio).toBe(1)
+    expect(result.assessment?.kbChunkCount).toBe(1)
+  })
+
+  it('42. identifies partial_evidence when relaxed content-term fallback matches only part of a multi-topic query', () => {
+    createTestDoc(kbAId, {
+      fileName: 'vacation.txt',
+      originalFileName: 'Vacation Policy.txt',
+      fileType: 'txt',
+      chunks: [{ content: 'Maximum annual vacation carryover limit is 5 days.' }]
+    })
+
+    const result = ragService.retrieve({
+      botId: botAId,
+      query: 'What is the vacation carryover limit and lunar shuttle boarding schedule?',
+      enablePartialFallback: true
+    })
+
+    expect(result.status).toBe('SUCCESS')
+    expect(result.chunks).toHaveLength(1)
+    expect(result.assessment?.outcome).toBe('partial_evidence')
+    expect(result.assessment?.matchStrategy).toBe('relaxed_terms')
+    expect(result.assessment?.matchedContentTermCount).toBeGreaterThan(0)
+    expect(result.assessment?.matchedContentTermCount).toBeLessThan(
+      result.assessment?.queryContentTermCount ?? 99
+    )
+    expect(result.assessment?.termCoverageRatio).toBeLessThan(0.75)
+  })
+
+  it('43. distinguishes no_usable_kb from no_relevant_evidence while enforcing strict KB isolation', () => {
+    // Seed KB B only — KB A remains empty/unusable
+    createTestDoc(kbBId, {
+      fileName: 'beta_secret.txt',
+      originalFileName: 'Beta Secret.txt',
+      fileType: 'txt',
+      chunks: [{ content: 'Confidential lunar telemetry protocol beta-99.' }]
+    })
+
+    const emptyKbResult = ragService.retrieve({
+      botId: botAId,
+      query: 'lunar telemetry protocol',
+      enablePartialFallback: true
+    })
+
+    expect(emptyKbResult.status).toBe('NO_RESULTS')
+    expect(emptyKbResult.assessment?.outcome).toBe('no_usable_kb')
+    expect(emptyKbResult.assessment?.kbChunkCount).toBe(0)
+
+    // Now seed unrelated doc in KB A -> KB is usable, query simply has no relevant matches
+    createTestDoc(kbAId, {
+      fileName: 'coffee.txt',
+      originalFileName: 'Coffee Break.txt',
+      fileType: 'txt',
+      chunks: [{ content: 'Arabica coffee beans are roasted fresh on Mondays.' }]
+    })
+
+    const populatedMissResult = ragService.retrieve({
+      botId: botAId,
+      query: 'lunar telemetry protocol',
+      enablePartialFallback: true
+    })
+
+    expect(populatedMissResult.status).toBe('NO_RESULTS')
+    expect(populatedMissResult.assessment?.outcome).toBe('no_relevant_evidence')
+    expect(populatedMissResult.assessment?.kbChunkCount).toBe(1)
+  })
+
+  it('44. treats KBs containing only failed/pending sources as no_usable_kb', () => {
+    createTestDoc(kbAId, {
+      fileName: 'failed_doc.pdf',
+      originalFileName: 'Failed.pdf',
+      fileType: 'pdf',
+      status: 'failed',
+      chunks: [{ content: 'Should never be treated as usable indexed knowledge.' }]
+    })
+
+    const result = ragService.retrieve({
+      botId: botAId,
+      query: 'usable indexed knowledge',
+      enablePartialFallback: true
+    })
+
+    expect(result.status).toBe('NO_RESULTS')
+    expect(result.assessment?.outcome).toBe('no_usable_kb')
+    expect(result.assessment?.kbReadySourceCount).toBe(0)
+    expect(result.assessment?.kbChunkCount).toBe(0)
+  })
+
+  it('45. surfaces DATABASE_ERROR when readiness check fails instead of degrading to no_usable_kb', () => {
+    const spy = vi.spyOn(sourceRepo, 'getSearchableStats').mockImplementationOnce(() => {
+      throw new Error('SQLITE_CORRUPT: database disk image is malformed')
+    })
+
+    expect(() =>
+      ragService.retrieve({
+        botId: botAId,
+        query: 'any question',
+        enablePartialFallback: true
+      })
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'DATABASE_ERROR'
+      })
+    )
+
+    spy.mockRestore()
+  })
 })

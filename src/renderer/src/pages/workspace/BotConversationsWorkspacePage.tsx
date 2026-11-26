@@ -1,4 +1,4 @@
-import { ReactElement, useState, useEffect, useCallback } from 'react'
+import { ReactElement, useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -8,27 +8,30 @@ import {
   Cpu,
   RotateCw,
   RotateCcw,
+  Eraser,
   X,
   Brain,
   MessageSquare,
   CheckCircle2
 } from 'lucide-react'
-import type { BotDto } from '../../../../shared/bots'
+import {
+  getBotResponsePolicyMeta,
+  resolveBotResponsePolicy,
+  type BotDto
+} from '../../../../shared/bots'
 import type {
   CitationDto,
   ResolvedCitationTargetDto,
-  DeleteConversationResultDto
+  ExecutionMode
 } from '../../../../shared/conversations'
-import { useConversations } from '../../hooks/useConversations'
-import { useConversationMessages } from '../../hooks/useConversationMessages'
+import { useBotConversation } from '../../hooks/useBotConversation'
 import { useConversationTurn } from '../../hooks/useConversationTurn'
 import { useAgentTask } from '../../hooks/useAgentTask'
 import { useAgentTaskEvents } from '../../hooks/useAgentTaskEvents'
 import { useAgentRuns } from '../../hooks/useAgentRuns'
-import { ConversationSidebar } from '../../components/chat/ConversationSidebar'
 import { ConversationMessageList } from '../../components/chat/ConversationMessageList'
 import { ConversationComposer } from '../../components/chat/ConversationComposer'
-import { ConversationEmptyState } from '../../components/chat/ConversationEmptyState'
+import { ClearConversationDialog } from '../../components/chat/ClearConversationDialog'
 import { DocumentPreviewModal } from '../../components/documents/DocumentPreviewModal'
 import { TaskActivityTimeline } from '../../components/agents/TaskActivityTimeline'
 import { SaveReportApprovalModal } from '../../components/agents/SaveReportApprovalModal'
@@ -46,43 +49,51 @@ export function BotConversationsWorkspacePage(): ReactElement {
   const [bot, setBot] = useState<BotDto | null>(null)
   const [botLoading, setBotLoading] = useState<boolean>(Boolean(isValidBotId && botId))
   const [botError, setBotError] = useState<string | null>(null)
+  const [isClearDialogOpen, setIsClearDialogOpen] = useState<boolean>(false)
+
+  const botRequestIdRef = useRef<number>(0)
 
   const [prevBotId, setPrevBotId] = useState<string | undefined>(botId)
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('chat')
   if (botId !== prevBotId) {
     setPrevBotId(botId)
+    setBot(null)
     setBotLoading(Boolean(isValidBotId && botId))
     setBotError(null)
+    setIsClearDialogOpen(false)
+    setExecutionMode('chat')
   }
 
-  // Fetch Bot details
+  // Fetch Bot details with strict sequencing to guard against rapid switching races
   useEffect(() => {
     if (!isValidBotId || !botId) {
       return
     }
 
     let isCurrent = true
+    const reqId = ++botRequestIdRef.current
 
     const loadBot = async (): Promise<void> => {
       try {
         if (window.api?.bots?.get) {
           const fetched = await window.api.bots.get(botId)
-          if (isCurrent) {
+          if (isCurrent && reqId === botRequestIdRef.current) {
             setBot(fetched)
             if (!fetched) {
               setBotError('The requested Bot does not exist or has been deleted.')
             }
           }
         } else {
-          if (isCurrent) {
+          if (isCurrent && reqId === botRequestIdRef.current) {
             setBotError('Bot API is unavailable.')
           }
         }
       } catch (err) {
-        if (isCurrent) {
+        if (isCurrent && reqId === botRequestIdRef.current) {
           setBotError(err instanceof Error ? err.message : 'Failed to load Bot details.')
         }
       } finally {
-        if (isCurrent) {
+        if (isCurrent && reqId === botRequestIdRef.current) {
           setBotLoading(false)
         }
       }
@@ -95,43 +106,32 @@ export function BotConversationsWorkspacePage(): ReactElement {
     }
   }, [botId, isValidBotId])
 
-  // Conversations state for this Bot
+  // Single canonical conversation, segments, and messages for this Bot (1:1 invariant)
   const {
-    conversations,
-    selectedConversationId,
-    selectedConversation,
-    isLoading: conversationsLoading,
-    isRefreshing: conversationsRefreshing,
-    isMutating: conversationsMutating,
-    error: conversationsError,
-    refresh: refreshConversations,
-    selectConversation,
-    createConversation,
-    renameConversation,
-    deleteConversation
-  } = useConversations({
-    botId: bot?.id ?? null,
-    enabled: Boolean(bot && bot.status !== 'archived')
-  })
-
-  // Messages state for the selected conversation
-  const {
+    conversation,
+    segments,
     messages,
-    isLoading: messagesLoading,
-    refresh: refreshMessages,
-    error: messagesError
-  } = useConversationMessages({
-    conversationId: selectedConversationId,
-    enabled: Boolean(selectedConversationId)
+    isLoading: conversationLoading,
+    isRefreshing: conversationRefreshing,
+    isClearing: conversationClearing,
+    error: conversationError,
+    refresh: refreshConversation,
+    clearConversation
+  } = useBotConversation({
+    botId: bot?.id ?? null,
+    enabled: Boolean(bot)
   })
 
-  // Historical Agent Runs for the selected conversation
+  const canonicalConversationId = conversation?.id ?? null
+
+  // Historical Agent Runs for the canonical conversation
   const agentRuns = useAgentRuns({
-    conversationId: selectedConversationId,
-    enabled: Boolean(selectedConversationId)
+    conversationId: canonicalConversationId,
+    botId: bot?.id ?? null,
+    enabled: Boolean(canonicalConversationId)
   })
 
-  // Generation / Turn state for the selected conversation (normal chat)
+  // Generation / Turn state for the canonical conversation (normal chat)
   const {
     isGenerating,
     isCancelling,
@@ -139,28 +139,32 @@ export function BotConversationsWorkspacePage(): ReactElement {
     error: turnError,
     sendMessage,
     retryLastUserMessage,
-    cancelGeneration
+    cancelGeneration,
+    resetTurn
   } = useConversationTurn({
-    conversationId: selectedConversationId,
+    conversationId: canonicalConversationId,
     onFinish: () => {
-      void refreshMessages()
-      void refreshConversations()
+      void refreshConversation()
+    },
+    onError: () => {
+      void refreshConversation()
     }
   })
 
-  // Agent Task state for explicit task dispatch
+  // Agent Task state for explicit task dispatch into the same canonical conversation
   const agentTask = useAgentTask({
-    conversationId: selectedConversationId,
+    conversationId: canonicalConversationId,
     botId: bot?.id,
+    onTaskAccepted: () => {
+      void refreshConversation()
+    },
     onTaskCompleted: async () => {
-      await refreshMessages()
-      await refreshConversations()
+      await refreshConversation()
       await agentRuns.refresh()
     },
     onTaskCancelled: async () => {
       setCancellationNotice('Agent task cancelled.')
-      await refreshMessages()
-      await refreshConversations()
+      await refreshConversation()
       await agentRuns.refresh()
     }
   })
@@ -180,6 +184,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
   // Real-time task event streaming
   const agentTaskEvents = useAgentTaskEvents({
     agentRunId: agentTask.activeRunId,
+    botId: bot?.id ?? null,
     onApprovalRequested: (approval) => {
       setActiveApprovalTarget({
         agentRunId: approval.agentRunId,
@@ -227,54 +232,49 @@ export function BotConversationsWorkspacePage(): ReactElement {
   })
   const [memoryNotification, setMemoryNotification] = useState<string | null>(null)
 
-  // Clear citation and notice state when switching conversations
-  const [prevConvId, setPrevConvId] = useState<string | null>(selectedConversationId)
-  if (selectedConversationId !== prevConvId) {
-    setPrevConvId(selectedConversationId)
+  // Clear citation, approval, and notice state when canonical conversation changes (Bot switch)
+  const [prevConvId, setPrevConvId] = useState<string | null>(canonicalConversationId)
+  if (canonicalConversationId !== prevConvId) {
+    setPrevConvId(canonicalConversationId)
     setCitationTarget(null)
     setCitationError(null)
     setCancellationNotice(null)
     agentTask.reset()
     setActiveApprovalTarget(null)
     setIsApprovalModalOpen(false)
+    setIsClearDialogOpen(false)
   }
 
-  const handleDeleteConversation = useCallback(
-    async (conversationId: string): Promise<DeleteConversationResultDto> => {
-      if ((isGenerating || isTaskActive) && selectedConversationId === conversationId) {
-        throw new Error(
-          'Cannot delete conversation while generation or task is in progress. Please stop it first.'
-        )
-      }
-      return deleteConversation(conversationId)
-    },
-    [isGenerating, isTaskActive, selectedConversationId, deleteConversation]
-  )
+  const handleClearConversation = useCallback(async (): Promise<void> => {
+    if (isGenerating || isTaskActive) {
+      throw new Error(
+        'Cannot clear conversation while generation or an agent task is in progress. Please stop it first.'
+      )
+    }
+    await clearConversation()
+    setCitationTarget(null)
+    setCitationError(null)
+    setCancellationNotice(null)
+    resetTurn()
+    agentTask.reset()
+    await agentRuns.refresh()
+  }, [isGenerating, isTaskActive, clearConversation, resetTurn, agentTask, agentRuns])
 
   const handleStopGeneration = useCallback(async (): Promise<void> => {
     try {
       if (isGenerating) {
         await cancelGeneration()
         setCancellationNotice('Generation stopped.')
-        await refreshMessages()
-        await refreshConversations()
+        await refreshConversation()
       } else if (isTaskActive && agentTask.activeRunId) {
         await agentTask.cancelTask()
         setCancellationNotice('Agent task stopped.')
-        await refreshMessages()
-        await refreshConversations()
+        await refreshConversation()
       }
     } catch {
       // Handled safely
     }
-  }, [
-    isGenerating,
-    isTaskActive,
-    agentTask,
-    cancelGeneration,
-    refreshMessages,
-    refreshConversations
-  ])
+  }, [isGenerating, isTaskActive, agentTask, cancelGeneration, refreshConversation])
 
   const isLastMessageUnansweredUser =
     messages.length > 0 && messages[messages.length - 1].role === 'user'
@@ -298,8 +298,8 @@ export function BotConversationsWorkspacePage(): ReactElement {
   }, [canRetry, messages, retryLastUserMessage])
 
   const handleCitationClick = useCallback(
-    async (citation: CitationDto): Promise<void> => {
-      if (!selectedConversationId) return
+    async (citation: CitationDto, targetMessageId?: string): Promise<void> => {
+      if (!canonicalConversationId) return
       setCitationError(null)
 
       try {
@@ -307,15 +307,17 @@ export function BotConversationsWorkspacePage(): ReactElement {
           throw new Error('Citation resolution API is not available.')
         }
 
-        const msg = messages.find((m) =>
-          m.metadata?.citations?.some((c) => c.citationNumber === citation.citationNumber)
-        )
+        const msg =
+          (targetMessageId ? messages.find((m) => m.id === targetMessageId) : undefined) ??
+          messages.find((m) =>
+            m.metadata?.citations?.some((c) => c.citationNumber === citation.citationNumber)
+          )
         if (!msg) {
           throw new Error(`Message containing citation #${citation.citationNumber} not found.`)
         }
 
         const target = await window.api.conversation.resolveCitation({
-          conversationId: selectedConversationId,
+          conversationId: canonicalConversationId,
           messageId: msg.id,
           citationNumber: citation.citationNumber
         })
@@ -329,7 +331,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
         )
       }
     },
-    [selectedConversationId, messages, setCitationError, setCitationTarget]
+    [canonicalConversationId, messages, setCitationError, setCitationTarget]
   )
 
   // 1. Invalid Identifier validation guard
@@ -503,6 +505,19 @@ export function BotConversationsWorkspacePage(): ReactElement {
               >
                 {isArchived ? 'Archived' : 'Active'}
               </span>
+              {(() => {
+                const effectivePolicy = resolveBotResponsePolicy(bot.responsePolicy)
+                const policyMeta = getBotResponsePolicyMeta(effectivePolicy)
+                return (
+                  <span
+                    className={`bot-policy-badge policy-${effectivePolicy}`}
+                    data-testid="bot-response-policy"
+                    title={policyMeta.description}
+                  >
+                    {policyMeta.label}
+                  </span>
+                )
+              })()}
             </div>
             <p
               className="workspace-panel-subtitle"
@@ -637,8 +652,8 @@ export function BotConversationsWorkspacePage(): ReactElement {
           <div className="alert-body">
             <strong>Bot is Archived</strong>
             <span>
-              This Bot is archived. Restore the Bot from the Bots tab to send new messages or create
-              conversations.
+              This Bot is archived. Restore the Bot from the Bots tab to send new messages or run
+              agent tasks.
             </span>
           </div>
         </div>
@@ -658,7 +673,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
         </div>
       )}
 
-      {/* Main Two-Panel Chat Workspace */}
+      {/* Unified Single-Conversation Chat Workspace (Knowledge Base -> Bot -> Persistent Conversation) */}
       <div
         className="chat-workspace-body"
         data-testid="bot-conversations-layout"
@@ -666,27 +681,9 @@ export function BotConversationsWorkspacePage(): ReactElement {
           display: viewMode === 'chat' ? 'flex' : 'none',
           flex: 1,
           overflow: 'hidden',
-          backgroundColor: '#f8fafc'
+          backgroundColor: '#ffffff'
         }}
       >
-        {/* Left Panel: Conversation Sidebar */}
-        <ConversationSidebar
-          bot={bot}
-          conversations={conversations}
-          selectedConversationId={selectedConversationId}
-          onSelectConversation={selectConversation}
-          onCreateConversation={createConversation}
-          onRenameConversation={renameConversation}
-          onDeleteConversation={handleDeleteConversation}
-          isGenerating={isGenerating || isTaskActive}
-          isLoading={conversationsLoading}
-          isRefreshing={conversationsRefreshing}
-          isMutating={conversationsMutating}
-          error={conversationsError}
-          onRefresh={() => void refreshConversations()}
-        />
-
-        {/* Right Panel: Chat Area */}
         <main
           className="chat-main"
           data-testid="conversation-workspace-main"
@@ -698,11 +695,55 @@ export function BotConversationsWorkspacePage(): ReactElement {
             backgroundColor: '#ffffff'
           }}
         >
-          {selectedConversation ? (
+          {conversationLoading && !conversation ? (
+            <div
+              className="section-loading-state"
+              role="status"
+              data-testid="conversation-loading"
+              style={{ flex: 1 }}
+            >
+              <Loader2 size={24} className="spinner inline-icon text-accent" aria-hidden="true" />
+              <span>Loading conversation history...</span>
+            </div>
+          ) : conversationError && !conversation ? (
+            <div
+              style={{ padding: '24px', flex: 1, display: 'flex', alignItems: 'flex-start' }}
+              data-testid="conversation-error-container"
+            >
+              <div
+                className="section-alert section-alert-error"
+                role="alert"
+                data-testid="conversation-error-alert"
+                style={{ width: '100%' }}
+              >
+                <AlertCircle size={20} className="inline-icon text-danger" aria-hidden="true" />
+                <div className="alert-body">
+                  <strong>Unable to Load Conversation</strong>
+                  <span>{conversationError}</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => void refreshConversation()}
+                    disabled={conversationRefreshing}
+                    data-testid="retry-load-conversation-btn"
+                    style={{ marginTop: '8px', alignSelf: 'flex-start' }}
+                  >
+                    <RotateCw
+                      size={12}
+                      className={`inline-icon ${conversationRefreshing ? 'spinner' : ''}`}
+                      aria-hidden="true"
+                    />
+                    <span>Retry</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : conversation ? (
             <>
-              {/* Compact Active Conversation Header */}
+              {/* Unified Persistent Conversation Subheader */}
               <div
                 className="chat-header"
+                data-testid="conversation-toolbar"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -722,37 +763,69 @@ export function BotConversationsWorkspacePage(): ReactElement {
                       color: 'var(--color-text-primary, #0f172a)'
                     }}
                   >
-                    {selectedConversation.title}
+                    {conversation.title}
                   </h3>
                   <span
                     className="text-muted"
                     data-testid="messages-count"
                     style={{ fontSize: '11.5px', color: '#64748b' }}
                   >
-                    {messagesLoading ? 'Loading messages...' : `${messages.length} message(s)`}
+                    {conversationLoading || conversationRefreshing
+                      ? 'Loading messages...'
+                      : segments.length > 1
+                        ? `${messages.length} message(s) across ${segments.length} threads`
+                        : `${messages.length} message(s)`}
                   </span>
                 </div>
 
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => {
-                    void refreshMessages()
-                    void agentRuns.refresh()
-                  }}
-                  disabled={messagesLoading}
-                  data-testid="refresh-messages-btn"
-                  title="Refresh messages and agent runs"
-                  aria-label="Refresh messages"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <RotateCw
-                    size={12}
-                    className={`inline-icon ${messagesLoading ? 'spinner' : ''}`}
-                    aria-hidden="true"
-                  />
-                  <span>Refresh</span>
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      void refreshConversation()
+                      void agentRuns.refresh()
+                    }}
+                    disabled={conversationLoading || conversationRefreshing || conversationClearing}
+                    data-testid="refresh-messages-btn"
+                    title="Refresh messages and agent runs"
+                    aria-label="Refresh messages"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <RotateCw
+                      size={12}
+                      className={`inline-icon ${conversationRefreshing ? 'spinner' : ''}`}
+                      aria-hidden="true"
+                    />
+                    <span>Refresh</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm text-danger"
+                    onClick={() => setIsClearDialogOpen(true)}
+                    disabled={
+                      isArchived ||
+                      isGenerating ||
+                      isTaskActive ||
+                      conversationClearing ||
+                      (messages.length === 0 && segments.length <= 1)
+                    }
+                    data-testid="clear-conversation-btn"
+                    title={
+                      isGenerating || isTaskActive
+                        ? 'Stop active generation before clearing conversation'
+                        : isArchived
+                          ? 'Restore Bot before clearing conversation'
+                          : 'Clear conversation history'
+                    }
+                    aria-label="Clear Conversation"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Eraser size={12} className="inline-icon" aria-hidden="true" />
+                    <span>Clear Conversation</span>
+                  </button>
+                </div>
               </div>
 
               {/* Cancellation Notice Banner */}
@@ -789,15 +862,15 @@ export function BotConversationsWorkspacePage(): ReactElement {
                 </div>
               )}
 
-              {/* Message Loading Error Alert */}
-              {messagesError && (
+              {/* Conversation / Message Error Alert */}
+              {conversationError && (
                 <div
                   className="section-alert section-alert-error"
                   role="alert"
                   data-testid="messages-error-alert"
                   style={{ margin: '8px 20px 0 20px', fontSize: '12px' }}
                 >
-                  <span>{messagesError}</span>
+                  <span>{conversationError}</span>
                 </div>
               )}
 
@@ -869,14 +942,15 @@ export function BotConversationsWorkspacePage(): ReactElement {
                 </div>
               )}
 
-              {/* Scrollable Message Timeline with Active Agent Task Elements */}
+              {/* Scrollable Segment-Aware Message Timeline with Active Agent Task Elements */}
               <ConversationMessageList
                 messages={messages}
-                isLoading={messagesLoading}
+                segments={segments}
+                isLoading={conversationLoading}
                 isGenerating={isGenerating}
                 streamingText={streamingText}
                 botName={bot.name}
-                conversationId={selectedConversationId}
+                conversationId={canonicalConversationId}
                 isArchived={isArchived}
                 onCitationClick={handleCitationClick}
                 activeTaskElement={activeTaskElement}
@@ -892,6 +966,8 @@ export function BotConversationsWorkspacePage(): ReactElement {
               {/* Fixed Bottom Message Composer */}
               <ConversationComposer
                 bot={bot}
+                mode={executionMode}
+                onModeChange={setExecutionMode}
                 onSend={handleSendMessage}
                 onDispatchTask={handleDispatchTask}
                 onStop={handleStopGeneration}
@@ -906,16 +982,22 @@ export function BotConversationsWorkspacePage(): ReactElement {
                 }
               />
             </>
-          ) : (
-            <ConversationEmptyState
-              variant="no-selection"
-              botName={bot.name}
-              onNewConversation={() => void createConversation()}
-              isArchived={isArchived}
-            />
-          )}
+          ) : null}
         </main>
       </div>
+
+      {/* Clear Conversation Confirmation Dialog */}
+      <ClearConversationDialog
+        isOpen={isClearDialogOpen}
+        conversation={conversation}
+        botName={bot.name}
+        isGenerating={isGenerating}
+        isTaskActive={isTaskActive}
+        onClose={() => setIsClearDialogOpen(false)}
+        onConfirm={async () => {
+          await handleClearConversation()
+        }}
+      />
 
       {/* Verified Document Preview Modal for Cited Location */}
       {citationTarget && (
@@ -941,7 +1023,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
           onDecisionSubmitted={async () => {
             setIsApprovalModalOpen(false)
             await agentTaskEvents.refreshState()
-            await refreshMessages()
+            await refreshConversation()
           }}
         />
       )}

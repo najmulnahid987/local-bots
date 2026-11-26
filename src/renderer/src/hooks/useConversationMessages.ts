@@ -1,13 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type {
-  MessageDto,
-  ListMessagesRequest,
-  ConversationApi
+import {
+  type MessageDto,
+  type ConversationSegmentDto,
+  type ListMessagesRequest,
+  type ConversationApi,
+  ConversationBridgeError,
+  orderMessagesRespectingSegments
 } from '../../../shared/conversations'
-import { ConversationBridgeError } from '../../../shared/conversations'
 
 export interface UseConversationMessagesOptions {
   readonly conversationId?: string | null
+  readonly segments?: readonly ConversationSegmentDto[]
   readonly enabled?: boolean
   readonly api?: ConversationApi
 }
@@ -40,25 +43,15 @@ function sanitizeConversationError(err: unknown): string {
 }
 
 /**
- * Normalizes message array by deduplicating by ID and sorting chronologically by createdAt.
- */
-function normalizeMessages(messages: readonly MessageDto[]): readonly MessageDto[] {
-  const map = new Map<string, MessageDto>()
-  for (const msg of messages) {
-    map.set(msg.id, msg)
-  }
-  return Array.from(map.values()).sort((a, b) => a.createdAt - b.createdAt)
-}
-
-/**
  * Custom React hook managing message history and citations for a specific Conversation.
  * Strictly communicates via window.api.conversation / window.api.conversations.
- * Preserves authentic citation metadata from SQLite and guarantees chronological order.
+ * Preserves authentic citation metadata from SQLite and maintains segment-first chronological order.
  */
 export function useConversationMessages(
   options?: UseConversationMessagesOptions
 ): UseConversationMessagesState {
   const conversationId = options?.conversationId
+  const segments = options?.segments
   const enabled = options?.enabled ?? true
   const apiOption = options?.api
 
@@ -80,6 +73,11 @@ export function useConversationMessages(
 
   const mountedRef = useRef<boolean>(true)
   const requestIdRef = useRef<number>(0)
+  const segmentsRef = useRef<readonly ConversationSegmentDto[]>(segments ?? [])
+
+  useEffect(() => {
+    segmentsRef.current = segments ?? []
+  }, [segments])
 
   const getEffectiveApi = useCallback((): ConversationApi => {
     if (apiOption) {
@@ -120,7 +118,7 @@ export function useConversationMessages(
         const data = await api.listMessages(request)
 
         if (isCurrent && mountedRef.current && currentReq === requestIdRef.current) {
-          setMessages(normalizeMessages(data))
+          setMessages(orderMessagesRespectingSegments(data, segmentsRef.current))
           setError(null)
         }
       } catch (err) {
@@ -156,7 +154,7 @@ export function useConversationMessages(
       const data = await api.listMessages(request)
 
       if (mountedRef.current && currentReq === requestIdRef.current) {
-        setMessages(normalizeMessages(data))
+        setMessages(orderMessagesRespectingSegments(data, segmentsRef.current))
         setError(null)
       }
     } catch (err) {
@@ -174,7 +172,7 @@ export function useConversationMessages(
     if (!mountedRef.current) {
       return
     }
-    setMessages((prev) => normalizeMessages([...prev, message]))
+    setMessages((prev) => orderMessagesRespectingSegments([...prev, message], segmentsRef.current))
   }, [])
 
   const clearError = useCallback((): void => {

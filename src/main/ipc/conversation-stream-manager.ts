@@ -2,9 +2,12 @@ import {
   CONVERSATION_IPC_CHANNELS,
   type SendMessageIpcRequest,
   type RetryTurnIpcRequest,
+  type PublicStageChangeEvent,
   type PublicTextDeltaEvent,
   type PublicFinishEvent,
-  type PublicErrorEvent
+  type PublicErrorEvent,
+  type StreamLifecycleStage,
+  type MessageDto
 } from '../../shared/conversations'
 import {
   type ConversationTurnService,
@@ -19,6 +22,7 @@ import {
   type MessageChannelFactory,
   type WebFrameWithPostMessage
 } from './provider-stream-manager'
+import type { ConversationRepository } from '../database/repositories/conversation-repository'
 
 export const MAX_CONCURRENT_CONVERSATION_STREAMS_PER_WINDOW = 5
 
@@ -29,7 +33,12 @@ export interface ConversationStreamSession {
   readonly abortController: AbortController
   readonly port: MessagePortMainLike
   readonly conversationId: string
+  botId?: string
+  readonly executionMode: 'chat'
+  stage: StreamLifecycleStage
+  sequenceNumber: number
   isCleanedUp: boolean
+  hasEmittedTerminal: boolean
 }
 
 /**
@@ -39,6 +48,7 @@ export function toSafeConversationErrorDto(err: unknown): {
   code: string
   message: string
   retryable: boolean
+  partialMessage?: MessageDto
 } {
   if (err && typeof err === 'object') {
     const code =
@@ -47,10 +57,13 @@ export function toSafeConversationErrorDto(err: unknown): {
       'retryable' in err && typeof err.retryable === 'boolean' ? err.retryable : false
     const rawMessage =
       'message' in err && typeof err.message === 'string' ? err.message : String(err)
+    const partialMessage =
+      'partialMessage' in err && err.partialMessage ? (err.partialMessage as MessageDto) : undefined
     return {
       code,
       message: sanitizeConversationErrorMessage(rawMessage),
-      retryable
+      retryable,
+      ...(partialMessage ? { partialMessage } : {})
     }
   }
   return {
@@ -63,6 +76,7 @@ export function toSafeConversationErrorDto(err: unknown): {
 export interface ConversationStreamManagerOptions {
   maxStreams?: number
   channelFactory?: MessageChannelFactory
+  conversationRepo?: ConversationRepository
 }
 
 /**
@@ -72,11 +86,13 @@ export interface ConversationStreamManagerOptions {
 export class ConversationStreamManager {
   private readonly maxStreams: number
   private readonly channelFactory: MessageChannelFactory
+  private readonly conversationRepo?: ConversationRepository
   private readonly activeStreams = new Map<string, ConversationStreamSession>()
   private readonly windowListeners = new WeakSet<BrowserWindowLike>()
 
   constructor(options?: ConversationStreamManagerOptions) {
     this.maxStreams = options?.maxStreams ?? MAX_CONCURRENT_CONVERSATION_STREAMS_PER_WINDOW
+    this.conversationRepo = options?.conversationRepo
     this.channelFactory =
       options?.channelFactory ??
       (() => {
@@ -139,7 +155,12 @@ export class ConversationStreamManager {
       abortController,
       port: port1,
       conversationId,
-      isCleanedUp: false
+      botId: this.conversationRepo?.getByIdOnly(conversationId)?.botId,
+      executionMode: 'chat',
+      stage: 'preparing',
+      sequenceNumber: 1,
+      isCleanedUp: false,
+      hasEmittedTerminal: false
     }
 
     this.activeStreams.set(requestId, session)
@@ -158,6 +179,19 @@ export class ConversationStreamManager {
     })
 
     port1.start()
+
+    // Send initial stage change (preparing)
+    const initialStageEvent: PublicStageChangeEvent = {
+      type: 'stage_change',
+      stage: 'preparing',
+      requestId,
+      conversationId,
+      botId: session.botId,
+      executionMode: 'chat',
+      sequenceNumber: session.sequenceNumber++,
+      timestamp: Date.now()
+    }
+    port1.postMessage(initialStageEvent)
 
     // Transfer port2 to sender frame
     try {
@@ -187,18 +221,7 @@ export class ConversationStreamManager {
 
     // Asynchronously consume stream
     this.consumeTurnStream(session, turnStream).catch((err) => {
-      if (!session.isCleanedUp) {
-        try {
-          const errorEvent: PublicErrorEvent = {
-            type: 'error',
-            error: toSafeConversationErrorDto(err)
-          }
-          port1.postMessage(errorEvent)
-        } catch {
-          // Port closed
-        }
-        this.cleanupSession(requestId)
-      }
+      this.emitFallbackErrorAndCleanup(session, err)
     })
 
     return { started: true }
@@ -228,7 +251,12 @@ export class ConversationStreamManager {
       abortController,
       port: port1,
       conversationId,
-      isCleanedUp: false
+      botId: this.conversationRepo?.getByIdOnly(conversationId)?.botId,
+      executionMode: 'chat',
+      stage: 'preparing',
+      sequenceNumber: 1,
+      isCleanedUp: false,
+      hasEmittedTerminal: false
     }
 
     this.activeStreams.set(requestId, session)
@@ -246,6 +274,19 @@ export class ConversationStreamManager {
     })
 
     port1.start()
+
+    // Send initial stage change (preparing)
+    const initialStageEvent: PublicStageChangeEvent = {
+      type: 'stage_change',
+      stage: 'preparing',
+      requestId,
+      conversationId,
+      botId: session.botId,
+      executionMode: 'chat',
+      sequenceNumber: session.sequenceNumber++,
+      timestamp: Date.now()
+    }
+    port1.postMessage(initialStageEvent)
 
     try {
       senderFrame.postMessage(CONVERSATION_IPC_CHANNELS.STREAM_PORT, { requestId }, [port2])
@@ -271,18 +312,7 @@ export class ConversationStreamManager {
     }
 
     this.consumeTurnStream(session, turnStream).catch((err) => {
-      if (!session.isCleanedUp) {
-        try {
-          const errorEvent: PublicErrorEvent = {
-            type: 'error',
-            error: toSafeConversationErrorDto(err)
-          }
-          port1.postMessage(errorEvent)
-        } catch {
-          // Port closed
-        }
-        this.cleanupSession(requestId)
-      }
+      this.emitFallbackErrorAndCleanup(session, err)
     })
 
     return { started: true }
@@ -349,28 +379,66 @@ export class ConversationStreamManager {
     session: ConversationStreamSession,
     turnStream: ConversationTurnStream
   ): Promise<void> {
-    const { requestId, abortController, port } = session
+    const { requestId, conversationId, abortController, port } = session
 
     try {
       let turnResult: ConversationTurnResult | undefined
 
       for await (const event of turnStream) {
-        if (session.isCleanedUp || abortController.signal.aborted) {
+        if (session.isCleanedUp || session.hasEmittedTerminal || abortController.signal.aborted) {
           break
         }
 
         if (event.type === 'text_delta') {
+          if (session.stage !== 'streaming') {
+            session.stage = 'streaming'
+            const stageEvent: PublicStageChangeEvent = {
+              type: 'stage_change',
+              stage: 'streaming',
+              requestId,
+              conversationId,
+              botId: session.botId,
+              executionMode: 'chat',
+              sequenceNumber: session.sequenceNumber++,
+              timestamp: Date.now()
+            }
+            port.postMessage(stageEvent)
+          }
+
           const deltaEvent: PublicTextDeltaEvent = {
             type: 'text_delta',
-            textDelta: event.textDelta
+            textDelta: event.textDelta,
+            requestId,
+            conversationId,
+            botId: session.botId,
+            executionMode: 'chat',
+            sequenceNumber: session.sequenceNumber++,
+            timestamp: Date.now(),
+            stage: 'streaming'
           }
           port.postMessage(deltaEvent)
         } else if (event.type === 'finish') {
+          session.stage = 'finalizing'
+          const finalizingEvent: PublicStageChangeEvent = {
+            type: 'stage_change',
+            stage: 'finalizing',
+            requestId,
+            conversationId,
+            botId: session.botId,
+            executionMode: 'chat',
+            sequenceNumber: session.sequenceNumber++,
+            timestamp: Date.now()
+          }
+          port.postMessage(finalizingEvent)
+
           try {
             turnResult = await turnStream.getResult()
           } catch {
             // Best effort
           }
+
+          session.stage = 'completed'
+          session.hasEmittedTerminal = true
 
           const finishEvent: PublicFinishEvent = {
             type: 'finish',
@@ -385,37 +453,79 @@ export class ConversationStreamManager {
             totalTextLength: event.totalTextLength,
             durationMs: event.durationMs,
             message: event.message,
-            userMessage: turnResult?.userMessage
+            userMessage: turnResult?.userMessage,
+            requestId,
+            conversationId,
+            botId: session.botId,
+            executionMode: 'chat',
+            sequenceNumber: session.sequenceNumber++,
+            timestamp: Date.now(),
+            stage: 'completed'
           }
           port.postMessage(finishEvent)
           break
         } else if (event.type === 'error') {
+          const isCancelled =
+            abortController.signal.aborted || event.error.code === 'OPERATION_ABORTED'
+          session.stage = isCancelled ? 'cancelled' : 'failed'
+          session.hasEmittedTerminal = true
+
           const errorEvent: PublicErrorEvent = {
             type: 'error',
             error: {
               code: event.error.code,
               message: sanitizeConversationErrorMessage(event.error.message),
               retryable: event.error.retryable
-            }
+            },
+            partialMessage: event.partialMessage,
+            requestId,
+            conversationId,
+            botId: session.botId,
+            executionMode: 'chat',
+            sequenceNumber: session.sequenceNumber++,
+            timestamp: Date.now(),
+            stage: session.stage
           }
           port.postMessage(errorEvent)
           break
         }
       }
     } catch (err: unknown) {
-      if (!session.isCleanedUp && !abortController.signal.aborted) {
-        try {
-          const errorEvent: PublicErrorEvent = {
-            type: 'error',
-            error: toSafeConversationErrorDto(err)
-          }
-          port.postMessage(errorEvent)
-        } catch {
-          // Port closed
-        }
+      if (!session.isCleanedUp && !session.hasEmittedTerminal && !abortController.signal.aborted) {
+        this.emitFallbackErrorAndCleanup(session, err)
       }
     } finally {
       this.cleanupSession(requestId)
+    }
+  }
+
+  private emitFallbackErrorAndCleanup(session: ConversationStreamSession, err: unknown): void {
+    if (!session.isCleanedUp && !session.hasEmittedTerminal) {
+      session.stage = 'failed'
+      session.hasEmittedTerminal = true
+      try {
+        const errorDto = toSafeConversationErrorDto(err)
+        const errorEvent: PublicErrorEvent = {
+          type: 'error',
+          error: {
+            code: errorDto.code,
+            message: errorDto.message,
+            retryable: errorDto.retryable
+          },
+          partialMessage: errorDto.partialMessage,
+          requestId: session.requestId,
+          conversationId: session.conversationId,
+          botId: session.botId,
+          executionMode: 'chat',
+          sequenceNumber: session.sequenceNumber++,
+          timestamp: Date.now(),
+          stage: 'failed'
+        }
+        session.port.postMessage(errorEvent)
+      } catch {
+        // Port closed
+      }
+      this.cleanupSession(session.requestId)
     }
   }
 

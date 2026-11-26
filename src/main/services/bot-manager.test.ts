@@ -553,4 +553,89 @@ describe('BotManagerService (Step 6.2)', () => {
       expect(docCount.c).toBe(1)
     })
   })
+
+  describe('Step 12.3: Configurable Bot Response Policies', () => {
+    it('creates newly added Bots with default balanced_kb_first policy when omitted', () => {
+      const kb = createKnowledgeBaseFixture(testCtx.kbRepo, { name: 'Policy Default KB' })
+      activeContext.activateWorkspace(sessionA, kb.id)
+
+      const created = botManager.createBot(sessionA, {
+        name: 'Default Balanced Bot',
+        modelId: 'gpt-6-luna',
+        providerConnectionId: openAiConnId
+      })
+
+      expect(created.responsePolicy).toBe('balanced_kb_first')
+      expect(botManager.getBot(sessionA, created.id)?.responsePolicy).toBe('balanced_kb_first')
+    })
+
+    it('preserves explicit responsePolicy on creation across all three supported policies', () => {
+      const kb = createKnowledgeBaseFixture(testCtx.kbRepo, { name: 'Policy Creation KB' })
+      activeContext.activateWorkspace(sessionA, kb.id)
+
+      const strictBot = botManager.createBot(sessionA, {
+        name: 'Strict Bot',
+        modelId: 'gpt-6-luna',
+        providerConnectionId: openAiConnId,
+        responsePolicy: 'strict_kb_only'
+      })
+      const balancedBot = botManager.createBot(sessionA, {
+        name: 'Balanced Bot',
+        modelId: 'gpt-6-luna',
+        providerConnectionId: openAiConnId,
+        responsePolicy: 'balanced_kb_first'
+      })
+      const generalBot = botManager.createBot(sessionA, {
+        name: 'General Bot',
+        modelId: 'gpt-6-luna',
+        providerConnectionId: openAiConnId,
+        responsePolicy: 'general_ai_chat'
+      })
+
+      expect(strictBot.responsePolicy).toBe('strict_kb_only')
+      expect(balancedBot.responsePolicy).toBe('balanced_kb_first')
+      expect(generalBot.responsePolicy).toBe('general_ai_chat')
+      expect(botManager.listBots(sessionA).find((b) => b.id === strictBot.id)?.responsePolicy).toBe(
+        'strict_kb_only'
+      )
+    })
+
+    it('updates responsePolicy independently of tool permissions and vice versa', () => {
+      const kb = createKnowledgeBaseFixture(testCtx.kbRepo, { name: 'Policy Independence KB' })
+      activeContext.activateWorkspace(sessionA, kb.id)
+
+      const bot = botManager.createBot(sessionA, {
+        name: 'Evolving Policy Bot',
+        modelId: 'gpt-6-luna',
+        providerConnectionId: openAiConnId,
+        responsePolicy: 'strict_kb_only',
+        enabledTools: ['search_knowledge_base', 'prepare_report']
+      })
+
+      const policyUpdated = botManager.updateBot(sessionA, bot.id, {
+        responsePolicy: 'general_ai_chat'
+      })
+      expect(policyUpdated.responsePolicy).toBe('general_ai_chat')
+      expect(policyUpdated.enabledTools).toEqual(['search_knowledge_base', 'prepare_report'])
+
+      const toolsUpdated = botManager.updateBot(sessionA, bot.id, {
+        enabledTools: ['read_project_file']
+      })
+      expect(toolsUpdated.responsePolicy).toBe('general_ai_chat')
+      expect(toolsUpdated.enabledTools).toEqual(['read_project_file'])
+    })
+
+    it('rejects unsupported responsePolicy values via strict Zod validation', () => {
+      const kb = createKnowledgeBaseFixture(testCtx.kbRepo, { name: 'Policy Rejection KB' })
+      activeContext.activateWorkspace(sessionA, kb.id)
+
+      expect(() =>
+        botManager.createBot(sessionA, {
+          name: 'Invalid Bot',
+          modelId: 'gpt-6-luna',
+          responsePolicy: 'invalid_policy' as never
+        })
+      ).toThrow(BotValidationError)
+    })
+  })
 })

@@ -13,6 +13,7 @@ export interface EditBotModalProps {
   readonly updateBotFn?: (botId: string, request: UpdateBotRequest) => Promise<BotDto>
   readonly connections?: readonly ProviderConnectionSummary[]
   readonly catalog?: ProviderCatalogDto | null
+  readonly knowledgeBaseName?: string
 }
 
 function sanitizeErrorMessage(err: unknown): string {
@@ -36,7 +37,8 @@ export function EditBotModal({
   onSuccess,
   updateBotFn,
   connections,
-  catalog
+  catalog,
+  knowledgeBaseName
 }: EditBotModalProps): ReactElement | null {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -60,6 +62,7 @@ export function EditBotModal({
       systemPrompt: values.systemPrompt,
       providerConnectionId: values.providerConnectionId,
       modelId: values.modelId,
+      responsePolicy: values.responsePolicy,
       enabledTools: values.enabledTools
     }
 
@@ -124,10 +127,12 @@ export function EditBotModal({
           </p>
 
           <BotConfigurationForm
+            key={`${bot.id}-${bot.updatedAt}`}
             initialValues={{
               name: bot.name,
               description: bot.description,
               systemPrompt: bot.systemPrompt,
+              responsePolicy: bot.responsePolicy,
               providerConnectionId: bot.providerConnectionId,
               modelId: bot.modelId,
               enabledTools: [...bot.enabledTools]
@@ -139,6 +144,7 @@ export function EditBotModal({
             onCancel={onClose}
             connections={connections}
             catalog={catalog}
+            knowledgeBaseName={knowledgeBaseName}
           />
         </div>
       </div>

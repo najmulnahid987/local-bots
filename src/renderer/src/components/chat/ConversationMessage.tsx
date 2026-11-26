@@ -7,9 +7,17 @@ import {
   Wrench,
   ChevronDown,
   ChevronRight,
-  Brain
+  Brain,
+  ShieldCheck
 } from 'lucide-react'
-import type { MessageDto, CitationDto, MessageToolCallDto } from '../../../../shared/conversations'
+import type {
+  MessageDto,
+  CitationDto,
+  MessageToolCallDto,
+  MessageGroundingMode,
+  ClaimProvenance,
+  ClaimValidationStatus
+} from '../../../../shared/conversations'
 import type { CanonicalBotTool } from '../../../../shared/agents'
 import { formatTimestamp } from '../../utils/formatters'
 import { MarkdownMessageContent } from './MarkdownMessageContent'
@@ -18,7 +26,7 @@ import { ToolExecutionCard } from '../agents/ToolExecutionCard'
 export interface ConversationMessageProps {
   readonly message: MessageDto
   readonly botName?: string
-  readonly onCitationClick?: (citation: CitationDto) => void
+  readonly onCitationClick?: (citation: CitationDto, messageId?: string) => void
   readonly onSaveAsMemory?: (content: string) => void
 }
 
@@ -27,6 +35,115 @@ interface WorkspaceEvidenceItem {
   readonly toolName: string
   readonly target: string
   readonly summary: string
+}
+
+interface GroundingBadgeMeta {
+  readonly label: string
+  readonly title: string
+  readonly backgroundColor: string
+  readonly color: string
+  readonly borderColor: string
+}
+
+function getGroundingBadgeMeta(mode?: MessageGroundingMode): GroundingBadgeMeta | null {
+  switch (mode) {
+    case 'kb_grounded':
+      return {
+        label: 'KB Evidence',
+        title: 'Response prioritized evidence from the assigned Knowledge Base.',
+        backgroundColor: '#eff6ff',
+        color: '#1d4ed8',
+        borderColor: '#bfdbfe'
+      }
+    case 'kb_partial_with_general_fallback':
+      return {
+        label: 'Partial KB + General AI',
+        title:
+          'Assigned Knowledge Base partially covered this question; remaining gaps supplemented using general AI knowledge.',
+        backgroundColor: '#fffbeb',
+        color: '#b45309',
+        borderColor: '#fde68a'
+      }
+    case 'general_fallback_no_kb_evidence':
+      return {
+        label: 'General AI Fallback',
+        title:
+          'No relevant information was found in the assigned Knowledge Base; answered using general AI knowledge.',
+        backgroundColor: '#f8fafc',
+        color: '#475569',
+        borderColor: '#cbd5e1'
+      }
+    case 'general_fallback_no_usable_kb':
+      return {
+        label: 'General AI (No KB Docs)',
+        title:
+          'Assigned Knowledge Base currently has no indexed documents; answered using general AI knowledge.',
+        backgroundColor: '#f8fafc',
+        color: '#475569',
+        borderColor: '#cbd5e1'
+      }
+    default:
+      return null
+  }
+}
+
+interface ClaimBadgeMeta {
+  readonly label: string
+  readonly color: string
+  readonly backgroundColor: string
+  readonly borderColor: string
+}
+
+function getClaimStatusBadgeMeta(
+  provenance: ClaimProvenance,
+  validationStatus: ClaimValidationStatus
+): ClaimBadgeMeta {
+  if (validationStatus === 'invalid_reference') {
+    return {
+      label: 'Unverified Reference',
+      color: '#b91c1c',
+      backgroundColor: '#fef2f2',
+      borderColor: '#fecaca'
+    }
+  }
+  switch (provenance) {
+    case 'kb_supported':
+      return {
+        label: 'KB Supported',
+        color: '#1d4ed8',
+        backgroundColor: '#eff6ff',
+        borderColor: '#bfdbfe'
+      }
+    case 'kb_partially_supported':
+      return {
+        label: 'Partial KB Support',
+        color: '#b45309',
+        backgroundColor: '#fffbeb',
+        borderColor: '#fde68a'
+      }
+    case 'general_knowledge':
+      return {
+        label: 'General AI',
+        color: '#475569',
+        backgroundColor: '#f8fafc',
+        borderColor: '#cbd5e1'
+      }
+    case 'unsupported':
+      return {
+        label: 'Unsupported',
+        color: '#b91c1c',
+        backgroundColor: '#fef2f2',
+        borderColor: '#fecaca'
+      }
+    case 'uncertain':
+    default:
+      return {
+        label: 'Uncertain',
+        color: '#7c2d12',
+        backgroundColor: '#fff7ed',
+        borderColor: '#fed7aa'
+      }
+  }
 }
 
 function extractWorkspaceEvidence(
@@ -67,12 +184,16 @@ export function ConversationMessage({
   onSaveAsMemory
 }: ConversationMessageProps): ReactElement {
   const [showTaskActivity, setShowTaskActivity] = useState<boolean>(false)
+  const [showClaimProvenance, setShowClaimProvenance] = useState<boolean>(false)
 
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
   const citations = message.metadata?.citations ?? []
+  const claims = message.metadata?.claims ?? []
   const toolCalls = message.metadata?.toolCalls ?? []
   const workspaceEvidence = extractWorkspaceEvidence(toolCalls)
+
+  const validCitationKeys = new Set(citations.map((c) => `${c.citationNumber}:${c.chunkId}`))
 
   const formattedTime = message.createdAt ? formatTimestamp(message.createdAt) : ''
 
@@ -116,6 +237,72 @@ export function ConversationMessage({
               {botName}
             </span>
             {formattedTime && <span>• {formattedTime}</span>}
+            {(message.metadata?.executionMode === 'agent' ||
+              Boolean(message.metadata?.agentRunId)) && (
+              <span
+                className="chat-execution-mode-pill"
+                data-testid={`message-execution-mode-${message.id}`}
+                title="Executed via explicit Agent Task mode"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  padding: '1px 6px',
+                  borderRadius: '999px',
+                  fontSize: '10px',
+                  fontWeight: 500,
+                  backgroundColor: '#f1f5f9',
+                  color: '#475569',
+                  border: '1px solid #cbd5e1'
+                }}
+              >
+                <span>Agent Task</span>
+              </span>
+            )}
+            {(() => {
+              const badge = getGroundingBadgeMeta(message.metadata?.groundingMode)
+              if (!badge) return null
+              return (
+                <span
+                  className="chat-grounding-pill"
+                  data-testid={`message-grounding-badge-${message.id}`}
+                  title={badge.title}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '1px 6px',
+                    borderRadius: '999px',
+                    fontSize: '10px',
+                    fontWeight: 500,
+                    backgroundColor: badge.backgroundColor,
+                    color: badge.color,
+                    border: `1px solid ${badge.borderColor}`
+                  }}
+                >
+                  {badge.label}
+                </span>
+              )
+            })()}
+            {message.metadata?.isPartial && (
+              <span
+                className="chat-partial-pill"
+                data-testid={`message-partial-badge-${message.id}`}
+                title={message.metadata?.interruptedReason ?? 'Response generation was interrupted'}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '1px 6px',
+                  borderRadius: '999px',
+                  fontSize: '10px',
+                  fontWeight: 500,
+                  backgroundColor: '#fef2f2',
+                  color: '#991b1b',
+                  border: '1px solid #fecaca'
+                }}
+              >
+                <span>{message.metadata.status === 'cancelled' ? 'Cancelled' : 'Interrupted'}</span>
+              </span>
+            )}
           </>
         )}
       </div>
@@ -182,7 +369,7 @@ export function ConversationMessage({
                 type="button"
                 className="citation-chip-btn"
                 data-testid={`citation-chip-${message.id}-${c.citationNumber}`}
-                onClick={() => onCitationClick?.(c)}
+                onClick={() => onCitationClick?.(c, message.id)}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -202,6 +389,148 @@ export function ConversationMessage({
                 {c.pageNumber ? ` p.${c.pageNumber}` : ''}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Claim-Level Provenance Inspector — Collapsible trace from claims to sources */}
+        {isAssistant && claims.length > 0 && (
+          <div
+            className="chat-claim-provenance-section"
+            data-testid={`claim-provenance-section-${message.id}`}
+            style={{
+              marginTop: '8px',
+              paddingTop: '6px',
+              borderTop: '1px solid #f1f5f9'
+            }}
+          >
+            <button
+              type="button"
+              className="btn-toggle-claim-provenance"
+              data-testid={`toggle-claim-provenance-${message.id}`}
+              onClick={() => setShowClaimProvenance(!showClaimProvenance)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                fontSize: '11px',
+                color: '#475569',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '2px 4px',
+                borderRadius: '4px',
+                fontWeight: 500
+              }}
+            >
+              <ShieldCheck size={12} aria-hidden="true" />
+              <span>
+                Claim Provenance ({claims.length} {claims.length === 1 ? 'claim' : 'claims'})
+              </span>
+              {showClaimProvenance ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </button>
+
+            {showClaimProvenance && (
+              <div
+                className="claim-provenance-list"
+                data-testid={`claim-provenance-list-${message.id}`}
+                style={{
+                  marginTop: '6px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px'
+                }}
+              >
+                {claims.map((claim) => {
+                  const statusBadge = getClaimStatusBadgeMeta(
+                    claim.provenance,
+                    claim.validationStatus
+                  )
+                  const validatedRefs = claim.evidenceReferences.filter((ref) =>
+                    validCitationKeys.has(`${ref.citationNumber}:${ref.chunkId}`)
+                  )
+                  return (
+                    <div
+                      key={claim.claimId}
+                      data-testid={`claim-provenance-item-${message.id}-${claim.claimId}`}
+                      style={{
+                        padding: '6px 8px',
+                        borderRadius: '6px',
+                        backgroundColor: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        fontSize: '11.5px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px'
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: '6px'
+                        }}
+                      >
+                        <span
+                          data-testid={`claim-status-badge-${message.id}-${claim.claimId}`}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            padding: '1px 6px',
+                            borderRadius: '999px',
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            color: statusBadge.color,
+                            backgroundColor: statusBadge.backgroundColor,
+                            border: `1px solid ${statusBadge.borderColor}`
+                          }}
+                        >
+                          {statusBadge.label}
+                        </span>
+                        {validatedRefs.map((ref) => (
+                          <button
+                            key={`${claim.claimId}-${ref.chunkId}-${ref.citationNumber}`}
+                            type="button"
+                            data-testid={`claim-ref-btn-${message.id}-${claim.claimId}-${ref.citationNumber}`}
+                            onClick={() =>
+                              onCitationClick?.(
+                                {
+                                  citationNumber: ref.citationNumber,
+                                  sourceId: ref.sourceId,
+                                  chunkId: ref.chunkId,
+                                  fileName: ref.fileName,
+                                  fileType: ref.fileType,
+                                  pageNumber: ref.pageNumber,
+                                  headingPath: ref.headingPath,
+                                  chunkIndex: ref.chunkIndex
+                                },
+                                message.id
+                              )
+                            }
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              fontSize: '10px',
+                              backgroundColor: '#ffffff',
+                              color: '#1e40af',
+                              border: '1px solid #cbd5e1',
+                              cursor: onCitationClick ? 'pointer' : 'default'
+                            }}
+                          >
+                            <strong>[{ref.citationNumber}]</strong> {ref.fileName}
+                            {ref.pageNumber ? ` p.${ref.pageNumber}` : ''}
+                          </button>
+                        ))}
+                      </div>
+                      <span style={{ color: '#334155', lineHeight: 1.4 }}>{claim.claimText}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
 

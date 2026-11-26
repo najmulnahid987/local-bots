@@ -71,9 +71,28 @@ export function useAgentTask(options?: UseAgentTaskOptions): UseAgentTaskState {
   }
 
   const activeRunIdRef = useRef<string | null>(activeRunId)
+  const activeConversationIdRef = useRef<string | null | undefined>(conversationId)
+  const activeBotIdRef = useRef<string | null | undefined>(botId)
+  const mountedRef = useRef<boolean>(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   useEffect(() => {
     activeRunIdRef.current = activeRunId
   }, [activeRunId])
+
+  useEffect(() => {
+    activeConversationIdRef.current = conversationId
+  }, [conversationId])
+
+  useEffect(() => {
+    activeBotIdRef.current = botId
+  }, [botId])
 
   const reset = useCallback((): void => {
     setActiveRunId(null)
@@ -121,16 +140,27 @@ export function useAgentTask(options?: UseAgentTaskOptions): UseAgentTaskState {
         return null
       }
 
+      const requestBotId = botId
+      const requestConvId = conversationId
       setIsDispatching(true)
       setError(null)
 
       try {
         const response = await agentsApi.dispatchTask({
-          botId,
-          conversationId,
+          botId: requestBotId,
+          conversationId: requestConvId,
           taskPrompt: trimmed,
           workspaceAccessRequested
         })
+
+        // Guard against stale async completion after switching Bots/conversations
+        if (
+          !mountedRef.current ||
+          activeBotIdRef.current !== requestBotId ||
+          activeConversationIdRef.current !== requestConvId
+        ) {
+          return null
+        }
 
         if (!response.accepted) {
           // e.g. folder picker cancelled by user
@@ -146,12 +176,20 @@ export function useAgentTask(options?: UseAgentTaskOptions): UseAgentTaskState {
         onTaskAccepted?.(response)
         return response
       } catch (err: unknown) {
-        const msg = sanitizeAgentUiError(err)
-        setError(msg)
-        setStatus('idle')
+        if (
+          mountedRef.current &&
+          activeBotIdRef.current === requestBotId &&
+          activeConversationIdRef.current === requestConvId
+        ) {
+          const msg = sanitizeAgentUiError(err)
+          setError(msg)
+          setStatus('idle')
+        }
         return null
       } finally {
-        setIsDispatching(false)
+        if (mountedRef.current) {
+          setIsDispatching(false)
+        }
       }
     },
     [botId, conversationId, isDispatching, status, onTaskAccepted]

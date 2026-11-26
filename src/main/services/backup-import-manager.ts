@@ -27,6 +27,7 @@ import {
   cancelImportRequestSchema
 } from '../../shared/export-archive'
 import { z } from 'zod'
+import { resolveBotResponsePolicy } from '../../shared/bots'
 import { KnowledgeBaseRepository } from '../database/repositories/knowledge-base-repository'
 import { BotRepository } from '../database/repositories/bot-repository'
 import { BotMemoryRepository } from '../database/repositories/bot-memory-repository'
@@ -510,8 +511,32 @@ export class BackupImportManager {
       sourceIdMap.set(source.id, randomUUID())
     }
 
+    // Group conversation bundles by oldBotId to consolidate multi-conversation legacy backups
+    const bundlesByBot = new Map<string, typeof session.conversationBundles>()
     for (const bundle of session.conversationBundles) {
-      conversationIdMap.set(bundle.conversation.id, randomUUID())
+      const list = bundlesByBot.get(bundle.conversation.botId) ?? []
+      list.push(bundle)
+      bundlesByBot.set(bundle.conversation.botId, list)
+    }
+
+    // Assign a single canonical conversation UUID per bot, mapping all legacy conversation IDs for that bot to it
+    for (const [, bundles] of bundlesByBot.entries()) {
+      bundles.sort((a, b) => {
+        const timeDiff = (a.conversation.createdAt || 0) - (b.conversation.createdAt || 0)
+        if (timeDiff !== 0) return timeDiff
+        return a.conversation.id.localeCompare(b.conversation.id)
+      })
+      const canonicalConvId = randomUUID()
+      for (const bundle of bundles) {
+        conversationIdMap.set(bundle.conversation.id, canonicalConvId)
+      }
+    }
+
+    // Ensure bots without conversation bundles also receive a designated canonical conversation ID
+    for (const bot of session.botsData) {
+      if (!bundlesByBot.has(bot.id)) {
+        conversationIdMap.set(`bot-conv-${bot.id}`, randomUUID())
+      }
     }
 
     // Filesystem promotion: copy original source documents into managed storage
@@ -607,8 +632,8 @@ export class BackupImportManager {
         const insertBotStmt = this.db.prepare(`
           INSERT INTO bots (
             id, knowledge_base_id, provider_connection_id, name, description,
-            system_prompt, model_id, status, tool_permissions_json, created_at, updated_at
-          ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+            system_prompt, model_id, status, response_policy, tool_permissions_json, created_at, updated_at
+          ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
 
         for (const bot of session.botsData) {
@@ -621,6 +646,7 @@ export class BackupImportManager {
             bot.systemPrompt ?? '',
             bot.modelId,
             bot.status ?? 'active',
+            resolveBotResponsePolicy(bot.responsePolicy),
             JSON.stringify(bot.toolPermissions ?? []),
             now,
             now
@@ -745,38 +771,77 @@ export class BackupImportManager {
           }
         }
 
-        // 5. Insert Conversations and Messages
+        // 5. Insert Conversations, Segments, and Messages
         const insertConvStmt = this.db.prepare(`
           INSERT INTO conversations (
             id, bot_id, knowledge_base_id, title, created_at, updated_at, archived_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?)
         `)
 
-        const insertMsgStmt = this.db.prepare(`
-          INSERT INTO messages (
-            id, conversation_id, role, content, content_format,
-            metadata_json, token_usage_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        const insertSegmentStmt = this.db.prepare(`
+          INSERT INTO conversation_segments (
+            id, conversation_id, original_conversation_id, title, segment_order,
+            first_message_created_at, last_message_created_at, message_count,
+            created_at, archived_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
 
-        for (const bundle of session.conversationBundles) {
-          const newBotId = botIdMap.get(bundle.conversation.botId)
-          if (newBotId) {
-            const newConvId = conversationIdMap.get(bundle.conversation.id)!
-            insertConvStmt.run(
-              newConvId,
-              newBotId,
-              finalKnowledgeBaseId,
-              bundle.conversation.title,
+        const insertMsgStmt = this.db.prepare(`
+          INSERT INTO messages (
+            id, conversation_id, segment_id, role, content, content_format,
+            metadata_json, token_usage_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+
+        // Insert consolidated conversations for bots with conversation bundles
+        for (const [oldBotId, bundles] of bundlesByBot.entries()) {
+          const newBotId = botIdMap.get(oldBotId)
+          if (!newBotId) continue
+
+          const canonicalBundle = bundles[0]
+          const canonicalConvId = conversationIdMap.get(canonicalBundle.conversation.id)!
+          const maxUpdatedAt = bundles.reduce(
+            (max, b) => Math.max(max, b.conversation.updatedAt || b.conversation.createdAt || now),
+            canonicalBundle.conversation.createdAt || now
+          )
+
+          insertConvStmt.run(
+            canonicalConvId,
+            newBotId,
+            finalKnowledgeBaseId,
+            canonicalBundle.conversation.title || 'Conversation',
+            canonicalBundle.conversation.createdAt || now,
+            maxUpdatedAt,
+            canonicalBundle.conversation.archivedAt ?? null
+          )
+
+          // Insert each bundle as a conversation_segment
+          bundles.forEach((bundle, segmentIndex) => {
+            const segmentId = randomUUID()
+            const msgTimestamps = bundle.messages
+              .map((m) => m.createdAt)
+              .filter((t): t is number => typeof t === 'number' && t > 0)
+            const firstMsgAt = msgTimestamps.length > 0 ? Math.min(...msgTimestamps) : null
+            const lastMsgAt = msgTimestamps.length > 0 ? Math.max(...msgTimestamps) : null
+
+            insertSegmentStmt.run(
+              segmentId,
+              canonicalConvId,
+              bundle.conversation.id,
+              bundle.conversation.title || 'Conversation Segment',
+              segmentIndex,
+              firstMsgAt,
+              lastMsgAt,
+              bundle.messages.length,
               bundle.conversation.createdAt || now,
-              bundle.conversation.updatedAt || now,
               bundle.conversation.archivedAt ?? null
             )
 
             for (const msg of bundle.messages) {
               insertMsgStmt.run(
                 randomUUID(),
-                newConvId,
+                canonicalConvId,
+                segmentId,
                 msg.role,
                 msg.content,
                 msg.contentFormat ?? 'markdown',
@@ -785,6 +850,37 @@ export class BackupImportManager {
                 msg.createdAt || now
               )
             }
+          })
+        }
+
+        // Insert canonical conversation and initial segment for bots with 0 conversation bundles
+        for (const bot of session.botsData) {
+          if (!bundlesByBot.has(bot.id)) {
+            const newBotId = botIdMap.get(bot.id)
+            if (!newBotId) continue
+            const canonicalConvId = conversationIdMap.get(`bot-conv-${bot.id}`) ?? randomUUID()
+            const convCreatedAt = bot.createdAt || now
+            insertConvStmt.run(
+              canonicalConvId,
+              newBotId,
+              finalKnowledgeBaseId,
+              `${bot.name} Conversation`,
+              convCreatedAt,
+              convCreatedAt,
+              null
+            )
+            insertSegmentStmt.run(
+              canonicalConvId,
+              canonicalConvId,
+              canonicalConvId,
+              `${bot.name} Conversation`,
+              0,
+              null,
+              null,
+              0,
+              convCreatedAt,
+              null
+            )
           }
         }
       })
@@ -792,6 +888,100 @@ export class BackupImportManager {
       dbTx()
       isDbCommitted = true
       this.importRecoveryService?.transition(session.sessionId, 'database_committed')
+
+      // 8. Rebuild document chunks and SQLite FTS5 indexes from restored original files
+      let reindexSuccessCount = 0
+      let reindexFailCount = 0
+
+      this.importRecoveryService?.transition(session.sessionId, 'indexing')
+      if (this.documentLifecycleService) {
+        for (const source of session.sourcesData) {
+          const newSourceId = sourceIdMap.get(source.id)!
+          try {
+            if (
+              typeof (this.documentLifecycleService as { restoreAndRegenerateDocument?: unknown })
+                .restoreAndRegenerateDocument === 'function'
+            ) {
+              await (
+                this.documentLifecycleService as {
+                  restoreAndRegenerateDocument: (opts: {
+                    knowledgeBaseId: string
+                    sourceId: string
+                    expectedContentHash?: string
+                  }) => Promise<unknown>
+                }
+              ).restoreAndRegenerateDocument({
+                knowledgeBaseId: finalKnowledgeBaseId,
+                sourceId: newSourceId,
+                expectedContentHash: source.contentHash
+              })
+            } else {
+              await this.documentLifecycleService.reindex({
+                knowledgeBaseId: finalKnowledgeBaseId,
+                sourceId: newSourceId
+              })
+            }
+            reindexSuccessCount++
+          } catch {
+            reindexFailCount++
+          }
+        }
+      } else {
+        reindexSuccessCount = session.sourcesData.length
+      }
+
+      // 9. Verification & Durable Quarantine Cleanup
+      this.importRecoveryService?.transition(session.sessionId, 'verifying')
+      let verificationPassed = true
+      for (const filePath of copiedFiles) {
+        if (!fs.existsSync(filePath)) {
+          verificationPassed = false
+          break
+        }
+      }
+
+      if (!verificationPassed) {
+        this.importRecoveryService?.transition(session.sessionId, 'recovery_required', {
+          errorMessage: 'Post-import verification failed: one or more promoted files missing.'
+        })
+        throw new Error('Post-import verification failed: promoted files missing.')
+      }
+
+      // Clean up quarantine ONLY after verification passes
+      if (quarantineDir) {
+        try {
+          fs.rmSync(quarantineDir, { recursive: true, force: true })
+        } catch {
+          // Non-critical cleanup
+        }
+      }
+
+      this.importRecoveryService?.transition(session.sessionId, 'completed')
+
+      // 10. Clean up staging directory and remove session
+      await this.cancelImportInternal(session.sessionId)
+
+      const totalMessages = session.conversationBundles.reduce(
+        (acc, c) => acc + c.messages.length,
+        0
+      )
+
+      return {
+        success: true,
+        cancelled: false,
+        strategy,
+        knowledgeBaseId: finalKnowledgeBaseId,
+        knowledgeBaseName: finalKnowledgeBaseName,
+        counts: {
+          bots: session.botsData.length,
+          memories: session.memoriesData.length,
+          sources: session.sourcesData.length,
+          conversations: session.conversationBundles.length,
+          messages: totalMessages,
+          indexedSources: reindexSuccessCount,
+          failedSources: reindexFailCount
+        }
+      }
     } catch (err) {
       if (!isDbCommitted) {
         this.importRecoveryService?.transition(session.sessionId, 'rolling_back')
@@ -819,82 +1009,26 @@ export class BackupImportManager {
         this.importRecoveryService?.transition(session.sessionId, 'failed', {
           errorMessage: err instanceof Error ? err.message : String(err)
         })
+      } else if (strategy === 'new') {
+        try {
+          this.db.prepare('DELETE FROM knowledge_bases WHERE id = ?').run(finalKnowledgeBaseId)
+        } catch {
+          // Ignore
+        }
+        for (const f of copiedFiles) {
+          try {
+            fs.unlinkSync(f)
+          } catch {
+            // Ignore
+          }
+        }
+        this.importRecoveryService?.transition(session.sessionId, 'failed', {
+          errorMessage: err instanceof Error ? err.message : String(err)
+        })
       }
 
       await this.cancelImportInternal(session.sessionId)
       throw err
-    }
-
-    // 8. Rebuild document chunks and SQLite FTS5 indexes from restored original files
-    let reindexSuccessCount = 0
-    let reindexFailCount = 0
-
-    this.importRecoveryService?.transition(session.sessionId, 'indexing')
-    if (this.documentLifecycleService) {
-      for (const source of session.sourcesData) {
-        const newSourceId = sourceIdMap.get(source.id)!
-        try {
-          await this.documentLifecycleService.reindex({
-            knowledgeBaseId: finalKnowledgeBaseId,
-            sourceId: newSourceId
-          })
-          reindexSuccessCount++
-        } catch {
-          reindexFailCount++
-        }
-      }
-    } else {
-      reindexSuccessCount = session.sourcesData.length
-    }
-
-    // 9. Verification & Durable Quarantine Cleanup
-    this.importRecoveryService?.transition(session.sessionId, 'verifying')
-    let verificationPassed = true
-    for (const filePath of copiedFiles) {
-      if (!fs.existsSync(filePath)) {
-        verificationPassed = false
-        break
-      }
-    }
-
-    if (!verificationPassed) {
-      this.importRecoveryService?.transition(session.sessionId, 'recovery_required', {
-        errorMessage: 'Post-import verification failed: one or more promoted files missing.'
-      })
-      throw new Error('Post-import verification failed: promoted files missing.')
-    }
-
-    // Clean up quarantine ONLY after verification passes
-    if (quarantineDir) {
-      try {
-        fs.rmSync(quarantineDir, { recursive: true, force: true })
-      } catch {
-        // Non-critical cleanup
-      }
-    }
-
-    this.importRecoveryService?.transition(session.sessionId, 'completed')
-
-    // 10. Clean up staging directory and remove session
-    await this.cancelImportInternal(session.sessionId)
-
-    const totalMessages = session.conversationBundles.reduce((acc, c) => acc + c.messages.length, 0)
-
-    return {
-      success: true,
-      cancelled: false,
-      strategy,
-      knowledgeBaseId: finalKnowledgeBaseId,
-      knowledgeBaseName: finalKnowledgeBaseName,
-      counts: {
-        bots: session.botsData.length,
-        memories: session.memoriesData.length,
-        sources: session.sourcesData.length,
-        conversations: session.conversationBundles.length,
-        messages: totalMessages,
-        indexedSources: reindexSuccessCount,
-        failedSources: reindexFailCount
-      }
     }
   }
 

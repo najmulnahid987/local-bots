@@ -459,6 +459,7 @@ export class BackupExportManager {
         systemPrompt: bot.systemPrompt,
         modelId: bot.modelId,
         status: bot.status,
+        responsePolicy: bot.responsePolicy,
         toolPermissions: [...bot.toolPermissions],
         createdAt: bot.createdAt,
         updatedAt: bot.updatedAt

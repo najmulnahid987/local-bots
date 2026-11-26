@@ -258,7 +258,8 @@ export function registerAgentIpcHandlers(options: AgentIpcHandlerOptions): void 
           conversation.id,
           (cancelledRunId) => {
             agentTaskService.cancelTask(cancelledRunId, 'Task stream cancelled by client port.')
-          }
+          },
+          bot.id
         )
 
         // Setup approval notification listener for this run

@@ -47,6 +47,16 @@ export function useAgentRuns(options?: UseAgentRunsOptions): UseAgentRunsState {
   }
 
   const activeConvIdRef = useRef<string | null | undefined>(conversationId)
+  const requestIdRef = useRef<number>(0)
+  const mountedRef = useRef<boolean>(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   useEffect(() => {
     activeConvIdRef.current = conversationId
   }, [conversationId])
@@ -65,17 +75,23 @@ export function useAgentRuns(options?: UseAgentRunsOptions): UseAgentRunsState {
       return
     }
 
+    const reqId = ++requestIdRef.current
+    const targetConvId = conversationId
     setIsLoading(true)
     setError(null)
 
     try {
       const res = await agentsApi.listRuns({
-        conversationId,
+        conversationId: targetConvId,
         botId: botId ?? undefined,
         limit: 100
       })
 
-      if (activeConvIdRef.current === conversationId) {
+      if (
+        mountedRef.current &&
+        reqId === requestIdRef.current &&
+        activeConvIdRef.current === targetConvId
+      ) {
         setRuns(res.runs)
         const map = new Map<string, AgentRunDto>()
         for (const run of res.runs) {
@@ -84,11 +100,19 @@ export function useAgentRuns(options?: UseAgentRunsOptions): UseAgentRunsState {
         setRunsById(map)
       }
     } catch (err: unknown) {
-      if (activeConvIdRef.current === conversationId) {
+      if (
+        mountedRef.current &&
+        reqId === requestIdRef.current &&
+        activeConvIdRef.current === targetConvId
+      ) {
         setError(err instanceof Error ? err.message : 'Failed to load agent runs.')
       }
     } finally {
-      if (activeConvIdRef.current === conversationId) {
+      if (
+        mountedRef.current &&
+        reqId === requestIdRef.current &&
+        activeConvIdRef.current === targetConvId
+      ) {
         setIsLoading(false)
       }
     }
@@ -100,6 +124,8 @@ export function useAgentRuns(options?: UseAgentRunsOptions): UseAgentRunsState {
     }
 
     let isCurrent = true
+    const reqId = ++requestIdRef.current
+    const targetConvId = conversationId
 
     const loadRuns = async (): Promise<void> => {
       try {
@@ -107,12 +133,19 @@ export function useAgentRuns(options?: UseAgentRunsOptions): UseAgentRunsState {
         if (!agentsApi?.listRuns) return
 
         const res = await agentsApi.listRuns({
-          conversationId,
+          conversationId: targetConvId,
           botId: botId ?? undefined,
           limit: 100
         })
 
-        if (!isCurrent) return
+        if (
+          !isCurrent ||
+          !mountedRef.current ||
+          reqId !== requestIdRef.current ||
+          activeConvIdRef.current !== targetConvId
+        ) {
+          return
+        }
         setRuns(res.runs)
         const map = new Map<string, AgentRunDto>()
         for (const run of res.runs) {
@@ -120,10 +153,22 @@ export function useAgentRuns(options?: UseAgentRunsOptions): UseAgentRunsState {
         }
         setRunsById(map)
       } catch (err: unknown) {
-        if (!isCurrent) return
+        if (
+          !isCurrent ||
+          !mountedRef.current ||
+          reqId !== requestIdRef.current ||
+          activeConvIdRef.current !== targetConvId
+        ) {
+          return
+        }
         setError(err instanceof Error ? err.message : 'Failed to load agent runs.')
       } finally {
-        if (isCurrent) {
+        if (
+          isCurrent &&
+          mountedRef.current &&
+          reqId === requestIdRef.current &&
+          activeConvIdRef.current === targetConvId
+        ) {
           setIsLoading(false)
         }
       }

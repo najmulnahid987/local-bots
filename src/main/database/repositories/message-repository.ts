@@ -22,6 +22,7 @@ import {
 interface MessageRow {
   id: string
   conversation_id: string
+  segment_id?: string | null
   role: string
   content: string
   content_format: string
@@ -92,6 +93,11 @@ export class MessageRepository {
       }
     }
 
+    let segmentId: string | null = input.segmentId ?? null
+    if (segmentId) {
+      this.validateUuid(segmentId, 'Conversation Segment')
+    }
+
     const id = randomUUID()
     const now = Date.now()
     const metadataJson = serializeMessageMetadata(input.metadata)
@@ -117,6 +123,18 @@ export class MessageRepository {
         )
       }
 
+      // If no segmentId was provided, look up the latest active segment for the conversation
+      if (!segmentId) {
+        const latestSeg = this.db
+          .prepare(
+            'SELECT id FROM conversation_segments WHERE conversation_id = ? ORDER BY segment_order DESC LIMIT 1'
+          )
+          .get(input.conversationId) as { id: string } | undefined
+        if (latestSeg) {
+          segmentId = latestSeg.id
+        }
+      }
+
       // Ensure monotonic created_at for messages within the conversation so chronological ordering is strictly preserved
       const latestMsg = this.db
         .prepare('SELECT MAX(created_at) as max_created_at FROM messages WHERE conversation_id = ?')
@@ -136,19 +154,35 @@ export class MessageRepository {
         )
         .run(newUpdatedAt, input.conversationId)
 
+      // Update segment statistics if assigned
+      if (segmentId) {
+        this.db
+          .prepare(
+            `
+            UPDATE conversation_segments
+            SET message_count = message_count + 1,
+                first_message_created_at = COALESCE(first_message_created_at, ?),
+                last_message_created_at = ?
+            WHERE id = ?
+          `
+          )
+          .run(effectiveCreatedAt, effectiveCreatedAt, segmentId)
+      }
+
       this.db
         .prepare(
           `
           INSERT INTO messages (
-            id, conversation_id, role, content, content_format, metadata_json, token_usage_json, created_at
+            id, conversation_id, segment_id, role, content, content_format, metadata_json, token_usage_json, created_at
           ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?
           )
         `
         )
         .run(
           id,
           input.conversationId,
+          segmentId,
           role,
           input.content,
           contentFormat,
@@ -172,6 +206,7 @@ export class MessageRepository {
     return {
       id,
       conversationId: input.conversationId,
+      segmentId,
       role,
       content: input.content,
       contentFormat,
@@ -198,7 +233,7 @@ export class MessageRepository {
 
     try {
       const stmt = this.db.prepare(`
-        SELECT m.id, m.conversation_id, m.role, m.content, m.content_format,
+        SELECT m.id, m.conversation_id, m.segment_id, m.role, m.content, m.content_format,
                m.metadata_json, m.token_usage_json, m.created_at
         FROM messages m
         JOIN conversations c ON c.id = m.conversation_id
@@ -248,16 +283,17 @@ export class MessageRepository {
       )
     }
 
-    const limit = Math.max(1, Math.min(options?.limit ?? 100, 500))
+    const limit = options?.limit !== undefined ? Math.max(1, Math.min(options.limit, 10000)) : 10000
     const offset = Math.max(0, options?.offset ?? 0)
 
     try {
       const stmt = this.db.prepare(`
-        SELECT m.id, m.conversation_id, m.role, m.content, m.content_format,
+        SELECT m.id, m.conversation_id, m.segment_id, m.role, m.content, m.content_format,
                m.metadata_json, m.token_usage_json, m.created_at
         FROM messages m
+        LEFT JOIN conversation_segments cs ON cs.id = m.segment_id
         WHERE m.conversation_id = ?
-        ORDER BY m.created_at ASC, m.id ASC
+        ORDER BY COALESCE(cs.segment_order, 2147483647) ASC, m.created_at ASC, m.id ASC
         LIMIT ? OFFSET ?
       `)
       const rows = stmt.all(conversationId, limit, offset) as MessageRow[]
@@ -266,6 +302,39 @@ export class MessageRepository {
       if (err instanceof RepositoryError) throw err
       throw new RepositoryError(
         `Failed to list messages: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  /**
+   * Deletes a message by ID. If the message was associated with a segment,
+   * decrements the segment's message_count.
+   * Returns true if a row was deleted, false otherwise.
+   */
+  public delete(messageId: string): boolean {
+    this.validateUuid(messageId, 'Message')
+    try {
+      return this.db.transaction(() => {
+        const msg = this.db
+          .prepare('SELECT segment_id FROM messages WHERE id = ?')
+          .get(messageId) as { segment_id: string | null } | undefined
+        if (!msg) {
+          return false
+        }
+        const res = this.db.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
+        if (res.changes > 0 && msg.segment_id) {
+          this.db
+            .prepare(
+              'UPDATE conversation_segments SET message_count = MAX(0, message_count - 1) WHERE id = ?'
+            )
+            .run(msg.segment_id)
+        }
+        return res.changes > 0
+      })()
+    } catch (err) {
+      if (err instanceof RepositoryError || err instanceof ValidationError) throw err
+      throw new RepositoryError(
+        `Failed to delete message: ${err instanceof Error ? err.message : String(err)}`
       )
     }
   }

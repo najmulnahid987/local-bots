@@ -9,8 +9,13 @@ import { idSchema } from '../database/repositories/types'
 import { ConversationRepository } from '../database/repositories/conversation-repository'
 import { MessageRepository } from '../database/repositories/message-repository'
 import { ActiveWorkspaceContext, type SessionId } from './active-workspace-context'
-import { ConversationService, ConversationServiceError } from './conversation-service'
+import {
+  ConversationService,
+  ConversationServiceError,
+  type PreparedConversationTurn
+} from './conversation-service'
 import type { BotMemoryService } from './bot-memory-service'
+import { DEFAULT_BOT_RESPONSE_POLICY } from '../../shared/bots'
 import {
   ConversationExecutionService,
   ConversationExecutionError,
@@ -22,6 +27,7 @@ import {
   ConversationPersistenceError
 } from './conversation-persistence-service'
 import { KnowledgeBaseOnlyPolicy } from './knowledge-base-only-policy'
+import { GroundingValidator, type ClaimVerifier } from './grounding-validator'
 import type { TokenUsage } from '../providers/types'
 
 // ============================================================================
@@ -37,6 +43,7 @@ export type ConversationTurnErrorCode =
   | 'BOT_MISMATCH'
   | 'NO_ACTIVE_WORKSPACE'
   | 'NO_RETRYABLE_MESSAGE'
+  | 'RETRIEVAL_ERROR'
   | 'PERSISTENCE_ERROR'
   | 'EXECUTION_ERROR'
   | 'TIMEOUT'
@@ -78,6 +85,7 @@ export interface TurnErrorEvent {
     readonly message: string
     readonly retryable: boolean
   }
+  readonly partialMessage?: MessageDto
 }
 
 export type ConversationTurnEvent = TextDeltaEvent | TurnFinishEvent | TurnErrorEvent
@@ -155,6 +163,7 @@ export interface ConversationTurnServiceDependencies {
   readonly messageRepo?: MessageRepository
   readonly activeWorkspaceContext?: ActiveWorkspaceContext
   readonly botMemoryService?: BotMemoryService
+  readonly claimVerifier?: ClaimVerifier
   readonly db?: Database.Database
 }
 
@@ -175,6 +184,7 @@ export class ConversationTurnService {
   private readonly conversationRepo: ConversationRepository
   private readonly messageRepo: MessageRepository
   private readonly activeWorkspaceContext?: ActiveWorkspaceContext
+  private readonly claimVerifier?: ClaimVerifier
 
   /**
    * Tracks in-memory conversation IDs currently performing active generation.
@@ -255,6 +265,7 @@ export class ConversationTurnService {
       )
     }
     this.executionService = deps.executionService
+    this.claimVerifier = deps.claimVerifier
   }
 
   /**
@@ -358,6 +369,11 @@ export class ConversationTurnService {
       throw new ConversationTurnError(`Invalid send message request: ${msg}`, 'INVALID_INPUT')
     }
     const validatedRequest = parsedRequest.data
+
+    // Enforce strictly conversational interaction in chat mode
+    if (validatedRequest.executionMode !== 'chat') {
+      throw new ConversationTurnError('Chat mode does not permit agent execution.', 'INVALID_INPUT')
+    }
 
     // 3. Acquire concurrent turn lock
     if (
@@ -486,8 +502,27 @@ export class ConversationTurnService {
       )
     }
 
+    let targetUserMessage: MessageDto | undefined
+    let partialAssistantMessageToDelete: MessageDto | undefined
+
     const latestMessage = history[history.length - 1]
-    if (latestMessage.role !== 'user') {
+    if (latestMessage.role === 'user') {
+      targetUserMessage = latestMessage
+    } else if (
+      latestMessage.role === 'assistant' &&
+      (latestMessage.metadata?.isPartial === true ||
+        latestMessage.metadata?.status === 'cancelled' ||
+        latestMessage.metadata?.status === 'failed' ||
+        latestMessage.metadata?.status === 'interrupted')
+    ) {
+      const prevMessage = history.length >= 2 ? history[history.length - 2] : null
+      if (prevMessage && prevMessage.role === 'user') {
+        targetUserMessage = prevMessage
+        partialAssistantMessageToDelete = latestMessage
+      }
+    }
+
+    if (!targetUserMessage) {
       this.activeTurns.delete(validatedRequest.conversationId)
       throw new ConversationTurnError(
         `The latest message in the conversation has role '${latestMessage.role}' and cannot be retried. An assistant response may already exist.`,
@@ -495,12 +530,17 @@ export class ConversationTurnService {
       )
     }
 
-    if (validatedRequest.messageId && latestMessage.id !== validatedRequest.messageId) {
+    if (validatedRequest.messageId && targetUserMessage.id !== validatedRequest.messageId) {
       this.activeTurns.delete(validatedRequest.conversationId)
       throw new ConversationTurnError(
         `Message '${validatedRequest.messageId}' is not the latest message in this conversation.`,
         'NO_RETRYABLE_MESSAGE'
       )
+    }
+
+    // Clean up partial assistant message so retrying does not create duplicate assistant responses
+    if (partialAssistantMessageToDelete) {
+      this.messageRepo.delete(partialAssistantMessageToDelete.id)
     }
 
     // 6. Setup result promise & cancellation controller
@@ -524,7 +564,7 @@ export class ConversationTurnService {
     const generator = this.executeRetryTurn(
       sessionId,
       conversation,
-      latestMessage,
+      targetUserMessage,
       options,
       internalController,
       onCallerAbort,
@@ -552,6 +592,8 @@ export class ConversationTurnService {
     let userMessage: MessageDto | undefined
     let assistantMessage: MessageDto | undefined
     let completedSuccessfully = false
+    let preparedTurn: PreparedConversationTurn | undefined
+    let accumulatedText = ''
 
     try {
       if (internalController.signal.aborted) {
@@ -559,7 +601,7 @@ export class ConversationTurnService {
       }
 
       // Step 2: Prepare turn
-      const preparedTurn = this.conversationService.prepareTurn(sessionId, {
+      preparedTurn = this.conversationService.prepareTurn(sessionId, {
         botId: conversation.botId,
         conversationId: conversation.id,
         question: request.content,
@@ -579,20 +621,12 @@ export class ConversationTurnService {
         throw new ConversationTurnError('Operation was aborted by client.', 'OPERATION_ABORTED')
       }
 
-      // Step 3.5: Knowledge Base Only Pre-Flight Guard:
-      // If retrieval produces NO_RESULTS, RETRIEVAL_DISABLED, or EMPTY_QUERY,
+      // Step 3.5: Knowledge Base Only Pre-Flight Guard (strict_kb_only policy):
+      // If retrieval produces NO_RESULTS, RETRIEVAL_DISABLED, or EMPTY_QUERY under strict_kb_only,
       // DO NOT call the AI provider. Produce a deterministic application-owned refusal.
-      if (
-        preparedTurn.retrievalStatus === 'NO_RESULTS' ||
-        preparedTurn.retrievalStatus === 'RETRIEVAL_DISABLED' ||
-        preparedTurn.retrievalStatus === 'EMPTY_QUERY'
-      ) {
-        const refusalText =
-          preparedTurn.retrievalStatus === 'NO_RESULTS'
-            ? KnowledgeBaseOnlyPolicy.getNoResultsResponse()
-            : preparedTurn.retrievalStatus === 'RETRIEVAL_DISABLED'
-              ? KnowledgeBaseOnlyPolicy.getRetrievalDisabledResponse()
-              : KnowledgeBaseOnlyPolicy.getEmptyQueryResponse()
+      const preFlightRefusalText = this.getPreFlightRefusalText(preparedTurn)
+      if (preFlightRefusalText !== null) {
+        const refusalText = preFlightRefusalText
 
         yield {
           type: 'text_delta',
@@ -645,13 +679,34 @@ export class ConversationTurnService {
 
       for await (const event of execStream) {
         if (event.type === 'text_delta') {
+          accumulatedText += event.textDelta
           yield event
         } else if (event.type === 'error') {
+          const isAbort =
+            internalController.signal.aborted || event.error.code === 'OPERATION_ABORTED'
           const turnError = new ConversationTurnError(
             event.error.message,
-            (event.error.code as ConversationTurnErrorCode) ?? 'EXECUTION_ERROR',
+            isAbort
+              ? 'OPERATION_ABORTED'
+              : ((event.error.code as ConversationTurnErrorCode) ?? 'EXECUTION_ERROR'),
             event.error.retryable
           )
+          let partialMsg: MessageDto | undefined
+          if (preparedTurn && accumulatedText.trim().length > 0) {
+            try {
+              partialMsg = this.persistenceService.persistPartialAssistantMessage(
+                preparedTurn,
+                accumulatedText,
+                {
+                  status: isAbort ? 'cancelled' : 'failed',
+                  finishReason: isAbort ? 'abort' : 'error',
+                  interruptedReason: turnError.message
+                }
+              )
+            } catch {
+              // Best effort partial persistence
+            }
+          }
           rejectResult(turnError)
           yield {
             type: 'error',
@@ -659,7 +714,8 @@ export class ConversationTurnService {
               code: turnError.code,
               message: turnError.message,
               retryable: turnError.retryable
-            }
+            },
+            partialMessage: partialMsg
           }
           return
         }
@@ -668,18 +724,11 @@ export class ConversationTurnService {
       // Step 5: Obtain execution result and validate grounding
       const executionResult = await execStream.getResult()
 
-      const validation = KnowledgeBaseOnlyPolicy.validateGroundedResponse(
-        executionResult.assistantText,
-        preparedTurn.citationMap,
-        preparedTurn.retrievalStatus
+      const effectiveResult = await this.applyPostFlightResponsePolicy(
+        preparedTurn,
+        executionResult,
+        internalController.signal
       )
-
-      const effectiveResult: ConversationExecutionResult = validation.isValid
-        ? executionResult
-        : {
-            ...executionResult,
-            assistantText: validation.sanitizedContent
-          }
 
       try {
         assistantMessage = this.persistenceService.persistAssistantMessage(
@@ -726,6 +775,29 @@ export class ConversationTurnService {
       }
     } catch (err) {
       const normalized = this.normalizeTurnError(err, internalController.signal.aborted)
+      let partialMsg: MessageDto | undefined
+      if (
+        !completedSuccessfully &&
+        preparedTurn &&
+        accumulatedText.trim().length > 0 &&
+        !assistantMessage
+      ) {
+        try {
+          partialMsg = this.persistenceService.persistPartialAssistantMessage(
+            preparedTurn,
+            accumulatedText,
+            {
+              status: internalController.signal.aborted ? 'cancelled' : 'failed',
+              finishReason: internalController.signal.aborted ? 'abort' : 'error',
+              interruptedReason: internalController.signal.aborted
+                ? 'Cancelled by user'
+                : normalized.message
+            }
+          )
+        } catch {
+          // Best effort
+        }
+      }
       rejectResult(normalized)
       yield {
         type: 'error',
@@ -733,7 +805,8 @@ export class ConversationTurnService {
           code: normalized.code,
           message: normalized.message,
           retryable: normalized.retryable
-        }
+        },
+        partialMessage: partialMsg
       }
     } finally {
       if (options?.abortSignal) {
@@ -758,6 +831,8 @@ export class ConversationTurnService {
   ): AsyncGenerator<ConversationTurnEvent> {
     let assistantMessage: MessageDto | undefined
     let completedSuccessfully = false
+    let preparedTurn: PreparedConversationTurn | undefined
+    let accumulatedText = ''
 
     try {
       if (internalController.signal.aborted) {
@@ -765,7 +840,7 @@ export class ConversationTurnService {
       }
 
       // Step 1: Rebuild fresh turn without duplicating trailing user message
-      const preparedTurn = this.conversationService.prepareTurn(sessionId, {
+      preparedTurn = this.conversationService.prepareTurn(sessionId, {
         botId: conversation.botId,
         conversationId: conversation.id,
         question: userMessage.content,
@@ -779,20 +854,12 @@ export class ConversationTurnService {
         throw new ConversationTurnError('Operation was aborted by client.', 'OPERATION_ABORTED')
       }
 
-      // Step 1.5: Knowledge Base Only Pre-Flight Guard:
-      // If retrieval produces NO_RESULTS, RETRIEVAL_DISABLED, or EMPTY_QUERY,
+      // Step 1.5: Knowledge Base Only Pre-Flight Guard (strict_kb_only policy):
+      // If retrieval produces NO_RESULTS, RETRIEVAL_DISABLED, or EMPTY_QUERY under strict_kb_only,
       // DO NOT call the AI provider. Produce a deterministic application-owned refusal.
-      if (
-        preparedTurn.retrievalStatus === 'NO_RESULTS' ||
-        preparedTurn.retrievalStatus === 'RETRIEVAL_DISABLED' ||
-        preparedTurn.retrievalStatus === 'EMPTY_QUERY'
-      ) {
-        const refusalText =
-          preparedTurn.retrievalStatus === 'NO_RESULTS'
-            ? KnowledgeBaseOnlyPolicy.getNoResultsResponse()
-            : preparedTurn.retrievalStatus === 'RETRIEVAL_DISABLED'
-              ? KnowledgeBaseOnlyPolicy.getRetrievalDisabledResponse()
-              : KnowledgeBaseOnlyPolicy.getEmptyQueryResponse()
+      const preFlightRefusalText = this.getPreFlightRefusalText(preparedTurn)
+      if (preFlightRefusalText !== null) {
+        const refusalText = preFlightRefusalText
 
         yield {
           type: 'text_delta',
@@ -845,13 +912,34 @@ export class ConversationTurnService {
 
       for await (const event of execStream) {
         if (event.type === 'text_delta') {
+          accumulatedText += event.textDelta
           yield event
         } else if (event.type === 'error') {
+          const isAbort =
+            internalController.signal.aborted || event.error.code === 'OPERATION_ABORTED'
           const turnError = new ConversationTurnError(
             event.error.message,
-            (event.error.code as ConversationTurnErrorCode) ?? 'EXECUTION_ERROR',
+            isAbort
+              ? 'OPERATION_ABORTED'
+              : ((event.error.code as ConversationTurnErrorCode) ?? 'EXECUTION_ERROR'),
             event.error.retryable
           )
+          let partialMsg: MessageDto | undefined
+          if (preparedTurn && accumulatedText.trim().length > 0) {
+            try {
+              partialMsg = this.persistenceService.persistPartialAssistantMessage(
+                preparedTurn,
+                accumulatedText,
+                {
+                  status: isAbort ? 'cancelled' : 'failed',
+                  finishReason: isAbort ? 'abort' : 'error',
+                  interruptedReason: turnError.message
+                }
+              )
+            } catch {
+              // Best effort partial persistence
+            }
+          }
           rejectResult(turnError)
           yield {
             type: 'error',
@@ -859,7 +947,8 @@ export class ConversationTurnService {
               code: turnError.code,
               message: turnError.message,
               retryable: turnError.retryable
-            }
+            },
+            partialMessage: partialMsg
           }
           return
         }
@@ -868,18 +957,11 @@ export class ConversationTurnService {
       // Step 3: Obtain execution result and validate grounding
       const executionResult = await execStream.getResult()
 
-      const validation = KnowledgeBaseOnlyPolicy.validateGroundedResponse(
-        executionResult.assistantText,
-        preparedTurn.citationMap,
-        preparedTurn.retrievalStatus
+      const effectiveResult = await this.applyPostFlightResponsePolicy(
+        preparedTurn,
+        executionResult,
+        internalController.signal
       )
-
-      const effectiveResult: ConversationExecutionResult = validation.isValid
-        ? executionResult
-        : {
-            ...executionResult,
-            assistantText: validation.sanitizedContent
-          }
 
       try {
         assistantMessage = this.persistenceService.persistAssistantMessage(
@@ -926,6 +1008,29 @@ export class ConversationTurnService {
       }
     } catch (err) {
       const normalized = this.normalizeTurnError(err, internalController.signal.aborted)
+      let partialMsg: MessageDto | undefined
+      if (
+        !completedSuccessfully &&
+        preparedTurn &&
+        accumulatedText.trim().length > 0 &&
+        !assistantMessage
+      ) {
+        try {
+          partialMsg = this.persistenceService.persistPartialAssistantMessage(
+            preparedTurn,
+            accumulatedText,
+            {
+              status: internalController.signal.aborted ? 'cancelled' : 'failed',
+              finishReason: internalController.signal.aborted ? 'abort' : 'error',
+              interruptedReason: internalController.signal.aborted
+                ? 'Cancelled by user'
+                : normalized.message
+            }
+          )
+        } catch {
+          // Best effort
+        }
+      }
       rejectResult(normalized)
       yield {
         type: 'error',
@@ -933,7 +1038,8 @@ export class ConversationTurnService {
           code: normalized.code,
           message: normalized.message,
           retryable: normalized.retryable
-        }
+        },
+        partialMessage: partialMsg
       }
     } finally {
       if (options?.abortSignal) {
@@ -943,6 +1049,61 @@ export class ConversationTurnService {
         internalController.abort()
       }
       this.activeTurns.delete(conversation.id)
+    }
+  }
+
+  // ==========================================================================
+  // Private Response Policy Helpers
+  // ==========================================================================
+
+  private getPreFlightRefusalText(preparedTurn: PreparedConversationTurn): string | null {
+    const responsePolicy = preparedTurn.responsePolicy ?? DEFAULT_BOT_RESPONSE_POLICY
+    if (responsePolicy !== 'strict_kb_only') {
+      return null
+    }
+
+    if (preparedTurn.retrievalStatus === 'NO_RESULTS') {
+      return KnowledgeBaseOnlyPolicy.getNoResultsResponse()
+    }
+    if (preparedTurn.retrievalStatus === 'RETRIEVAL_DISABLED') {
+      return KnowledgeBaseOnlyPolicy.getRetrievalDisabledResponse()
+    }
+    if (preparedTurn.retrievalStatus === 'EMPTY_QUERY') {
+      return KnowledgeBaseOnlyPolicy.getEmptyQueryResponse()
+    }
+
+    return null
+  }
+
+  private async applyPostFlightResponsePolicy(
+    preparedTurn: PreparedConversationTurn,
+    executionResult: ConversationExecutionResult,
+    abortSignal?: AbortSignal
+  ): Promise<ConversationExecutionResult> {
+    const responsePolicy = preparedTurn.responsePolicy ?? DEFAULT_BOT_RESPONSE_POLICY
+    const validation = await GroundingValidator.validateResponse({
+      assistantText: executionResult.assistantText,
+      responsePolicy,
+      retrievalStatus: preparedTurn.retrievalStatus,
+      retrievalAssessment: preparedTurn.retrievalAssessment,
+      citationMap: preparedTurn.citationMap,
+      retrievedChunks: preparedTurn.retrievedChunks,
+      authoritativeKnowledgeBaseId: preparedTurn.knowledgeBaseId,
+      claimVerifier: this.claimVerifier,
+      abortSignal
+    })
+
+    if (responsePolicy === 'strict_kb_only' && !validation.isValid) {
+      return {
+        ...executionResult,
+        assistantText: validation.sanitizedContent,
+        validatedClaims: []
+      }
+    }
+
+    return {
+      ...executionResult,
+      validatedClaims: validation.claims
     }
   }
 

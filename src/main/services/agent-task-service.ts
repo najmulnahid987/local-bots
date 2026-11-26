@@ -75,6 +75,7 @@ export interface AgentTaskRequest {
   readonly botId: string
   readonly conversationId: string
   readonly taskContent: string
+  readonly executionMode?: 'agent'
 }
 
 export const agentTaskRequestSchema = z
@@ -87,7 +88,8 @@ export const agentTaskRequestSchema = z
       .min(1, { message: 'Task content cannot be blank.' })
       .max(MAX_MESSAGE_CONTENT_LENGTH, {
         message: `Task content cannot exceed ${MAX_MESSAGE_CONTENT_LENGTH} characters.`
-      })
+      }),
+    executionMode: z.literal('agent').optional().default('agent')
   })
   .strict()
 
@@ -533,7 +535,10 @@ export class AgentTaskService {
           knowledgeBaseId: bot.knowledgeBaseId,
           role: 'user',
           content: validatedRequest.taskContent,
-          contentFormat: 'markdown'
+          contentFormat: 'markdown',
+          metadata: {
+            executionMode: 'agent'
+          }
         })
       } catch (persistErr) {
         throw new AgentTaskError(
@@ -626,6 +631,7 @@ export class AgentTaskService {
               citations: runResult.citations,
               toolCalls: mapToolEventsToMessageToolCalls(runResult.toolEvents),
               agentRunId: runResult.agentRunId,
+              executionMode: 'agent',
               generation: {
                 finishReason: 'stop'
               }

@@ -1,7 +1,9 @@
 import { z } from 'zod'
 import {
   conversationIdSchema,
-  createConversationRequestSchema,
+  getConversationForBotRequestSchema,
+  getSegmentsRequestSchema,
+  clearConversationRequestSchema,
   listMessagesRequestSchema,
   renameConversationIpcRequestSchema,
   deleteConversationIpcRequestSchema,
@@ -101,10 +103,29 @@ export function formatConversationIpcError(err: unknown): Error {
 // ============================================================================
 
 /**
- * Validates create conversation payloads.
- * Rejects arbitrary or injected fields like knowledgeBaseId or sessionId.
+ * Validates requests to open the canonical conversation for a Bot.
+ * Requires botId strictly; rejects knowledgeBaseId or extra properties.
  */
-export const conversationCreateIpcSchema = createConversationRequestSchema
+export const conversationGetForBotIpcSchema = z.union([
+  getConversationForBotRequestSchema,
+  botIdSchema.transform((botId) => ({ botId }))
+])
+
+/**
+ * Validates requests to list historical conversation segments.
+ */
+export const conversationGetSegmentsIpcSchema = z.union([
+  getSegmentsRequestSchema,
+  conversationIdSchema.transform((conversationId) => ({ conversationId }))
+])
+
+/**
+ * Validates requests to clear a conversation or inspect its clear preview.
+ */
+export const conversationClearIpcSchema = z.union([
+  clearConversationRequestSchema,
+  conversationIdSchema.transform((conversationId) => ({ conversationId }))
+])
 
 /**
  * Validates list conversations requests.

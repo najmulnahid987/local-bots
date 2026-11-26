@@ -18,6 +18,14 @@ describe('Renderer: useConversationTurn Hook (Phase 7 Step 7.8)', () => {
 
   const conversationId = 'conv-1111-1111-1111-111111111111'
 
+  const baseMeta = {
+    requestId: 'req-0000-0000-0000-000000000001',
+    conversationId,
+    executionMode: 'chat' as const,
+    sequenceNumber: 1,
+    timestamp: 1700000000000
+  }
+
   const mockAssistantMessage: MessageDto = {
     id: 'msg-assist-01',
     conversationId,
@@ -52,7 +60,10 @@ describe('Renderer: useConversationTurn Hook (Phase 7 Step 7.8)', () => {
       sendMessage: sendMessageMock,
       retryLastUserMessage: retryMock,
       cancelGeneration: cancelMock,
-      createConversation: vi.fn(),
+      getConversationForBot: vi.fn(),
+      getSegments: vi.fn(),
+      getClearPreview: vi.fn(),
+      clearConversation: vi.fn(),
       listConversations: vi.fn(),
       listMessages: vi.fn(),
       renameConversation: vi.fn(),
@@ -71,9 +82,14 @@ describe('Renderer: useConversationTurn Hook (Phase 7 Step 7.8)', () => {
         _req: unknown,
         onEvent?: (event: PublicConversationTurnEvent) => void
       ): Promise<ConversationTurnResultDto> => {
-        onEvent?.({ type: 'text_delta', textDelta: 'Hello' })
-        onEvent?.({ type: 'text_delta', textDelta: ', how can I' })
-        onEvent?.({ type: 'text_delta', textDelta: ' help you today?' })
+        onEvent?.({ ...baseMeta, stage: 'streaming', type: 'text_delta', textDelta: 'Hello' })
+        onEvent?.({ ...baseMeta, stage: 'streaming', type: 'text_delta', textDelta: ', how can I' })
+        onEvent?.({
+          ...baseMeta,
+          stage: 'streaming',
+          type: 'text_delta',
+          textDelta: ' help you today?'
+        })
         return mockTurnResult
       }
     )
@@ -105,8 +121,8 @@ describe('Renderer: useConversationTurn Hook (Phase 7 Step 7.8)', () => {
         _req: unknown,
         onEvent?: (event: PublicConversationTurnEvent) => void
       ): Promise<ConversationTurnResultDto> => {
-        onEvent?.({ type: 'text_delta', textDelta: 'Part 1. ' })
-        onEvent?.({ type: 'text_delta', textDelta: 'Part 2. ' })
+        onEvent?.({ ...baseMeta, stage: 'streaming', type: 'text_delta', textDelta: 'Part 1. ' })
+        onEvent?.({ ...baseMeta, stage: 'streaming', type: 'text_delta', textDelta: 'Part 2. ' })
         return mockTurnResult
       }
     )
@@ -133,6 +149,8 @@ describe('Renderer: useConversationTurn Hook (Phase 7 Step 7.8)', () => {
         onEvent?: (event: PublicConversationTurnEvent) => void
       ): Promise<ConversationTurnResultDto> => {
         onEvent?.({
+          ...baseMeta,
+          stage: 'failed',
           type: 'error',
           error: {
             code: 'RATE_LIMIT_EXCEEDED',
@@ -259,7 +277,12 @@ describe('Renderer: useConversationTurn Hook (Phase 7 Step 7.8)', () => {
         _req: unknown,
         onEvent?: (event: PublicConversationTurnEvent) => void
       ): Promise<ConversationTurnResultDto> => {
-        onEvent?.({ type: 'text_delta', textDelta: 'Retried answer' })
+        onEvent?.({
+          ...baseMeta,
+          stage: 'streaming',
+          type: 'text_delta',
+          textDelta: 'Retried answer'
+        })
         return mockTurnResult
       }
     )
@@ -310,7 +333,12 @@ describe('Renderer: useConversationTurn Hook (Phase 7 Step 7.8)', () => {
 
     // Invoke late callback from old turn
     act(() => {
-      lateCallback?.({ type: 'text_delta', textDelta: 'Late phantom delta' })
+      lateCallback?.({
+        ...baseMeta,
+        stage: 'streaming',
+        type: 'text_delta',
+        textDelta: 'Late phantom delta'
+      })
     })
 
     // Must ignore late phantom delta
@@ -336,5 +364,123 @@ describe('Renderer: useConversationTurn Hook (Phase 7 Step 7.8)', () => {
     unmount()
 
     expect(cancelMock).toHaveBeenCalledWith(activeReqId)
+  })
+
+  it('10. Scenario 43: switching conversationId resets local streaming state and stage to idle', async () => {
+    const { api, sendMessageMock } = createMockApi()
+    let sendCallback: ((event: PublicConversationTurnEvent) => void) | undefined
+    sendMessageMock.mockImplementation(
+      async (_req: unknown, onEvent?: (event: PublicConversationTurnEvent) => void) => {
+        sendCallback = onEvent
+        return new Promise(() => {}) // pending
+      }
+    )
+
+    let currentConvId = conversationId
+    const { result, rerender } = renderHook(() =>
+      useConversationTurn({ conversationId: currentConvId, api })
+    )
+
+    act(() => {
+      void result.current.sendMessage('In flight message')
+    })
+
+    act(() => {
+      sendCallback?.({
+        ...baseMeta,
+        stage: 'streaming',
+        type: 'text_delta',
+        textDelta: 'In progress text...'
+      })
+    })
+
+    expect(result.current.isGenerating).toBe(true)
+    expect(result.current.streamingText).toBe('In progress text...')
+    expect(result.current.stage).toBe('streaming')
+
+    // Switch conversation (simulating switching Bots)
+    currentConvId = 'conv-2222-2222-2222-222222222222'
+    rerender()
+
+    expect(result.current.isGenerating).toBe(false)
+    expect(result.current.streamingText).toBe('')
+    expect(result.current.stage).toBe('idle')
+    expect(result.current.activeRequestId).toBeNull()
+
+    // Stale event from old stream is ignored
+    act(() => {
+      sendCallback?.({
+        ...baseMeta,
+        stage: 'streaming',
+        type: 'text_delta',
+        textDelta: 'stale delta'
+      })
+    })
+    expect(result.current.streamingText).toBe('')
+  })
+
+  it('11. Scenario 45: tracks lifecycle stages accurately (preparing -> streaming -> completed)', async () => {
+    const { api, sendMessageMock } = createMockApi()
+    sendMessageMock.mockImplementation(
+      async (_req: unknown, onEvent?: (event: PublicConversationTurnEvent) => void) => {
+        onEvent?.({ ...baseMeta, type: 'stage_change', stage: 'preparing' })
+        onEvent?.({ ...baseMeta, type: 'stage_change', stage: 'streaming' })
+        onEvent?.({
+          ...baseMeta,
+          stage: 'streaming',
+          type: 'text_delta',
+          textDelta: 'Progressive tokens'
+        })
+        onEvent?.({ ...baseMeta, type: 'stage_change', stage: 'finalizing' })
+        return mockTurnResult
+      }
+    )
+
+    const { result } = renderHook(() => useConversationTurn({ conversationId, api }))
+    expect(result.current.stage).toBe('idle')
+
+    await act(async () => {
+      await result.current.sendMessage('Prompt')
+    })
+
+    expect(result.current.stage).toBe('completed')
+    expect(result.current.isGenerating).toBe(false)
+  })
+
+  it('12. Scenario 32/34: surfaces partialMessage and cancelled/failed stage on error', async () => {
+    const { api, sendMessageMock } = createMockApi()
+    const partialAssistantMessage: MessageDto = {
+      ...mockAssistantMessage,
+      id: 'partial-msg-01',
+      content: 'Incomplete text...',
+      metadata: { isPartial: true, status: 'cancelled' }
+    }
+
+    sendMessageMock.mockImplementation(
+      async (_req: unknown, onEvent?: (event: PublicConversationTurnEvent) => void) => {
+        onEvent?.({
+          ...baseMeta,
+          stage: 'cancelled',
+          type: 'error',
+          error: { code: 'OPERATION_ABORTED', message: 'Cancelled by user', retryable: false },
+          partialMessage: partialAssistantMessage
+        })
+        throw new ConversationBridgeError('Cancelled by user', 'OPERATION_ABORTED')
+      }
+    )
+
+    const { result } = renderHook(() => useConversationTurn({ conversationId, api }))
+
+    await act(async () => {
+      try {
+        await result.current.sendMessage('Prompt')
+      } catch {
+        // Expected rejection
+      }
+    })
+
+    expect(result.current.stage).toBe('cancelled')
+    expect(result.current.error?.code).toBe('OPERATION_ABORTED')
+    expect(result.current.error?.partialMessage).toEqual(partialAssistantMessage)
   })
 })

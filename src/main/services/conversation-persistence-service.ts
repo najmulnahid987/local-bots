@@ -111,6 +111,14 @@ export function parseAndLinkCitations(
 // Service Dependencies
 // ============================================================================
 
+export interface PersistPartialAssistantMessageOptions {
+  readonly status: 'cancelled' | 'failed' | 'interrupted'
+  readonly interruptedReason?: string
+  readonly finishReason?: string
+  readonly durationMs?: number
+  readonly tokenUsage?: MessageTokenUsageDto | null
+}
+
 export interface ConversationPersistenceServiceDependencies {
   readonly conversationRepo?: ConversationRepository
   readonly messageRepo?: MessageRepository
@@ -243,7 +251,10 @@ export class ConversationPersistenceService {
         knowledgeBaseId: conversation.knowledgeBaseId,
         role: 'user',
         content: validatedRequest.content,
-        contentFormat: validatedRequest.contentFormat ?? 'markdown'
+        contentFormat: validatedRequest.contentFormat ?? 'markdown',
+        metadata: {
+          executionMode: 'chat'
+        }
       })
     } catch (err) {
       if (err instanceof ConversationPersistenceError) {
@@ -351,6 +362,28 @@ export class ConversationPersistenceService {
       preparedTurn.citationMap
     )
 
+    // 4.5. Harmonize message-level groundingMode with claim-level provenance without breaking mocks
+    const validatedClaims = executionResult.validatedClaims
+    let effectiveGroundingMode = preparedTurn.groundingMode
+    if (
+      preparedTurn.responsePolicy === 'balanced_kb_first' &&
+      validatedClaims &&
+      validatedClaims.length > 0
+    ) {
+      const hasKbClaim = validatedClaims.some(
+        (c) => c.provenance === 'kb_supported' || c.provenance === 'kb_partially_supported'
+      )
+      const hasGeneralOrUnverified = validatedClaims.some(
+        (c) => c.provenance === 'general_knowledge' || c.provenance === 'uncertain'
+      )
+
+      if (effectiveGroundingMode === 'kb_grounded' && linkedCitations.length === 0 && !hasKbClaim) {
+        effectiveGroundingMode = 'general_fallback_no_kb_evidence'
+      } else if (effectiveGroundingMode === 'kb_grounded' && hasKbClaim && hasGeneralOrUnverified) {
+        effectiveGroundingMode = 'kb_partial_with_general_fallback'
+      }
+    }
+
     // 5. Construct generation and message metadata
     const generation: GenerationMetadataDto = {
       finishReason: executionResult.finishReason,
@@ -361,7 +394,10 @@ export class ConversationPersistenceService {
       providerId: preparedTurn.providerId,
       modelId: preparedTurn.modelId,
       citations: linkedCitations,
-      generation
+      generation,
+      executionMode: 'chat',
+      ...(effectiveGroundingMode ? { groundingMode: effectiveGroundingMode } : {}),
+      ...(validatedClaims && validatedClaims.length > 0 ? { claims: validatedClaims } : {})
     }
 
     // 6. Map authentic provider token usage (never substitute estimates)
@@ -394,6 +430,117 @@ export class ConversationPersistenceService {
       }
       throw new ConversationPersistenceError(
         `Failed to persist assistant message: ${err instanceof Error ? err.message : String(err)}`,
+        'PERSISTENCE_ERROR'
+      )
+    }
+  }
+
+  /**
+   * Persists a partial assistant response when generation was cancelled, interrupted, or failed.
+   * Stamped with isPartial: true, status, and no citations or ungrounded claims.
+   *
+   * @param preparedTurn The validated prepared turn from ConversationService.
+   * @param partialText The non-empty text accumulated prior to interruption.
+   * @param options Options detailing status, reason, duration, and token usage.
+   * @returns The persisted MessageDto.
+   */
+  public persistPartialAssistantMessage(
+    preparedTurn: PreparedConversationTurn,
+    partialText: string,
+    options: PersistPartialAssistantMessageOptions
+  ): MessageDto {
+    if (!preparedTurn || typeof preparedTurn !== 'object') {
+      throw new ConversationPersistenceError(
+        'PreparedConversationTurn is required for persistPartialAssistantMessage.',
+        'INVALID_INPUT'
+      )
+    }
+    if (typeof partialText !== 'string' || partialText.trim().length === 0) {
+      throw new ConversationPersistenceError(
+        'Partial assistant text must be a non-empty string.',
+        'INVALID_INPUT'
+      )
+    }
+    if (!options || typeof options !== 'object') {
+      throw new ConversationPersistenceError(
+        'PersistPartialAssistantMessageOptions are required.',
+        'INVALID_INPUT'
+      )
+    }
+
+    // 1. Resolve authoritative conversation record
+    const conversation = this.conversationRepo.getByIdOnly(preparedTurn.conversationId)
+    if (!conversation) {
+      throw new ConversationPersistenceError(
+        `Conversation with ID '${preparedTurn.conversationId}' was not found.`,
+        'CONVERSATION_NOT_FOUND'
+      )
+    }
+
+    if (conversation.botId !== preparedTurn.botId) {
+      throw new ConversationPersistenceError(
+        `Conversation '${preparedTurn.conversationId}' belongs to Bot '${conversation.botId}', not Bot '${preparedTurn.botId}'.`,
+        'BOT_MISMATCH'
+      )
+    }
+
+    if (conversation.archivedAt !== null) {
+      throw new ConversationPersistenceError(
+        `Conversation '${preparedTurn.conversationId}' is archived and cannot receive new messages.`,
+        'CONVERSATION_ARCHIVED'
+      )
+    }
+
+    // 2. Construct partial metadata
+    const finishReason =
+      options.finishReason ?? (options.status === 'cancelled' ? 'abort' : 'error')
+    const generation: GenerationMetadataDto = {
+      finishReason,
+      durationMs:
+        options.durationMs !== undefined && options.durationMs >= 0 ? options.durationMs : undefined
+    }
+
+    const metadata: MessageMetadataDto = {
+      providerId: preparedTurn.providerId,
+      modelId: preparedTurn.modelId,
+      citations: [], // Partial answers carry no citations
+      generation,
+      executionMode: 'chat',
+      isPartial: true,
+      status: options.status,
+      ...(options.interruptedReason ? { interruptedReason: options.interruptedReason } : {})
+    }
+
+    // 3. Map token usage if valid
+    let tokenUsage: MessageTokenUsageDto | undefined = undefined
+    if (options.tokenUsage) {
+      const parsedUsage = messageTokenUsageSchema.safeParse(options.tokenUsage)
+      if (parsedUsage.success) {
+        tokenUsage = parsedUsage.data
+      }
+    }
+
+    // 4. Persist assistant message
+    try {
+      return this.messageRepo.create({
+        conversationId: preparedTurn.conversationId,
+        botId: preparedTurn.botId,
+        knowledgeBaseId: conversation.knowledgeBaseId,
+        role: 'assistant',
+        content: partialText,
+        contentFormat: 'markdown',
+        metadata,
+        tokenUsage
+      })
+    } catch (err) {
+      if (err instanceof ConversationPersistenceError) {
+        throw err
+      }
+      if (err instanceof ValidationError) {
+        throw new ConversationPersistenceError(err.message, 'INVALID_INPUT')
+      }
+      throw new ConversationPersistenceError(
+        `Failed to persist partial assistant message: ${err instanceof Error ? err.message : String(err)}`,
         'PERSISTENCE_ERROR'
       )
     }

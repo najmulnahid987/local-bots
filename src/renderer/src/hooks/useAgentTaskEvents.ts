@@ -19,6 +19,7 @@ export interface ReconciledToolActivity {
 
 export interface UseAgentTaskEventsOptions {
   readonly agentRunId?: string | null
+  readonly botId?: string | null
   readonly onRunCompleted?: (finalResponse: string) => void
   readonly onRunFailed?: (error: { code: string; message: string }) => void
   readonly onRunCancelled?: (reason: string) => void
@@ -45,6 +46,7 @@ export interface UseAgentTaskEventsState {
  */
 export function useAgentTaskEvents(options?: UseAgentTaskEventsOptions): UseAgentTaskEventsState {
   const agentRunId = options?.agentRunId
+  const botId = options?.botId
   const onRunCompleted = options?.onRunCompleted
   const onRunFailed = options?.onRunFailed
   const onRunCancelled = options?.onRunCancelled
@@ -61,10 +63,12 @@ export function useAgentTaskEvents(options?: UseAgentTaskEventsOptions): UseAgen
   const [isConnected, setIsConnected] = useState<boolean>(false)
   const [isRecovering, setIsRecovering] = useState<boolean>(false)
 
-  // Track run ID changes to reset events
+  // Track run ID and bot ID changes to reset events
   const [prevRunId, setPrevRunId] = useState<string | null | undefined>(agentRunId)
-  if (agentRunId !== prevRunId) {
+  const [prevBotId, setPrevBotId] = useState<string | null | undefined>(botId)
+  if (agentRunId !== prevRunId || botId !== prevBotId) {
     setPrevRunId(agentRunId)
+    setPrevBotId(botId)
     setEvents([])
     setToolMap(new Map())
     setRunStatus(null)
@@ -77,9 +81,14 @@ export function useAgentTaskEvents(options?: UseAgentTaskEventsOptions): UseAgen
   }
 
   const runIdRef = useRef<string | null | undefined>(agentRunId)
+  const botIdRef = useRef<string | null | undefined>(botId)
   useEffect(() => {
     runIdRef.current = agentRunId
   }, [agentRunId])
+
+  useEffect(() => {
+    botIdRef.current = botId
+  }, [botId])
 
   // Authoritative snapshot recovery from Main repositories
   const recoverRunState = useCallback(async (targetRunId: string): Promise<void> => {
@@ -190,7 +199,11 @@ export function useAgentTaskEvents(options?: UseAgentTaskEventsOptions): UseAgen
     const unsubscribe = agentsApi.subscribeToTaskEvents(
       agentRunId,
       (streamEvt: AgentStreamEvent) => {
-        if (!isCurrent || runIdRef.current !== streamEvt.agentRunId) {
+        if (
+          !isCurrent ||
+          runIdRef.current !== streamEvt.agentRunId ||
+          (botIdRef.current && streamEvt.botId && streamEvt.botId !== botIdRef.current)
+        ) {
           return
         }
 

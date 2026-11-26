@@ -541,6 +541,40 @@ describe('Universal Structured Document Model (Phase 11 Step 11.2)', () => {
       const safeResult = safeDeserializeUniversalDocument(invalidJson)
       expect(safeResult.success).toBe(false)
     })
+
+    it('3.5 serializes documents with shared object references (DAG) across multiple blocks without false circular reference errors', () => {
+      const doc = createComprehensiveDocument()
+      const sharedDimensions = { cx: 9144000, cy: 6858000, orientation: 'landscape' }
+
+      // Attach identical shared object reference to multiple block metadata and doc metadata
+      const blocksWithShared = doc.blocks.map((b) => ({
+        ...b,
+        metadata: { ...(b.metadata ?? {}), dimensions: sharedDimensions }
+      }))
+      const docWithShared = {
+        ...doc,
+        metadata: { ...doc.metadata, dimensions: sharedDimensions },
+        blocks: blocksWithShared
+      }
+
+      expect(() => serializeUniversalDocument(docWithShared)).not.toThrow()
+      const json = serializeUniversalDocument(docWithShared)
+      const deserialized = deserializeUniversalDocument(json)
+      expect(deserialized.blocks.length).toBe(doc.blocks.length)
+    })
+
+    it('3.6 rejects actual circular object references during serialization', () => {
+      const doc = createComprehensiveDocument()
+      const circularMeta: Record<string, unknown> = { key: 'value' }
+      circularMeta.self = circularMeta
+
+      const docWithCycle = {
+        ...doc,
+        metadata: circularMeta
+      } as unknown as UniversalDocument
+
+      expect(() => serializeUniversalDocument(docWithCycle)).toThrow(/Circular reference detected/)
+    })
   })
 
   // ==========================================================================

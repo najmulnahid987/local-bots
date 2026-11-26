@@ -18,6 +18,7 @@ describe('Renderer: BotCard Component (Phase 6 Step 6.4)', () => {
     systemPrompt: 'You are an analytical assistant.',
     providerConnectionId: 'conn-openai-42',
     modelId: 'gpt-6-luna',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: ['search_knowledge_base', 'read_knowledge_base_document'],
     status: 'active',
     createdAt: 1700000000000,
@@ -32,6 +33,7 @@ describe('Renderer: BotCard Component (Phase 6 Step 6.4)', () => {
     systemPrompt: 'You are an unassigned assistant.',
     providerConnectionId: null,
     modelId: 'claude-sonnet-5-5',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: [],
     status: 'active',
     createdAt: 1700000050000,
@@ -46,6 +48,7 @@ describe('Renderer: BotCard Component (Phase 6 Step 6.4)', () => {
     systemPrompt: 'You are archived.',
     providerConnectionId: 'conn-google-99',
     modelId: 'gemini-2.5-pro',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: ['prepare_report'],
     status: 'archived',
     createdAt: 1690000000000,
@@ -188,6 +191,17 @@ describe('Renderer: BotCard Component (Phase 6 Step 6.4)', () => {
 
       const card = screen.getByTestId('bot-card-bot-1111-2222')
       expect(card.classList.contains('custom-test-class')).toBe(true)
+    })
+
+    it('renders concise readable responsePolicy labels for all three policies', () => {
+      const { rerender } = render(<BotCard bot={sampleActiveBot} />)
+      expect(screen.getByTestId('bot-response-policy').textContent).toBe('KB First (Balanced)')
+
+      rerender(<BotCard bot={{ ...sampleActiveBot, responsePolicy: 'strict_kb_only' }} />)
+      expect(screen.getByTestId('bot-response-policy').textContent).toBe('Strict KB Only')
+
+      rerender(<BotCard bot={{ ...sampleActiveBot, responsePolicy: 'general_ai_chat' }} />)
+      expect(screen.getByTestId('bot-response-policy').textContent).toBe('General AI Chat')
     })
   })
 })

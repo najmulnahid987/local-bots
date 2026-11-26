@@ -64,6 +64,7 @@ describe('Renderer: EditBotModal (Phase 6 Step 6.5)', () => {
     systemPrompt: 'Initial system instructions',
     providerConnectionId: 'conn-openai-42',
     modelId: 'gpt-6-luna',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: ['search_knowledge_base', 'prepare_report'],
     status: 'active',
     createdAt: 1700000000000,
@@ -216,5 +217,98 @@ describe('Renderer: EditBotModal (Phase 6 Step 6.5)', () => {
     const errorEl = screen.getByTestId('bot-form-error')
     expect(errorEl.textContent).toContain('Connection error updating bot [REDACTED_PATH]')
     expect(nameInput.value).toBe('Attempted Name')
+  })
+
+  it('7. loads existing responsePolicy, updates it without mutating tools, and does not retain failed draft on reopen', async () => {
+    const strictBot: BotDto = {
+      ...existingBot,
+      responsePolicy: 'strict_kb_only',
+      enabledTools: ['search_knowledge_base', 'prepare_report']
+    }
+
+    const failingUpdate = vi.fn(async () => {
+      throw new Error('Save failed temporarily')
+    })
+
+    const handleClose = vi.fn()
+    const { rerender } = render(
+      <EditBotModal
+        isOpen={true}
+        bot={strictBot}
+        onClose={handleClose}
+        updateBotFn={failingUpdate}
+        catalog={mockCatalog}
+        connections={mockConnections}
+        knowledgeBaseName="Compliance KB"
+      />
+    )
+
+    expect(screen.getByTestId('parent-kb-indicator').textContent).toContain('Compliance KB')
+    const strictRadio = screen
+      .getByTestId('policy-option-strict_kb_only')
+      .querySelector('input') as HTMLInputElement
+    expect(strictRadio.checked).toBe(true)
+
+    const generalRadio = screen
+      .getByTestId('policy-option-general_ai_chat')
+      .querySelector('input') as HTMLInputElement
+    fireEvent.click(generalRadio)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('bot-form-submit-btn'))
+    })
+    expect(screen.getByTestId('bot-form-error').textContent).toContain('Save failed temporarily')
+
+    // Close and reopen -> reverts to persisted strict_kb_only
+    rerender(
+      <EditBotModal
+        isOpen={false}
+        bot={strictBot}
+        onClose={handleClose}
+        updateBotFn={failingUpdate}
+        catalog={mockCatalog}
+        connections={mockConnections}
+        knowledgeBaseName="Compliance KB"
+      />
+    )
+    const succeedUpdate = vi.fn(async (_id: string, req: UpdateBotRequest) => ({
+      ...strictBot,
+      responsePolicy: req.responsePolicy ?? strictBot.responsePolicy,
+      updatedAt: strictBot.updatedAt + 100
+    }))
+    rerender(
+      <EditBotModal
+        isOpen={true}
+        bot={strictBot}
+        onClose={handleClose}
+        updateBotFn={succeedUpdate}
+        catalog={mockCatalog}
+        connections={mockConnections}
+        knowledgeBaseName="Compliance KB"
+      />
+    )
+
+    const reopenedStrict = screen
+      .getByTestId('policy-option-strict_kb_only')
+      .querySelector('input') as HTMLInputElement
+    expect(reopenedStrict.checked).toBe(true)
+
+    const reopenedBalanced = screen
+      .getByTestId('policy-option-balanced_kb_first')
+      .querySelector('input') as HTMLInputElement
+    fireEvent.click(reopenedBalanced)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('bot-form-submit-btn'))
+    })
+
+    expect(succeedUpdate).toHaveBeenCalledWith(
+      strictBot.id,
+      expect.objectContaining({
+        responsePolicy: 'balanced_kb_first',
+        enabledTools: ['search_knowledge_base', 'prepare_report']
+      })
+    )
+    expect(handleClose).toHaveBeenCalledTimes(1)
   })
 })

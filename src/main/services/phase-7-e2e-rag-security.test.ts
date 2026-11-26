@@ -931,10 +931,13 @@ describe('Phase 7 — Step 7.12: Final End-to-End RAG, Conversation, and Securit
 
     expect(events.some((e) => e.type === 'error')).toBe(true)
 
-    // Invariant: User message exists; ZERO assistant message persisted
+    // Invariant (Phase 12 Step 12.7): User message exists; partial assistant message persisted with isPartial: true
     const dbMessages = msgRepo.listByConversation(convAId, botAId, kbAId)
-    expect(dbMessages).toHaveLength(1)
+    expect(dbMessages).toHaveLength(2)
     expect(dbMessages[0].role).toBe('user')
+    expect(dbMessages[1].role).toBe('assistant')
+    expect(dbMessages[1].metadata.isPartial).toBe(true)
+    expect(dbMessages[1].metadata.status).toBe('cancelled')
     expect(customTurnService.isGenerating(convAId)).toBe(false)
   })
 
@@ -1150,15 +1153,16 @@ describe('Phase 7 — Step 7.12: Final End-to-End RAG, Conversation, and Securit
   })
 
   it('Assertion 17 — Main IPC rejects unauthorized senders and payload schema tampering', async () => {
-    const createHandler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
-    expect(createHandler).toBeDefined()
+    expect(mockIpcHandlers.get('conversation:create')).toBeUndefined()
+    const getForBotHandler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
+    expect(getForBotHandler).toBeDefined()
 
     // 1. Untrusted sender webContents rejected
     const untrustedSender = createMockWebContents(999)
     await expect(
-      createHandler!(
+      getForBotHandler!(
         { sender: untrustedSender, senderFrame: untrustedSender.mainFrame },
-        { botId: botAId, title: 'Malicious' }
+        { botId: botAId }
       )
     ).rejects.toThrow(/UNAUTHORIZED_SENDER/)
 
@@ -1168,9 +1172,8 @@ describe('Phase 7 — Step 7.12: Final End-to-End RAG, Conversation, and Securit
       senderFrame: mockWebContents1.mainFrame
     }
     await expect(
-      createHandler!(validEvent, {
+      getForBotHandler!(validEvent, {
         botId: botAId,
-        title: 'Tampered',
         knowledgeBaseId: kbBId
       })
     ).rejects.toThrow(/Invalid Conversation IPC payload/)
@@ -1257,5 +1260,98 @@ describe('Phase 7 — Step 7.12: Final End-to-End RAG, Conversation, and Securit
     expect(safeUrlTransform('https://example.com/docs')).toBe('https://example.com/docs')
     expect(safeUrlTransform('http://localhost:5173/page')).toBe('http://localhost:5173/page')
     expect(safeUrlTransform('mailto:support@localai.org')).toBe('mailto:support@localai.org')
+  })
+
+  it('Assertion 21 — Step 12.4 Balanced KB-First E2E prioritizes KB A, isolates KB B, distinguishes partial/empty/unusable fallbacks, and fails loudly on retrieval errors', async () => {
+    const emptyKb = kbRepo.create({ name: 'Empty Balanced KB', description: 'Zero docs' })
+    const connId = '00000000-0000-4000-8000-000000000001'
+    const emptyKbBot = botRepo.create({
+      knowledgeBaseId: emptyKb.id,
+      providerConnectionId: connId,
+      name: 'Empty KB Balanced Bot',
+      modelId: 'gpt-6-luna',
+      responsePolicy: 'balanced_kb_first'
+    })
+    const emptyConv = convRepo.create({
+      botId: emptyKbBot.id,
+      knowledgeBaseId: emptyKb.id,
+      title: 'Empty KB Conv'
+    })
+    const emptySession = 'session-empty-kb'
+    activeContext.activateWorkspace(emptySession, emptyKb.id)
+
+    const observedTurns: PreparedConversationTurn[] = []
+    const spyExecService = {
+      streamPreparedTurn: vi.fn(
+        (turn: PreparedConversationTurn, opts?: { abortSignal?: AbortSignal }) => {
+          observedTurns.push(turn)
+          return createDeterministicExecutionStream(turn, {
+            abortSignal: opts?.abortSignal,
+            customAssistantText:
+              turn.citationCandidates.length > 0
+                ? 'Grounded answer [1] supplemented cleanly where needed.'
+                : 'General AI answer noting KB lacked relevant documents.'
+          })
+        }
+      )
+    } as unknown as ConversationExecutionService
+
+    const e2eTurnService = new ConversationTurnService({
+      db,
+      conversationRepo: convRepo,
+      messageRepo: msgRepo,
+      activeWorkspaceContext: activeContext,
+      conversationService,
+      executionService: spyExecService,
+      persistenceService
+    })
+
+    // 1. Empty usable KB -> general fallback with no_usable_kb & no cross-KB leakage
+    const s1 = e2eTurnService.sendMessage(emptySession, {
+      conversationId: emptyConv.id,
+      content: 'Orion lunar protocol secret'
+    })
+    for await (const ev of s1) {
+      void ev
+    }
+    const r1 = await s1.getResult()
+    expect(observedTurns[0].groundingMode).toBe('general_fallback_no_usable_kb')
+    expect(observedTurns[0].citationCandidates).toEqual([])
+    expect(r1.assistantMessage.metadata.groundingMode).toBe('general_fallback_no_usable_kb')
+
+    // 2. Populated KB A, partial coverage query (hits Protocol ALPHA-731, misses Mars orbit)
+    const s2 = e2eTurnService.sendMessage(sessionA, {
+      conversationId: convAId,
+      content: 'What are Protocol ALPHA-731 specifications and how is Mars orbit calculated?'
+    })
+    for await (const ev of s2) {
+      void ev
+    }
+    const r2 = await s2.getResult()
+    expect(observedTurns[1].retrievalAssessment?.outcome).toBe('partial_evidence')
+    expect(r2.assistantMessage.metadata.groundingMode).toBe('kb_partial_with_general_fallback')
+    expect(r2.assistantMessage.metadata.citations).toHaveLength(1)
+    expect(r2.assistantMessage.metadata.citations![0].sourceId).toBe(docFalconId)
+
+    // 3. Simulated FTS5/DB retrieval failure MUST emit RETRIEVAL_ERROR without calling provider
+    vi.spyOn(sourceRepo, 'searchChunks').mockImplementationOnce(() => {
+      throw new Error('SQLITE_BUSY: retrieval failure')
+    })
+    const callsBeforeError = observedTurns.length
+    const s3 = e2eTurnService.sendMessage(sessionA, {
+      conversationId: convAId,
+      content: 'Falcon speed threshold'
+    })
+    const errEvents: ConversationTurnEvent[] = []
+    for await (const ev of s3) {
+      errEvents.push(ev)
+    }
+    expect(observedTurns.length).toBe(callsBeforeError)
+    const errEvent = errEvents.find((e) => e.type === 'error')
+    expect(errEvent?.type).toBe('error')
+    if (errEvent?.type === 'error') {
+      expect(errEvent.error.code).toBe('RETRIEVAL_ERROR')
+    }
+    await expect(s3.getResult()).rejects.toMatchObject({ code: 'RETRIEVAL_ERROR' })
   })
 })

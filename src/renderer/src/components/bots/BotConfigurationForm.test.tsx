@@ -310,6 +310,7 @@ describe('Renderer: BotConfigurationForm (Phase 6 Step 6.5)', () => {
       name: 'Lead Researcher',
       description: 'Summarizes deep tech briefs',
       systemPrompt: 'Be precise.',
+      responsePolicy: 'balanced_kb_first',
       providerConnectionId: 'conn-openai-1',
       modelId: 'gpt-6.1-sol',
       enabledTools: ['search_knowledge_base', 'prepare_report']
@@ -352,5 +353,71 @@ describe('Renderer: BotConfigurationForm (Phase 6 Step 6.5)', () => {
 
     const errorAlert = screen.getByTestId('bot-form-error')
     expect(errorAlert.textContent).toContain('Model validation failed on the backend.')
+  })
+
+  it('11. renders Knowledge and Response Behavior section with parent KB scope, Balanced default, and recommended badge', () => {
+    render(
+      <BotConfigurationForm
+        knowledgeBaseName="Legal Archive KB"
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        catalog={mockCatalog}
+        connections={mockConnections}
+      />
+    )
+
+    expect(screen.getByTestId('bot-response-policy-section')).toBeDefined()
+    expect(screen.getByTestId('parent-kb-indicator').textContent).toContain('Legal Archive KB')
+    expect(screen.getByTestId('policy-recommended-badge').textContent).toContain('Recommended')
+
+    const strictRadio = screen
+      .getByTestId('policy-option-strict_kb_only')
+      .querySelector('input') as HTMLInputElement
+    const balancedRadio = screen
+      .getByTestId('policy-option-balanced_kb_first')
+      .querySelector('input') as HTMLInputElement
+    const generalRadio = screen
+      .getByTestId('policy-option-general_ai_chat')
+      .querySelector('input') as HTMLInputElement
+
+    expect(balancedRadio.checked).toBe(true)
+    expect(strictRadio.checked).toBe(false)
+    expect(generalRadio.checked).toBe(false)
+  })
+
+  it('12. submits selected responsePolicy independently of enabledTools', async () => {
+    const handleSubmit = vi.fn()
+    render(
+      <BotConfigurationForm
+        initialValues={{
+          name: 'Policy Switch Bot',
+          providerConnectionId: 'conn-openai-1',
+          modelId: 'gpt-6-luna',
+          enabledTools: ['prepare_report']
+        }}
+        onSubmit={handleSubmit}
+        onCancel={vi.fn()}
+        catalog={mockCatalog}
+        connections={mockConnections}
+      />
+    )
+
+    const generalRadio = screen
+      .getByTestId('policy-option-general_ai_chat')
+      .querySelector('input') as HTMLInputElement
+    fireEvent.click(generalRadio)
+    expect(generalRadio.checked).toBe(true)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('bot-form-submit-btn'))
+    })
+
+    expect(handleSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Policy Switch Bot',
+        responsePolicy: 'general_ai_chat',
+        enabledTools: ['prepare_report']
+      })
+    )
   })
 })

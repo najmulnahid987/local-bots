@@ -529,4 +529,130 @@ describe('BackupExportManager', () => {
     expect(declaredReport).toBeDefined()
     expect(declaredReport.sha256).toMatch(/^[0-9a-f]{64}$/i)
   })
+
+  it('serializes configured Bot responsePolicy accurately in bots.json (Step 12.3)', async () => {
+    const kbRepo = new KnowledgeBaseRepository(testCtx.db)
+    const botRepo = new BotRepository(testCtx.db)
+    const botMemoryRepo = new BotMemoryRepository(testCtx.db)
+    const sourceRepo = new KnowledgeSourceRepository(testCtx.db)
+    const convRepo = new ConversationRepository(testCtx.db)
+    const msgRepo = new MessageRepository(testCtx.db)
+
+    const kb = kbRepo.create({ name: 'Policy Export KB' })
+    const strictBot = botRepo.create({
+      knowledgeBaseId: kb.id,
+      name: 'Strict Bot',
+      modelId: 'gpt-4o',
+      responsePolicy: 'strict_kb_only'
+    })
+    const balancedBot = botRepo.create({
+      knowledgeBaseId: kb.id,
+      name: 'Balanced Bot',
+      modelId: 'gpt-4o',
+      responsePolicy: 'balanced_kb_first'
+    })
+    const generalBot = botRepo.create({
+      knowledgeBaseId: kb.id,
+      name: 'General Bot',
+      modelId: 'gpt-4o',
+      responsePolicy: 'general_ai_chat'
+    })
+
+    const exportManager = new BackupExportManager({
+      db: testCtx.db,
+      kbRepository: kbRepo,
+      botRepository: botRepo,
+      botMemoryRepository: botMemoryRepo,
+      knowledgeSourceRepository: sourceRepo,
+      conversationRepository: convRepo,
+      messageRepository: msgRepo,
+      storageManager,
+      appVersion: '2.0.0'
+    })
+
+    const outPath = path.join(tmpDir, 'policy-export.voyaro-kb.zip')
+    const res = await exportManager.exportKnowledgeBase(kb.id, outPath)
+    expect(res.success).toBe(true)
+
+    const zipArchive = await unzipper.Open.file(outPath)
+    const botsFile = zipArchive.files.find((f) => f.path === 'bots.json')!
+    const botsJson = JSON.parse((await botsFile.buffer()).toString('utf8')) as Array<{
+      id: string
+      responsePolicy?: string
+    }>
+
+    expect(botsJson.find((b) => b.id === strictBot.id)?.responsePolicy).toBe('strict_kb_only')
+    expect(botsJson.find((b) => b.id === balancedBot.id)?.responsePolicy).toBe('balanced_kb_first')
+    expect(botsJson.find((b) => b.id === generalBot.id)?.responsePolicy).toBe('general_ai_chat')
+  })
+
+  it('Step 12.5: exports message claim-level provenance metadata cleanly alongside citations', async () => {
+    const kb = kbRepo.create({ name: 'Claim Export KB' })
+    const bot = botRepo.create({
+      knowledgeBaseId: kb.id,
+      name: 'Claim Export Bot',
+      modelId: 'gpt-4o',
+      responsePolicy: 'balanced_kb_first'
+    })
+    const conv = convRepo.create({
+      botId: bot.id,
+      knowledgeBaseId: kb.id,
+      title: 'Canonical Thread'
+    })
+    msgRepo.create({
+      conversationId: conv.id,
+      botId: bot.id,
+      knowledgeBaseId: kb.id,
+      role: 'assistant',
+      content: 'Session timeout is 30 seconds [1].',
+      metadata: {
+        groundingMode: 'kb_grounded',
+        claims: [
+          {
+            claimId: 'claim-1',
+            claimText: 'Session timeout is 30 seconds.',
+            provenance: 'kb_supported',
+            validationStatus: 'validated',
+            evidenceReferences: [
+              {
+                knowledgeBaseId: kb.id,
+                sourceId: '11111111-1111-4111-8111-111111111111',
+                chunkId: '22222222-2222-4222-8222-222222222222',
+                citationNumber: 1,
+                fileName: 'timeouts.md',
+                fileType: 'md',
+                pageNumber: null,
+                headingPath: ['Timeouts'],
+                chunkIndex: 0
+              }
+            ]
+          }
+        ]
+      }
+    })
+
+    const exportManager = new BackupExportManager({
+      db: testCtx.db,
+      kbRepository: kbRepo,
+      botRepository: botRepo,
+      botMemoryRepository: botMemoryRepo,
+      knowledgeSourceRepository: sourceRepo,
+      conversationRepository: convRepo,
+      messageRepository: msgRepo,
+      storageManager,
+      appVersion: '2.0.0'
+    })
+
+    const outPath = path.join(tmpDir, 'claims-export.voyaro-kb.zip')
+    const res = await exportManager.exportKnowledgeBase(kb.id, outPath)
+    expect(res.success).toBe(true)
+
+    const zipArchive = await unzipper.Open.file(outPath)
+    const convFile = zipArchive.files.find((f) => f.path === 'conversations.json')!
+    const bundles = JSON.parse((await convFile.buffer()).toString('utf8')) as Array<{
+      messages: Array<{ metadata?: { claims?: Array<{ provenance: string }> } }>
+    }>
+    expect(bundles[0].messages[0].metadata?.claims).toHaveLength(1)
+    expect(bundles[0].messages[0].metadata?.claims?.[0].provenance).toBe('kb_supported')
+  })
 })

@@ -765,4 +765,103 @@ describe('BotRepository', () => {
   it('47. throws ValidationError when getByIdOnly is given an invalid UUID string', () => {
     expect(() => botRepo.getByIdOnly('invalid-uuid')).toThrow(ValidationError)
   })
+
+  describe('Step 12.3: Response Policy Persistence & Isolation', () => {
+    it('48. defaults omitted responsePolicy to balanced_kb_first on creation', () => {
+      const created = botRepo.create({
+        knowledgeBaseId: defaultKbId,
+        name: 'Default Policy Bot',
+        modelId: 'gpt-4o'
+      })
+      expect(created.responsePolicy).toBe('balanced_kb_first')
+
+      const fetched = botRepo.getById(created.id, defaultKbId)
+      expect(fetched?.responsePolicy).toBe('balanced_kb_first')
+    })
+
+    it('49. persists and reloads all three response policies faithfully', () => {
+      const strictBot = botRepo.create({
+        knowledgeBaseId: defaultKbId,
+        name: 'Strict Policy Bot',
+        modelId: 'gpt-4o',
+        responsePolicy: 'strict_kb_only'
+      })
+      const balancedBot = botRepo.create({
+        knowledgeBaseId: defaultKbId,
+        name: 'Balanced Policy Bot',
+        modelId: 'gpt-4o',
+        responsePolicy: 'balanced_kb_first'
+      })
+      const generalBot = botRepo.create({
+        knowledgeBaseId: defaultKbId,
+        name: 'General Policy Bot',
+        modelId: 'gpt-4o',
+        responsePolicy: 'general_ai_chat'
+      })
+
+      expect(botRepo.getById(strictBot.id, defaultKbId)?.responsePolicy).toBe('strict_kb_only')
+      expect(botRepo.getByIdOnly(balancedBot.id)?.responsePolicy).toBe('balanced_kb_first')
+      const listed = botRepo.listByKnowledgeBase(defaultKbId)
+      expect(listed.find((b) => b.id === generalBot.id)?.responsePolicy).toBe('general_ai_chat')
+    })
+
+    it('50. updates responsePolicy independently without modifying toolPermissions and vice versa', () => {
+      const bot = botRepo.create({
+        knowledgeBaseId: defaultKbId,
+        name: 'Independent Policy Bot',
+        modelId: 'gpt-4o',
+        responsePolicy: 'strict_kb_only',
+        toolPermissions: ['search_knowledge_base', 'prepare_report']
+      })
+
+      const policyUpdated = botRepo.update(bot.id, defaultKbId, {
+        responsePolicy: 'general_ai_chat'
+      })
+      expect(policyUpdated?.responsePolicy).toBe('general_ai_chat')
+      expect(policyUpdated?.toolPermissions).toEqual(['search_knowledge_base', 'prepare_report'])
+
+      const toolsUpdated = botRepo.update(bot.id, defaultKbId, {
+        toolPermissions: ['read_project_file']
+      })
+      expect(toolsUpdated?.responsePolicy).toBe('general_ai_chat')
+      expect(toolsUpdated?.toolPermissions).toEqual(['read_project_file'])
+    })
+
+    it('51. rejects invalid responsePolicy inputs on create and update', () => {
+      expect(() =>
+        botRepo.create({
+          knowledgeBaseId: defaultKbId,
+          name: 'Invalid Policy',
+          modelId: 'gpt-4o',
+          responsePolicy: 'invalid_mode' as never
+        })
+      ).toThrow(ValidationError)
+
+      const valid = botRepo.create({
+        knowledgeBaseId: defaultKbId,
+        name: 'Valid Policy Bot',
+        modelId: 'gpt-4o'
+      })
+
+      expect(() =>
+        botRepo.update(valid.id, defaultKbId, {
+          responsePolicy: 'invalid_mode' as never
+        })
+      ).toThrow(ValidationError)
+    })
+
+    it('52. rejects corrupted database response_policy rows defensively on read', () => {
+      const bot = botRepo.create({
+        knowledgeBaseId: defaultKbId,
+        name: 'Corruption Check Bot',
+        modelId: 'gpt-4o'
+      })
+
+      db.prepare('PRAGMA ignore_check_constraints = ON').run()
+      db.prepare('UPDATE bots SET response_policy = ? WHERE id = ?').run('corrupt_value', bot.id)
+      db.prepare('PRAGMA ignore_check_constraints = OFF').run()
+
+      expect(() => botRepo.getById(bot.id, defaultKbId)).toThrow(RepositoryError)
+    })
+  })
 })

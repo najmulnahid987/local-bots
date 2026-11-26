@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type Database from 'better-sqlite3'
+import { DEFAULT_BOT_RESPONSE_POLICY, type BotResponsePolicy } from '../../shared/bots'
 import { idSchema, type ProviderConnection, type Bot } from '../database/repositories/types'
 import { BotRepository } from '../database/repositories/bot-repository'
 import { ConversationRepository } from '../database/repositories/conversation-repository'
@@ -13,8 +14,10 @@ import { ActiveWorkspaceContext, type SessionId } from './active-workspace-conte
 import { NoActiveWorkspaceError, BotManagerError } from './bot-errors'
 import {
   BotRagService,
+  type BotRagEvidenceAssessment,
   type BotRagRetrievalResult,
   type BotRagRetrievalStatus,
+  type RetrievedChunk,
   BotRagServiceError
 } from './bot-rag-service'
 import {
@@ -30,7 +33,12 @@ import {
 } from './bot-memory-service'
 import { BotMemoryRepository } from '../database/repositories/bot-memory-repository'
 import type { PromptTokenEstimates } from './rag-prompt-builder'
-import type { CitationDto, ConversationDto, MessageDto } from '../../shared/conversations'
+import type {
+  CitationDto,
+  ConversationDto,
+  MessageDto,
+  MessageGroundingMode
+} from '../../shared/conversations'
 import type { ChatMessageDto } from '../../shared/providers'
 
 // ============================================================================
@@ -107,16 +115,21 @@ export type BotRagStatus = BotRagRetrievalStatus
  */
 export interface PreparedConversationTurn {
   readonly botId: string
+  readonly knowledgeBaseId?: string
   readonly conversationId: string
   readonly providerConnectionId: string
   readonly providerId: ProviderId
   readonly modelId: string
+  readonly responsePolicy: BotResponsePolicy
   readonly systemInstruction: string
   readonly messages: readonly ChatMessageDto[]
   readonly conversationMessages: readonly ChatMessageDto[]
   readonly retrievalStatus: BotRagStatus
+  readonly retrievalAssessment?: BotRagEvidenceAssessment
+  readonly groundingMode?: MessageGroundingMode
   readonly citationCandidates: readonly CitationDto[]
   readonly citationMap: ReadonlyMap<number, CitationDto>
+  readonly retrievedChunks?: readonly RetrievedChunk[]
   readonly contextWindowLimits: ContextWindowLimits
   readonly reservedOutputTokens: number
   readonly tokenEstimates: PromptTokenEstimates
@@ -309,7 +322,9 @@ export class ConversationService {
     }
 
     // 8. Execute Bot-scoped RAG retrieval
-    const retrievalResult = this.executeBotRagRetrieval(bot.id, validatedRequest)
+    const responsePolicy = bot.responsePolicy ?? DEFAULT_BOT_RESPONSE_POLICY
+    const retrievalResult = this.executeBotRagRetrieval(bot.id, validatedRequest, responsePolicy)
+    const groundingMode = resolvePreparedGroundingMode(responsePolicy, retrievalResult)
 
     // 8.5. Retrieve Bot memory context
     let memoryContext: BotMemoryContextSelectionResult | undefined
@@ -350,16 +365,21 @@ export class ConversationService {
     // 10. Construct immutable PreparedConversationTurn
     return Object.freeze({
       botId: bot.id,
+      knowledgeBaseId: activeKbId,
       conversationId: conversation.id,
       providerConnectionId: connection.id,
       providerId: connection.providerId as ProviderId,
       modelId: model.id,
+      responsePolicy,
       systemInstruction: contextResult.promptResult.systemInstruction,
       messages: contextResult.promptResult.messages,
       conversationMessages: contextResult.promptResult.conversationMessages,
       retrievalStatus: retrievalResult.status,
+      ...(retrievalResult.assessment ? { retrievalAssessment: retrievalResult.assessment } : {}),
+      ...(groundingMode ? { groundingMode } : {}),
       citationCandidates: contextResult.promptResult.citationCandidates,
       citationMap: contextResult.promptResult.citationMap,
+      retrievedChunks: retrievalResult.chunks,
       contextWindowLimits: Object.freeze(contextLimits),
       reservedOutputTokens,
       tokenEstimates: contextResult.promptResult.tokenEstimates,
@@ -552,16 +572,34 @@ export class ConversationService {
 
   private executeBotRagRetrieval(
     botId: string,
-    request: z.infer<typeof prepareTurnRequestSchema>
+    request: z.infer<typeof prepareTurnRequestSchema>,
+    responsePolicy: BotResponsePolicy
   ): BotRagRetrievalResult {
     try {
-      return this.botRagService.retrieve({
+      const result = this.botRagService.retrieve({
         botId,
         query: request.question,
         topK: request.topK,
-        maxContextTokens: request.maxContextTokens
+        maxContextTokens: request.maxContextTokens,
+        enablePartialFallback: responsePolicy === 'balanced_kb_first'
       })
+      if (
+        !result ||
+        typeof result !== 'object' ||
+        !result.status ||
+        !Array.isArray(result.chunks) ||
+        !Array.isArray(result.citations)
+      ) {
+        throw new ConversationServiceError(
+          'Knowledge base retrieval returned an invalid payload.',
+          'RETRIEVAL_ERROR'
+        )
+      }
+      return result
     } catch (err) {
+      if (err instanceof ConversationServiceError) {
+        throw err
+      }
       if (err instanceof BotRagServiceError) {
         throw new ConversationServiceError(`RAG retrieval error: ${err.message}`, 'RETRIEVAL_ERROR')
       }
@@ -585,7 +623,8 @@ export class ConversationService {
       return ConversationContextManager.selectContext({
         bot: {
           name: bot.name,
-          systemPrompt: bot.systemPrompt
+          systemPrompt: bot.systemPrompt,
+          responsePolicy: bot.responsePolicy
         },
         history,
         question,
@@ -599,6 +638,9 @@ export class ConversationService {
         if (err.code === 'CONTEXT_LENGTH_EXCEEDED') {
           throw new ConversationServiceError(err.message, 'CONTEXT_LENGTH_EXCEEDED')
         }
+        if (err.code === 'RETRIEVAL_ERROR') {
+          throw new ConversationServiceError(err.message, 'RETRIEVAL_ERROR')
+        }
         throw new ConversationServiceError(err.message, 'INVALID_INPUT')
       }
       throw new ConversationServiceError(
@@ -607,4 +649,39 @@ export class ConversationService {
       )
     }
   }
+}
+
+function resolvePreparedGroundingMode(
+  responsePolicy: BotResponsePolicy,
+  retrievalResult: BotRagRetrievalResult
+): MessageGroundingMode | undefined {
+  const outcome = retrievalResult.assessment?.outcome
+
+  if (responsePolicy === 'strict_kb_only') {
+    return retrievalResult.status === 'SUCCESS' ? 'kb_grounded' : undefined
+  }
+
+  if (responsePolicy === 'general_ai_chat') {
+    return retrievalResult.status === 'SUCCESS' && retrievalResult.chunks.length > 0
+      ? 'kb_grounded'
+      : 'general_chat'
+  }
+
+  if (outcome === 'partial_evidence') {
+    return 'kb_partial_with_general_fallback'
+  }
+  if (outcome === 'relevant_evidence') {
+    return 'kb_grounded'
+  }
+  if (outcome === 'no_usable_kb') {
+    return 'general_fallback_no_usable_kb'
+  }
+  if (outcome === 'no_relevant_evidence') {
+    return 'general_fallback_no_kb_evidence'
+  }
+
+  if (retrievalResult.status === 'SUCCESS' && retrievalResult.chunks.length > 0) {
+    return 'kb_grounded'
+  }
+  return 'general_fallback_no_kb_evidence'
 }

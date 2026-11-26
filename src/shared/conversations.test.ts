@@ -2,12 +2,16 @@ import { describe, it, expect } from 'vitest'
 import {
   toConversationDto,
   toMessageDto,
+  CONVERSATION_IPC_CHANNELS,
   conversationIdSchema,
   messageIdSchema,
   conversationTitleSchema,
-  createConversationRequestSchema,
+  getConversationForBotRequestSchema,
+  getSegmentsRequestSchema,
+  clearConversationRequestSchema,
   renameConversationRequestSchema,
   listConversationsRequestSchema,
+  listMessagesRequestSchema,
   deleteConversationResultSchema,
   messageRoleSchema,
   messageContentFormatSchema,
@@ -19,20 +23,23 @@ import {
   sendMessageRequestSchema,
   conversationDtoSchema,
   messageDtoSchema,
+  groupMessagesBySegments,
+  orderMessagesRespectingSegments,
   serializeMessageMetadata,
   deserializeMessageMetadata,
   serializeMessageTokenUsage,
   deserializeMessageTokenUsage,
   ConversationBridgeError,
   CONVERSATION_TITLE_MAX_LENGTH,
-  DEFAULT_CONVERSATION_TITLE,
   MAX_MESSAGE_CONTENT_LENGTH,
   MESSAGE_ROLES,
   MESSAGE_CONTENT_FORMATS,
   type ConversationDto,
+  type ConversationSegmentDto,
   type MessageDto,
   type CitationDto,
-  type CreateConversationRequest,
+  type GetConversationForBotRequest,
+  type ClearConversationRequest,
   type RenameConversationRequest,
   type MessageTokenUsageDto,
   type MessageMetadataDto
@@ -121,24 +128,29 @@ describe('Shared Conversation and Message Contracts (Step 7.1)', () => {
       ).toThrow(/Knowledge Base ID is required/)
     })
 
-    it('5. accepts a valid CreateConversationRequest with default title fallback', () => {
-      const req: CreateConversationRequest = {
+    it('5. validates GetConversationForBotRequest and rejects injected knowledgeBaseId', () => {
+      const req: GetConversationForBotRequest = {
         botId: validBotId
       }
 
-      const parsed = createConversationRequestSchema.parse(req)
+      const parsed = getConversationForBotRequestSchema.parse(req)
       expect(parsed.botId).toBe(validBotId)
-      expect(parsed.title).toBe(DEFAULT_CONVERSATION_TITLE)
+
+      expect(() =>
+        getConversationForBotRequestSchema.parse({
+          botId: validBotId,
+          knowledgeBaseId: validKbId
+        })
+      ).toThrow(/Unrecognized key|knowledgeBaseId/)
     })
 
-    it('6. accepts a valid CreateConversationRequest with custom title', () => {
-      const req: CreateConversationRequest = {
-        botId: validBotId,
-        title: 'Custom Research Session'
-      }
-
-      const parsed = createConversationRequestSchema.parse(req)
-      expect(parsed.title).toBe('Custom Research Session')
+    it('6. omits CREATE from CONVERSATION_IPC_CHANNELS and includes Step 12.2 channels', () => {
+      expect((CONVERSATION_IPC_CHANNELS as Record<string, unknown>).CREATE).toBeUndefined()
+      expect(Object.values(CONVERSATION_IPC_CHANNELS)).not.toContain('conversation:create')
+      expect(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT).toBe('conversation:get-for-bot')
+      expect(CONVERSATION_IPC_CHANNELS.GET_SEGMENTS).toBe('conversation:get-segments')
+      expect(CONVERSATION_IPC_CHANNELS.CLEAR).toBe('conversation:clear')
+      expect(CONVERSATION_IPC_CHANNELS.GET_CLEAR_PREVIEW).toBe('conversation:get-clear-preview')
     })
 
     it('7. accepts a valid RenameConversationRequest', () => {
@@ -153,9 +165,6 @@ describe('Shared Conversation and Message Contracts (Step 7.1)', () => {
     it('8. rejects empty and whitespace-only conversation titles', () => {
       expect(() => conversationTitleSchema.parse('')).toThrow(/cannot be blank/)
       expect(() => conversationTitleSchema.parse('   ')).toThrow(/cannot be blank/)
-      expect(() =>
-        createConversationRequestSchema.parse({ botId: validBotId, title: '  ' })
-      ).toThrow(/cannot be blank/)
       expect(() => renameConversationRequestSchema.parse({ title: '' })).toThrow(/cannot be blank/)
     })
 
@@ -169,29 +178,42 @@ describe('Shared Conversation and Message Contracts (Step 7.1)', () => {
       )
     })
 
-    it('10. rejects invalid UUID for conversationId and botId', () => {
+    it('10. rejects invalid UUID for conversationId, getConversationForBot, getSegments, and clearConversation', () => {
       expect(() => conversationIdSchema.parse('not-a-uuid')).toThrow(/valid RFC 4122 UUIDv4/)
-      expect(() => createConversationRequestSchema.parse({ botId: 'invalid-bot-uuid' })).toThrow(
+      expect(() => getConversationForBotRequestSchema.parse({ botId: 'invalid-bot-uuid' })).toThrow(
         /valid RFC 4122 UUIDv4/
       )
+      expect(() => getSegmentsRequestSchema.parse({ conversationId: 'invalid-conv-uuid' })).toThrow(
+        /valid RFC 4122 UUIDv4/
+      )
+      expect(() =>
+        clearConversationRequestSchema.parse({ conversationId: 'invalid-conv-uuid' })
+      ).toThrow(/valid RFC 4122 UUIDv4/)
     })
 
-    it('11. strictly rejects unknown properties in create request', () => {
+    it('11. strictly rejects unknown properties in getSegments and clearConversation requests', () => {
       expect(() =>
-        createConversationRequestSchema.parse({
-          botId: validBotId,
+        getSegmentsRequestSchema.parse({
+          conversationId: validConvId,
           unknownField: 'malicious'
         })
       ).toThrow(/Unrecognized key/)
-    })
-
-    it('12. strictly rejects knowledgeBaseId injection in create request', () => {
       expect(() =>
-        createConversationRequestSchema.parse({
-          botId: validBotId,
+        clearConversationRequestSchema.parse({
+          conversationId: validConvId,
           knowledgeBaseId: validKbId
         })
-      ).toThrow(/knowledgeBaseId/)
+      ).toThrow(/Unrecognized key|knowledgeBaseId/)
+    })
+
+    it('12. accepts valid ClearConversationRequest and high listMessages limit up to 10000', () => {
+      const req: ClearConversationRequest = { conversationId: validConvId }
+      expect(clearConversationRequestSchema.parse(req)).toEqual({ conversationId: validConvId })
+      const listParsed = listMessagesRequestSchema.parse({
+        conversationId: validConvId,
+        limit: 10000
+      })
+      expect(listParsed.limit).toBe(10000)
     })
 
     it('13. prevents bot ownership reassignment in rename request', () => {
@@ -768,6 +790,175 @@ describe('Shared Conversation and Message Contracts (Step 7.1)', () => {
       expect(err.name).toBe('ConversationBridgeError')
       expect(err.code).toBe('THREAD_NOT_FOUND')
       expect(err.message).toBe('Thread not found')
+    })
+
+    it('43. groupMessagesBySegments preserves segmentOrder even with overlapping historical timestamps and empty segments', () => {
+      const seg0: ConversationSegmentDto = {
+        id: '77777777-7777-4777-8777-777777777700',
+        conversationId: validConvId,
+        originalConversationId: validConvId,
+        title: 'Early Research',
+        segmentOrder: 0,
+        firstMessageCreatedAt: null,
+        lastMessageCreatedAt: null,
+        createdAt: 1700000000000,
+        archivedAt: null,
+        messageCount: 1
+      }
+      const seg1Empty: ConversationSegmentDto = {
+        id: '77777777-7777-4777-8777-777777777701',
+        conversationId: validConvId,
+        originalConversationId: validConvId,
+        title: 'Empty Archived Thread',
+        segmentOrder: 1,
+        firstMessageCreatedAt: null,
+        lastMessageCreatedAt: null,
+        createdAt: 1700000001000,
+        archivedAt: null,
+        messageCount: 0
+      }
+      const seg2: ConversationSegmentDto = {
+        id: '77777777-7777-4777-8777-777777777702',
+        conversationId: validConvId,
+        originalConversationId: validConvId,
+        title: 'Later Segment With Earlier Timestamp Msg',
+        segmentOrder: 2,
+        firstMessageCreatedAt: null,
+        lastMessageCreatedAt: null,
+        createdAt: 1700000002000,
+        archivedAt: null,
+        messageCount: 1
+      }
+
+      const msgInSeg0LaterTs: MessageDto = {
+        id: '88888888-8888-4888-8888-888888888801',
+        conversationId: validConvId,
+        segmentId: seg0.id,
+        role: 'user',
+        content: 'Message in segment 0 with later timestamp',
+        contentFormat: 'markdown',
+        metadata: {},
+        tokenUsage: null,
+        createdAt: 1700000050000
+      }
+      const msgInSeg2EarlierTs: MessageDto = {
+        id: '88888888-8888-4888-8888-888888888802',
+        conversationId: validConvId,
+        segmentId: seg2.id,
+        role: 'user',
+        content: 'Message in segment 2 with earlier timestamp',
+        contentFormat: 'markdown',
+        metadata: {},
+        tokenUsage: null,
+        createdAt: 1700000010000
+      }
+      const unsegmentedMsg: MessageDto = {
+        id: '88888888-8888-4888-8888-888888888803',
+        conversationId: validConvId,
+        segmentId: null,
+        role: 'assistant',
+        content: 'Recent unsegmented turn',
+        contentFormat: 'markdown',
+        metadata: {},
+        tokenUsage: null,
+        createdAt: 1700000060000
+      }
+
+      const groups = groupMessagesBySegments(
+        [seg2, seg0, seg1Empty],
+        [msgInSeg2EarlierTs, unsegmentedMsg, msgInSeg0LaterTs]
+      )
+      expect(groups).toHaveLength(4)
+      expect(groups[0].segment?.id).toBe(seg0.id)
+      expect(groups[0].messages.map((m) => m.id)).toEqual([msgInSeg0LaterTs.id])
+      expect(groups[1].segment?.id).toBe(seg1Empty.id)
+      expect(groups[1].messages).toEqual([])
+      expect(groups[2].segment?.id).toBe(seg2.id)
+      expect(groups[2].messages.map((m) => m.id)).toEqual([msgInSeg2EarlierTs.id])
+      expect(groups[3].segment).toBeNull()
+      expect(groups[3].messages.map((m) => m.id)).toEqual([unsegmentedMsg.id])
+
+      const ordered = orderMessagesRespectingSegments(
+        [msgInSeg2EarlierTs, unsegmentedMsg, msgInSeg0LaterTs],
+        [seg2, seg0, seg1Empty]
+      )
+      expect(ordered.map((m) => m.id)).toEqual([
+        msgInSeg0LaterTs.id,
+        msgInSeg2EarlierTs.id,
+        unsegmentedMsg.id
+      ])
+    })
+  })
+
+  describe('Step 12.4: messageMetadataSchema groundingMode persistence validation', () => {
+    it('accepts valid groundingMode metadata values and rejects unknown values', () => {
+      const valid = messageMetadataSchema.parse({
+        providerId: 'openai',
+        modelId: 'gpt-4o',
+        groundingMode: 'kb_partial_with_general_fallback'
+      })
+      expect(valid.groundingMode).toBe('kb_partial_with_general_fallback')
+
+      const roundtripped = deserializeMessageMetadata(serializeMessageMetadata(valid))
+      expect(roundtripped).toEqual(valid)
+
+      expect(() =>
+        messageMetadataSchema.parse({
+          groundingMode: 'fabricated_mode'
+        })
+      ).toThrow()
+    })
+  })
+
+  describe('Step 12.5: messageMetadataSchema claim provenance persistence & malformed fallback', () => {
+    it('validates structured per-claim provenance references and safely rejects malformed provenance payloads', () => {
+      const claimMeta = messageMetadataSchema.parse({
+        providerId: 'openai',
+        modelId: 'gpt-4o',
+        groundingMode: 'kb_partial_with_general_fallback',
+        claims: [
+          {
+            claimId: 'claim-1',
+            claimText: 'MFA is required for administrative access.',
+            provenance: 'kb_supported',
+            validationStatus: 'validated',
+            evidenceReferences: [
+              {
+                knowledgeBaseId: '11111111-1111-4111-8111-111111111111',
+                sourceId: '22222222-2222-4222-8222-222222222222',
+                chunkId: '33333333-3333-4333-8333-333333333333',
+                citationNumber: 1,
+                fileName: 'security.pdf',
+                fileType: 'pdf',
+                pageNumber: 2,
+                headingPath: ['Access'],
+                chunkIndex: 0
+              }
+            ]
+          },
+          {
+            claimId: 'claim-2',
+            claimText: 'Password managers help engineers avoid credential reuse.',
+            provenance: 'general_knowledge',
+            validationStatus: 'not_checked',
+            evidenceReferences: []
+          }
+        ]
+      })
+
+      const roundtripped = deserializeMessageMetadata(serializeMessageMetadata(claimMeta))
+      expect(roundtripped.claims).toHaveLength(2)
+      expect(roundtripped.claims?.[0].evidenceReferences[0].sourceId).toBe(
+        '22222222-2222-4222-8222-222222222222'
+      )
+
+      // Malformed claim provenance degrades safely to empty metadata on deserialize
+      const corrupt = deserializeMessageMetadata(
+        JSON.stringify({
+          claims: [{ claimId: 'c1', provenance: 'fake_provenance', validationStatus: 'validated' }]
+        })
+      )
+      expect(corrupt).toEqual({})
     })
   })
 })

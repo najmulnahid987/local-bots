@@ -4,30 +4,14 @@ import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/re
 import { ConversationMessage } from './ConversationMessage'
 import { ConversationComposer } from './ConversationComposer'
 import { ConversationMessageList } from './ConversationMessageList'
-import { ConversationSidebar } from './ConversationSidebar'
 import { ConversationEmptyState } from './ConversationEmptyState'
-import type { MessageDto, ConversationDto } from '../../../../shared/conversations'
-import type { BotDto } from '../../../../shared/bots'
+import type { MessageDto, ConversationSegmentDto } from '../../../../shared/conversations'
 
 describe('Renderer: Chat Presentation Components (Phase 7 Step 7.9)', () => {
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
   })
-
-  const sampleBot: BotDto = {
-    id: 'bot-1111-2222',
-    knowledgeBaseId: 'kb-01',
-    name: 'Research Bot',
-    description: 'Research assistant',
-    systemPrompt: 'You are helpful',
-    providerConnectionId: 'conn-01',
-    modelId: 'gpt-6-luna',
-    enabledTools: ['search_knowledge_base'],
-    status: 'active',
-    createdAt: 1700000000000,
-    updatedAt: 1700000000000
-  }
 
   const userMessage: MessageDto = {
     id: 'msg-user-1',
@@ -62,26 +46,6 @@ describe('Renderer: Chat Presentation Components (Phase 7 Step 7.9)', () => {
     },
     tokenUsage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 },
     createdAt: 1700000005000
-  }
-
-  const sampleConv1: ConversationDto = {
-    id: 'conv-1',
-    botId: sampleBot.id,
-    knowledgeBaseId: 'kb-01',
-    title: 'Customer Policy Query',
-    createdAt: 1700000000000,
-    updatedAt: 1700000005000,
-    archivedAt: null
-  }
-
-  const sampleConv2: ConversationDto = {
-    id: 'conv-2',
-    botId: sampleBot.id,
-    knowledgeBaseId: 'kb-01',
-    title: 'Tax Regulations',
-    createdAt: 1700000010000,
-    updatedAt: 1700000010000,
-    archivedAt: null
   }
 
   // -------------------------------------------------------------------------
@@ -119,6 +83,113 @@ describe('Renderer: Chat Presentation Components (Phase 7 Step 7.9)', () => {
 
       const bubble = screen.getByTestId('message-item-msg-formatted')
       expect(bubble.textContent).toContain('Line 1\n\nLine 2 with   spaces\n  - Item A\n  - Item B')
+    })
+
+    it('renders compact source indicator badges for Balanced grounding modes and hides noisy chrome for general_chat', () => {
+      const kbMsg: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-kb-badge',
+        metadata: { ...assistantMessage.metadata, groundingMode: 'kb_grounded' }
+      }
+      const partialMsg: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-partial-badge',
+        metadata: { groundingMode: 'kb_partial_with_general_fallback' }
+      }
+      const fallbackMsg: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-fallback-badge',
+        metadata: { groundingMode: 'general_fallback_no_kb_evidence' }
+      }
+      const noUsableMsg: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-nousable-badge',
+        metadata: { groundingMode: 'general_fallback_no_usable_kb' }
+      }
+      const generalMsg: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-general-badge',
+        metadata: { groundingMode: 'general_chat' }
+      }
+
+      render(
+        <>
+          <ConversationMessage message={kbMsg} botName="Balanced Bot" />
+          <ConversationMessage message={partialMsg} botName="Balanced Bot" />
+          <ConversationMessage message={fallbackMsg} botName="Balanced Bot" />
+          <ConversationMessage message={noUsableMsg} botName="Balanced Bot" />
+          <ConversationMessage message={generalMsg} botName="General Bot" />
+        </>
+      )
+
+      expect(screen.getByTestId('message-grounding-badge-msg-kb-badge').textContent).toBe(
+        'KB Evidence'
+      )
+      expect(screen.getByTestId('message-grounding-badge-msg-partial-badge').textContent).toBe(
+        'Partial KB + General AI'
+      )
+      expect(screen.getByTestId('message-grounding-badge-msg-fallback-badge').textContent).toBe(
+        'General AI Fallback'
+      )
+      expect(screen.getByTestId('message-grounding-badge-msg-nousable-badge').textContent).toBe(
+        'General AI (No KB Docs)'
+      )
+      expect(screen.queryByTestId('message-grounding-badge-msg-general-badge')).toBeNull()
+    })
+
+    it('34. Renders older messages without executionMode cleanly and displays Agent Task badge for agent runs', () => {
+      // Historical message without executionMode in metadata
+      const legacyMessage: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-legacy-1',
+        content: 'Historical message created before Phase 12 Step 12.6',
+        metadata: {
+          generation: { finishReason: 'stop' }
+        }
+      }
+
+      // Modern Agent task message
+      const agentMessage: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-agent-task-1',
+        content: 'Report saved to workspace.',
+        metadata: {
+          executionMode: 'agent',
+          agentRunId: 'run-uuid-1234'
+        }
+      }
+
+      // Modern Chat message
+      const chatMessage: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-chat-1',
+        content: 'Conversational response.',
+        metadata: {
+          executionMode: 'chat'
+        }
+      }
+
+      render(
+        <>
+          <ConversationMessage message={legacyMessage} botName="Legacy Bot" />
+          <ConversationMessage message={agentMessage} botName="Agent Bot" />
+          <ConversationMessage message={chatMessage} botName="Chat Bot" />
+        </>
+      )
+
+      // Legacy message renders cleanly with no execution mode badge
+      expect(screen.queryByTestId('message-execution-mode-msg-legacy-1')).toBeNull()
+      expect(screen.getByTestId('message-item-msg-legacy-1').textContent).toContain(
+        'Historical message created before Phase 12 Step 12.6'
+      )
+
+      // Agent message displays Agent Task badge
+      const agentBadge = screen.getByTestId('message-execution-mode-msg-agent-task-1')
+      expect(agentBadge).toBeDefined()
+      expect(agentBadge.textContent).toContain('Agent Task')
+
+      // Chat message does not display Agent Task badge
+      expect(screen.queryByTestId('message-execution-mode-msg-chat-1')).toBeNull()
     })
   })
 
@@ -302,283 +373,226 @@ describe('Renderer: Chat Presentation Components (Phase 7 Step 7.9)', () => {
       expect(screen.getByTestId('streaming-indicator')).toBeDefined()
       expect(screen.getByText('Research Bot is thinking...')).toBeDefined()
     })
-  })
 
-  // -------------------------------------------------------------------------
-  // 4. ConversationSidebar
-  // -------------------------------------------------------------------------
-  describe('ConversationSidebar', () => {
-    it('renders list of active Bot conversations with titles and timestamps', () => {
-      const onSelect = vi.fn()
+    it('renders historical segments strictly in segmentOrder without interleaving overlapping timestamps and handles empty segments', () => {
+      const seg0: ConversationSegmentDto = {
+        id: 'seg-0',
+        conversationId: 'conv-1',
+        originalConversationId: 'conv-1',
+        title: 'Contract Review',
+        segmentOrder: 0,
+        firstMessageCreatedAt: null,
+        lastMessageCreatedAt: null,
+        createdAt: 1700000000000,
+        archivedAt: null,
+        messageCount: 1
+      }
+      const seg1Empty: ConversationSegmentDto = {
+        id: 'seg-1',
+        conversationId: 'conv-1',
+        originalConversationId: 'conv-1',
+        title: 'Empty Consolidated Thread',
+        segmentOrder: 1,
+        firstMessageCreatedAt: null,
+        lastMessageCreatedAt: null,
+        createdAt: 1700000001000,
+        archivedAt: null,
+        messageCount: 0
+      }
+      const seg2: ConversationSegmentDto = {
+        id: 'seg-2',
+        conversationId: 'conv-1',
+        originalConversationId: 'conv-1',
+        title: 'Follow-Up Research',
+        segmentOrder: 2,
+        firstMessageCreatedAt: null,
+        lastMessageCreatedAt: null,
+        createdAt: 1700000002000,
+        archivedAt: null,
+        messageCount: 1
+      }
+
+      const msgSeg0LaterTs: MessageDto = {
+        ...userMessage,
+        id: 'msg-seg-0',
+        segmentId: seg0.id,
+        content: 'Older segment message with later timestamp',
+        createdAt: 1700000099000
+      }
+      const msgSeg2EarlierTs: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-seg-2',
+        segmentId: seg2.id,
+        content: 'Later segment message with earlier timestamp',
+        createdAt: 1700000011000
+      }
+
       render(
-        <ConversationSidebar
-          bot={sampleBot}
-          conversations={[sampleConv1, sampleConv2]}
-          selectedConversationId="conv-1"
-          onSelectConversation={onSelect}
-          onCreateConversation={vi.fn()}
+        <ConversationMessageList
+          messages={[msgSeg2EarlierTs, msgSeg0LaterTs]}
+          segments={[seg2, seg0, seg1Empty]}
           isLoading={false}
-          isRefreshing={false}
-          isMutating={false}
-          error={null}
-          onRefresh={vi.fn()}
+          isGenerating={false}
+          streamingText=""
+          botName="Research Bot"
         />
       )
 
-      expect(screen.getByTestId('conversation-title-conv-1').textContent).toBe(
-        'Customer Policy Query'
-      )
-      expect(screen.getByTestId('conversation-title-conv-2').textContent).toBe('Tax Regulations')
+      const header0 = screen.getByTestId('conversation-segment-header-seg-0')
+      const header1 = screen.getByTestId('conversation-segment-header-seg-1')
+      const header2 = screen.getByTestId('conversation-segment-header-seg-2')
+      expect(header0.textContent).toContain('Contract Review')
+      expect(header1.textContent).toContain('Empty Consolidated Thread')
+      expect(header2.textContent).toContain('Follow-Up Research')
 
-      const item1 = screen.getByTestId('conversation-item-conv-1')
-      expect(item1.getAttribute('aria-selected')).toBe('true')
-
-      fireEvent.click(screen.getByTestId('conversation-item-conv-2'))
-      expect(onSelect).toHaveBeenCalledWith('conv-2')
-    })
-
-    it('renders sidebar empty state when bot has no conversations', () => {
-      render(
-        <ConversationSidebar
-          bot={sampleBot}
-          conversations={[]}
-          selectedConversationId={null}
-          onSelectConversation={vi.fn()}
-          onCreateConversation={vi.fn()}
-          isLoading={false}
-          isRefreshing={false}
-          isMutating={false}
-          error={null}
-          onRefresh={vi.fn()}
-        />
+      // Segment headers must not be interactive buttons/tabs for switching conversations
+      expect(header0.closest('button')).toBeNull()
+      expect(screen.getByTestId('conversation-segment-empty-seg-1').textContent).toContain(
+        'No messages recorded in this historical thread.'
       )
 
-      expect(screen.getByTestId('conversations-empty-state')).toBeDefined()
-      expect(screen.getByText('No conversations')).toBeDefined()
-    })
-
-    it('clicking Rename button opens inline rename form prefilled with title without selecting conversation', () => {
-      const onSelect = vi.fn()
-      const onRename = vi.fn()
-      render(
-        <ConversationSidebar
-          bot={sampleBot}
-          conversations={[sampleConv1, sampleConv2]}
-          selectedConversationId="conv-1"
-          onSelectConversation={onSelect}
-          onCreateConversation={vi.fn()}
-          onRenameConversation={onRename}
-          isLoading={false}
-          isRefreshing={false}
-          isMutating={false}
-          error={null}
-          onRefresh={vi.fn()}
-        />
+      // DOM order must be msg-seg-0 before empty seg-1 before msg-seg-2
+      const listEl = screen.getByTestId('messages-container')
+      const html = listEl.innerHTML
+      expect(html.indexOf('msg-seg-0')).toBeLessThan(
+        html.indexOf('conversation-segment-empty-seg-1')
       )
-
-      const renameBtn = screen.getByTestId('rename-conversation-btn-conv-2')
-      fireEvent.click(renameBtn)
-
-      expect(onSelect).not.toHaveBeenCalled()
-      expect(screen.getByTestId('rename-form-conv-2')).toBeDefined()
-      const input = screen.getByTestId('rename-input-conv-2') as HTMLInputElement
-      expect(input.value).toBe('Tax Regulations')
-    })
-
-    it('inline rename form rejects blank or whitespace-only titles', async () => {
-      const onRename = vi.fn()
-      render(
-        <ConversationSidebar
-          bot={sampleBot}
-          conversations={[sampleConv1]}
-          selectedConversationId="conv-1"
-          onSelectConversation={vi.fn()}
-          onCreateConversation={vi.fn()}
-          onRenameConversation={onRename}
-          isLoading={false}
-          isRefreshing={false}
-          isMutating={false}
-          error={null}
-          onRefresh={vi.fn()}
-        />
+      expect(html.indexOf('conversation-segment-empty-seg-1')).toBeLessThan(
+        html.indexOf('msg-seg-2')
       )
-
-      fireEvent.click(screen.getByTestId('rename-conversation-btn-conv-1'))
-      const input = screen.getByTestId('rename-input-conv-1')
-      fireEvent.change(input, { target: { value: '   ' } })
-      fireEvent.click(screen.getByTestId('save-rename-btn-conv-1'))
-
-      expect(onRename).not.toHaveBeenCalled()
-      expect(screen.getByTestId('rename-error-conv-1').textContent).toContain('cannot be blank')
-    })
-
-    it('inline rename form cancels when Escape is pressed', () => {
-      render(
-        <ConversationSidebar
-          bot={sampleBot}
-          conversations={[sampleConv1]}
-          selectedConversationId="conv-1"
-          onSelectConversation={vi.fn()}
-          onCreateConversation={vi.fn()}
-          onRenameConversation={vi.fn()}
-          isLoading={false}
-          isRefreshing={false}
-          isMutating={false}
-          error={null}
-          onRefresh={vi.fn()}
-        />
-      )
-
-      fireEvent.click(screen.getByTestId('rename-conversation-btn-conv-1'))
-      expect(screen.getByTestId('rename-form-conv-1')).toBeDefined()
-
-      const input = screen.getByTestId('rename-input-conv-1')
-      fireEvent.keyDown(input, { key: 'Escape' })
-
-      expect(screen.queryByTestId('rename-form-conv-1')).toBeNull()
-      expect(screen.getByTestId('conversation-title-conv-1')).toBeDefined()
-    })
-
-    it('inline rename form saves when Enter is pressed', async () => {
-      const onRename = vi.fn(async () => ({ ...sampleConv1, title: 'Updated Title' }))
-      render(
-        <ConversationSidebar
-          bot={sampleBot}
-          conversations={[sampleConv1]}
-          selectedConversationId="conv-1"
-          onSelectConversation={vi.fn()}
-          onCreateConversation={vi.fn()}
-          onRenameConversation={onRename}
-          isLoading={false}
-          isRefreshing={false}
-          isMutating={false}
-          error={null}
-          onRefresh={vi.fn()}
-        />
-      )
-
-      fireEvent.click(screen.getByTestId('rename-conversation-btn-conv-1'))
-      const input = screen.getByTestId('rename-input-conv-1')
-      fireEvent.change(input, { target: { value: 'Updated Title' } })
-      fireEvent.keyDown(input, { key: 'Enter' })
-
-      await waitFor(() => {
-        expect(onRename).toHaveBeenCalledWith('conv-1', 'Updated Title')
-      })
-    })
-
-    it('clicking Delete button opens DeleteConversationDialog without selecting conversation', () => {
-      const onSelect = vi.fn()
-      const onDelete = vi.fn()
-      render(
-        <ConversationSidebar
-          bot={sampleBot}
-          conversations={[sampleConv1, sampleConv2]}
-          selectedConversationId="conv-1"
-          onSelectConversation={onSelect}
-          onCreateConversation={vi.fn()}
-          onDeleteConversation={onDelete}
-          isLoading={false}
-          isRefreshing={false}
-          isMutating={false}
-          error={null}
-          onRefresh={vi.fn()}
-        />
-      )
-
-      const deleteBtn = screen.getByTestId('delete-conversation-btn-conv-2')
-      fireEvent.click(deleteBtn)
-
-      expect(onSelect).not.toHaveBeenCalled()
-      expect(screen.getByTestId('delete-conversation-dialog')).toBeDefined()
-      expect(screen.getByTestId('delete-conversation-target-title').textContent).toBe(
-        'Tax Regulations'
-      )
-    })
-
-    it('disables Delete button when isGenerating is true for the selected conversation', () => {
-      render(
-        <ConversationSidebar
-          bot={sampleBot}
-          conversations={[sampleConv1, sampleConv2]}
-          selectedConversationId="conv-1"
-          onSelectConversation={vi.fn()}
-          onCreateConversation={vi.fn()}
-          onDeleteConversation={vi.fn()}
-          isGenerating={true}
-          isLoading={false}
-          isRefreshing={false}
-          isMutating={false}
-          error={null}
-          onRefresh={vi.fn()}
-        />
-      )
-
-      const deleteBtn1 = screen.getByTestId('delete-conversation-btn-conv-1')
-      expect(deleteBtn1.getAttribute('disabled')).not.toBeNull()
-
-      const deleteBtn2 = screen.getByTestId('delete-conversation-btn-conv-2')
-      expect(deleteBtn2.getAttribute('disabled')).toBeNull()
-    })
-
-    it('canceling Delete dialog leaves conversation untouched', () => {
-      render(
-        <ConversationSidebar
-          bot={sampleBot}
-          conversations={[sampleConv1]}
-          selectedConversationId="conv-1"
-          onSelectConversation={vi.fn()}
-          onCreateConversation={vi.fn()}
-          onDeleteConversation={vi.fn()}
-          isLoading={false}
-          isRefreshing={false}
-          isMutating={false}
-          error={null}
-          onRefresh={vi.fn()}
-        />
-      )
-
-      fireEvent.click(screen.getByTestId('delete-conversation-btn-conv-1'))
-      expect(screen.getByTestId('delete-conversation-dialog')).toBeDefined()
-
-      fireEvent.click(screen.getByTestId('cancel-delete-btn'))
-      expect(screen.queryByTestId('delete-conversation-dialog')).toBeNull()
-      expect(screen.getByTestId('conversation-title-conv-1')).toBeDefined()
     })
   })
 
   // -------------------------------------------------------------------------
-  // 5. ConversationEmptyState
+  // 4. ConversationEmptyState (Unified Single-Conversation Workspace)
   // -------------------------------------------------------------------------
   describe('ConversationEmptyState', () => {
-    it('renders no-selection variant with create button when not archived', () => {
-      const onNew = vi.fn()
-      render(
-        <ConversationEmptyState
-          variant="no-selection"
-          botName="Research Bot"
-          onNewConversation={onNew}
-          isArchived={false}
-        />
-      )
+    it('renders empty conversation state for an active Bot with no New Conversation controls', () => {
+      render(<ConversationEmptyState botName="Research Bot" isArchived={false} />)
 
-      expect(screen.getByTestId('no-conversation-selected')).toBeDefined()
-      const btn = screen.getByTestId('empty-state-new-conv-btn')
-      fireEvent.click(btn)
-      expect(onNew).toHaveBeenCalled()
+      expect(screen.getByTestId('messages-empty')).toBeDefined()
+      expect(screen.getByText('Chat with Research Bot')).toBeDefined()
+      expect(screen.queryByTestId('empty-state-new-conv-btn')).toBeNull()
+      expect(screen.queryByTestId('no-conversation-selected')).toBeNull()
     })
 
-    it('hides create button on no-selection variant when bot is archived', () => {
+    it('renders read-only archived message when bot is archived', () => {
+      render(<ConversationEmptyState botName="Research Bot" isArchived={true} />)
+
+      expect(screen.getByTestId('messages-empty')).toBeDefined()
+      expect(screen.getByText(/archived and has no recorded messages/i)).toBeDefined()
+      expect(screen.queryByTestId('empty-state-new-conv-btn')).toBeNull()
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // 5. Claim Provenance Inspector (Step 12.5)
+  // -------------------------------------------------------------------------
+  describe('Step 12.5: Claim Provenance Presentation & Integrity', () => {
+    it('expands claim-level provenance, triggers click with messageId, filters unvalidated references, and leaves legacy messages intact', () => {
+      const onCitationClick = vi.fn()
+      const msgWithClaims: MessageDto = {
+        ...assistantMessage,
+        id: 'msg-claims-1',
+        metadata: {
+          ...assistantMessage.metadata,
+          groundingMode: 'kb_partial_with_general_fallback',
+          claims: [
+            {
+              claimId: 'claim-1',
+              claimText: 'Full refunds are provided within 30 days.',
+              provenance: 'kb_supported',
+              validationStatus: 'validated',
+              evidenceReferences: [
+                {
+                  knowledgeBaseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+                  sourceId: 'src-1',
+                  chunkId: 'chk-1',
+                  citationNumber: 1,
+                  fileName: 'terms_of_service.pdf',
+                  fileType: 'pdf',
+                  pageNumber: 3,
+                  headingPath: ['Refunds'],
+                  chunkIndex: 0
+                }
+              ],
+              explanation: 'INTERNAL_SHOULD_NOT_RENDER'
+            },
+            {
+              claimId: 'claim-2',
+              claimText: 'Support response times are typically under one business day.',
+              provenance: 'general_knowledge',
+              validationStatus: 'not_checked',
+              evidenceReferences: []
+            },
+            {
+              claimId: 'claim-3',
+              claimText: 'Fake unverified claim [99].',
+              provenance: 'unsupported',
+              validationStatus: 'invalid_reference',
+              evidenceReferences: [
+                {
+                  sourceId: 'fake-src',
+                  chunkId: 'fake-chk',
+                  citationNumber: 99,
+                  fileName: 'ghost.pdf',
+                  fileType: 'pdf',
+                  pageNumber: null,
+                  headingPath: null,
+                  chunkIndex: 0
+                }
+              ]
+            }
+          ]
+        }
+      }
+
       render(
-        <ConversationEmptyState
-          variant="no-selection"
-          botName="Research Bot"
-          onNewConversation={vi.fn()}
-          isArchived={true}
-        />
+        <>
+          <ConversationMessage
+            message={msgWithClaims}
+            botName="Balanced Bot"
+            onCitationClick={onCitationClick}
+          />
+          <ConversationMessage message={assistantMessage} botName="Legacy Bot" />
+        </>
       )
 
-      expect(screen.queryByTestId('empty-state-new-conv-btn')).toBeNull()
+      // Legacy message without claims continues rendering normally with no provenance toggle
+      expect(screen.queryByTestId('claim-provenance-section-msg-asst-1')).toBeNull()
+
+      const toggle = screen.getByTestId('toggle-claim-provenance-msg-claims-1')
+      expect(toggle.textContent).toContain('Claim Provenance (3 claims)')
+      expect(screen.queryByTestId('claim-provenance-list-msg-claims-1')).toBeNull()
+
+      fireEvent.click(toggle)
+      const list = screen.getByTestId('claim-provenance-list-msg-claims-1')
+      expect(list.textContent).not.toContain('INTERNAL_SHOULD_NOT_RENDER')
+      expect(screen.getByTestId('claim-status-badge-msg-claims-1-claim-1').textContent).toBe(
+        'KB Supported'
+      )
+      expect(screen.getByTestId('claim-status-badge-msg-claims-1-claim-2').textContent).toBe(
+        'General AI'
+      )
+      expect(screen.getByTestId('claim-status-badge-msg-claims-1-claim-3').textContent).toBe(
+        'Unverified Reference'
+      )
+
+      // Unvalidated claim-3 reference is filtered out in the UI
+      expect(screen.queryByTestId('claim-ref-btn-msg-claims-1-claim-3-99')).toBeNull()
+
+      // Clicking valid claim ref opens source citation for exact message ID
+      const refBtn = screen.getByTestId('claim-ref-btn-msg-claims-1-claim-1-1')
+      fireEvent.click(refBtn)
+      expect(onCitationClick).toHaveBeenCalledWith(
+        expect.objectContaining({
+          citationNumber: 1,
+          sourceId: 'src-1',
+          chunkId: 'chk-1',
+          fileName: 'terms_of_service.pdf'
+        }),
+        'msg-claims-1'
+      )
     })
   })
 })

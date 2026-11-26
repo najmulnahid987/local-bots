@@ -2591,6 +2591,109 @@ mark.search-snippet-highlight,
   margin-top: 2px;
 }
 
+.bot-policy-section {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: #f8fafc;
+}
+
+.policy-kb-context {
+  margin-top: 6px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background-color: #ffffff;
+  border: 1px solid var(--color-border);
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bot-policy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.bot-policy-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: #ffffff;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+  user-select: none;
+}
+
+.bot-policy-card:hover {
+  border-color: var(--color-accent);
+  background-color: #f8fafc;
+}
+
+.bot-policy-card.selected {
+  border-color: #3b82f6;
+  background-color: #eff6ff;
+}
+
+.policy-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.policy-recommended-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.bot-policy-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  background-color: #f1f5f9;
+  color: #334155;
+}
+
+.bot-policy-badge.policy-strict_kb_only {
+  background-color: #fef3c7;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.bot-policy-badge.policy-balanced_kb_first {
+  background-color: #dbeafe;
+  border-color: #bfdbfe;
+  color: #1e40af;
+}
+
+.bot-policy-badge.policy-general_ai_chat {
+  background-color: #f3e8ff;
+  border-color: #e9d5ff;
+  color: #6b21a8;
+}
+
 .delete-scope-list {
   margin: 6px 0 0 16px;
   padding: 0;

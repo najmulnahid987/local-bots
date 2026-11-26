@@ -10,6 +10,8 @@ import pptxPersistenceSupportSql from './008_pptx_persistence_support.sql?raw'
 import extractedDocumentPersistenceSql from './009_extracted_document_persistence.sql?raw'
 import csvPersistenceSupportSql from './010_csv_persistence_support.sql?raw'
 import createDocumentValidationSql from './011_create_document_validation.sql?raw'
+import singleConversationPerBotSql from './012_single_conversation_per_bot.sql?raw'
+import botResponsePoliciesSql from './013_bot_response_policies.sql?raw'
 
 export * from './types'
 export * from './runner'
@@ -28,6 +30,7 @@ export * from './runner'
  * Migration 009 establishes knowledge_extracted_documents for canonical UniversalDocument persistence.
  * Migration 010 evolves knowledge_sources.file_type to permit 'csv' persistence.
  * Migration 011 establishes knowledge_document_validation for preservation validation persistence.
+ * Migration 012 establishes the single conversation per Bot invariant and conversation_segments foundation.
  */
 export const migrations: readonly Migration[] = [
   {
@@ -89,5 +92,16 @@ export const migrations: readonly Migration[] = [
     version: 11,
     name: 'create_document_validation',
     sql: createDocumentValidationSql
+  },
+  {
+    version: 12,
+    name: 'single_conversation_per_bot',
+    sql: singleConversationPerBotSql,
+    disableForeignKeysForTableRebuild: true
+  },
+  {
+    version: 13,
+    name: 'bot_response_policies',
+    sql: botResponsePoliciesSql
   }
 ]

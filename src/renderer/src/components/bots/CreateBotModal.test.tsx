@@ -55,6 +55,7 @@ describe('Renderer: CreateBotModal (Phase 6 Step 6.5)', () => {
     systemPrompt: 'Be concise.',
     providerConnectionId: 'conn-1',
     modelId: 'gpt-6-luna',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: ['search_knowledge_base'],
     status: 'active',
     createdAt: 1700000000000,
@@ -197,5 +198,44 @@ describe('Renderer: CreateBotModal (Phase 6 Step 6.5)', () => {
 
     // Input preserved
     expect(nameInput.value).toBe('Persistent Name')
+  })
+
+  it('7. shows parent Knowledge Base indicator and submits explicitly selected responsePolicy without knowledgeBaseId', async () => {
+    const mockCreate = vi.fn(async (req: CreateBotRequest) => ({
+      ...mockCreatedBot,
+      name: req.name,
+      responsePolicy: req.responsePolicy ?? 'balanced_kb_first'
+    }))
+
+    render(
+      <CreateBotModal
+        isOpen={true}
+        onClose={vi.fn()}
+        createBotFn={mockCreate}
+        catalog={mockCatalog}
+        connections={mockConnections}
+        knowledgeBaseName="Clinical Research KB"
+      />
+    )
+
+    expect(screen.getByTestId('parent-kb-indicator').textContent).toContain('Clinical Research KB')
+
+    fireEvent.change(screen.getByTestId('bot-name-input'), {
+      target: { value: 'Strict Auditor' }
+    })
+
+    const strictRadio = screen
+      .getByTestId('policy-option-strict_kb_only')
+      .querySelector('input') as HTMLInputElement
+    fireEvent.click(strictRadio)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('bot-form-submit-btn'))
+    })
+
+    expect(mockCreate).toHaveBeenCalledTimes(1)
+    const sentReq = mockCreate.mock.calls[0][0]
+    expect(sentReq.responsePolicy).toBe('strict_kb_only')
+    expect(sentReq).not.toHaveProperty('knowledgeBaseId')
   })
 })

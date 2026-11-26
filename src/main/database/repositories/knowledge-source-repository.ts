@@ -635,6 +635,46 @@ export class KnowledgeSourceRepository {
   }
 
   /**
+   * Returns searchable readiness statistics for a single Knowledge Base
+   * (counts only sources in 'completed' or 'ready' state and their indexed chunks).
+   */
+  public getSearchableStats(knowledgeBaseId: string): {
+    readySourceCount: number
+    chunkCount: number
+  } {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT
+          (
+            SELECT count(*)
+            FROM knowledge_sources
+            WHERE knowledge_base_id = @knowledge_base_id
+              AND indexing_status IN ('completed', 'ready')
+          ) AS ready_source_count,
+          (
+            SELECT count(*)
+            FROM knowledge_chunks c
+            INNER JOIN knowledge_sources s
+              ON s.id = c.source_id
+             AND s.knowledge_base_id = c.knowledge_base_id
+            WHERE c.knowledge_base_id = @knowledge_base_id
+              AND s.indexing_status IN ('completed', 'ready')
+          ) AS chunk_count
+      `)
+      const row = stmt.get({ knowledge_base_id: knowledgeBaseId }) as
+        { ready_source_count: number; chunk_count: number } | undefined
+      return {
+        readySourceCount: row?.ready_source_count ?? 0,
+        chunkCount: row?.chunk_count ?? 0
+      }
+    } catch (err) {
+      throw new RepositoryError(
+        `Failed to inspect Knowledge Base searchable stats: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  /**
    * Retrieves a knowledge source record and its aggregated chunk count,
    * strictly verifying ownership by knowledgeBaseId.
    */

@@ -1,32 +1,38 @@
-import { ReactElement, useEffect, useRef } from 'react'
-import { Loader2, Bot } from 'lucide-react'
-import type { MessageDto, CitationDto } from '../../../../shared/conversations'
+import { ReactElement, useEffect, useRef, useMemo } from 'react'
+import { Loader2, Bot, History } from 'lucide-react'
+import {
+  type MessageDto,
+  type CitationDto,
+  type ConversationSegmentDto,
+  groupMessagesBySegments
+} from '../../../../shared/conversations'
+import { formatTimestamp } from '../../utils/formatters'
 import { ConversationMessage } from './ConversationMessage'
 import { ConversationEmptyState } from './ConversationEmptyState'
 import { MarkdownMessageContent } from './MarkdownMessageContent'
 
 export interface ConversationMessageListProps {
   readonly messages: readonly MessageDto[]
+  readonly segments?: readonly ConversationSegmentDto[]
   readonly isLoading: boolean
   readonly isGenerating: boolean
   readonly streamingText: string
   readonly botName?: string
   readonly conversationId?: string | null
-  readonly onNewConversation?: () => void
   readonly isArchived?: boolean
-  readonly onCitationClick?: (citation: CitationDto) => void
+  readonly onCitationClick?: (citation: CitationDto, messageId?: string) => void
   readonly activeTaskElement?: ReactElement | null
   readonly onSaveAsMemory?: (content: string) => void
 }
 
 export function ConversationMessageList({
   messages,
+  segments = [],
   isLoading,
   isGenerating,
   streamingText,
   botName = 'Assistant',
   conversationId,
-  onNewConversation,
   isArchived = false,
   onCitationClick,
   activeTaskElement,
@@ -36,6 +42,12 @@ export function ConversationMessageList({
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const isNearBottomRef = useRef<boolean>(true)
   const prevConvIdRef = useRef<string | null | undefined>(conversationId)
+
+  const timelineGroups = useMemo(
+    () => groupMessagesBySegments(segments, messages),
+    [segments, messages]
+  )
+  const hasMultipleSegments = segments.length > 1
 
   // Track user scroll position: if within 120px from bottom, consider near bottom
   const handleScroll = (): void => {
@@ -63,7 +75,7 @@ export function ConversationMessageList({
         bottomRef.current.scrollIntoView({ behavior: 'smooth' })
       }
     }
-  }, [messages.length, streamingText, activeTaskElement])
+  }, [messages.length, segments.length, streamingText, activeTaskElement])
 
   if (isLoading && messages.length === 0) {
     return (
@@ -88,7 +100,7 @@ export function ConversationMessageList({
     )
   }
 
-  if (messages.length === 0 && !streamingText && !activeTaskElement) {
+  if (messages.length === 0 && !hasMultipleSegments && !streamingText && !activeTaskElement) {
     return (
       <div
         className="chat-messages-container"
@@ -101,12 +113,7 @@ export function ConversationMessageList({
           flexDirection: 'column'
         }}
       >
-        <ConversationEmptyState
-          variant="empty-conversation"
-          botName={botName}
-          onNewConversation={onNewConversation}
-          isArchived={isArchived}
-        />
+        <ConversationEmptyState botName={botName} isArchived={isArchived} />
       </div>
     )
   }
@@ -125,16 +132,86 @@ export function ConversationMessageList({
         flexDirection: 'column'
       }}
     >
-      {/* Chronological message items */}
-      {messages.map((message) => (
-        <ConversationMessage
-          key={message.id}
-          message={message}
-          botName={botName}
-          onCitationClick={onCitationClick}
-          onSaveAsMemory={onSaveAsMemory}
-        />
-      ))}
+      {/* Segment-grouped chronological message timeline (never interleaves overlapping threads) */}
+      {timelineGroups.map((group) => {
+        const seg = group.segment
+        const showDivider = Boolean(hasMultipleSegments && seg)
+
+        return (
+          <section
+            key={group.key}
+            data-testid={
+              seg ? `conversation-segment-${seg.id}` : 'conversation-segment-unsegmented'
+            }
+            aria-label={seg ? `Conversation segment: ${seg.title}` : 'Messages'}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              width: '100%'
+            }}
+          >
+            {showDivider && seg && (
+              <div
+                className="conversation-segment-divider"
+                data-testid={`conversation-segment-header-${seg.id}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  margin: '16px 0 12px 0',
+                  padding: '6px 12px',
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  fontSize: '11.5px',
+                  color: '#475569'
+                }}
+              >
+                <History size={13} className="inline-icon text-muted" aria-hidden="true" />
+                <span style={{ fontWeight: 600, color: '#1e293b' }}>{seg.title}</span>
+                <span style={{ color: '#94a3b8' }}>•</span>
+                <span>{formatTimestamp(seg.firstMessageCreatedAt ?? seg.createdAt)}</span>
+                <span
+                  style={{
+                    marginLeft: 'auto',
+                    fontSize: '11px',
+                    color: '#64748b',
+                    backgroundColor: '#e2e8f0',
+                    padding: '1px 7px',
+                    borderRadius: '10px'
+                  }}
+                >
+                  {group.messages.length} {group.messages.length === 1 ? 'message' : 'messages'}
+                </span>
+              </div>
+            )}
+
+            {showDivider && seg && group.messages.length === 0 && (
+              <div
+                data-testid={`conversation-segment-empty-${seg.id}`}
+                style={{
+                  fontSize: '12px',
+                  color: '#94a3b8',
+                  fontStyle: 'italic',
+                  padding: '4px 12px 12px 12px'
+                }}
+              >
+                No messages recorded in this historical thread.
+              </div>
+            )}
+
+            {group.messages.map((message) => (
+              <ConversationMessage
+                key={message.id}
+                message={message}
+                botName={botName}
+                onCitationClick={onCitationClick}
+                onSaveAsMemory={onSaveAsMemory}
+              />
+            ))}
+          </section>
+        )
+      })}
 
       {/* Active Agent Task Activity Timeline (when running, waiting approval, or completed/failed) */}
       {activeTaskElement}

@@ -2,6 +2,10 @@ import { ipcMain, BrowserWindow } from 'electron'
 import {
   CONVERSATION_IPC_CHANNELS,
   type ConversationDto,
+  type ConversationSegmentDto,
+  type BotConversationWorkspaceDto,
+  type ClearConversationPreviewDto,
+  type ClearConversationResultDto,
   type MessageDto,
   type DeleteConversationResultDto,
   type ResolvedCitationTargetDto
@@ -13,7 +17,9 @@ import { ActiveWorkspaceContext } from '../services/active-workspace-context'
 import { validateIpcSender, type BrowserWindowLike, type IpcSenderEventLike } from '../security'
 import {
   validateConversationIpcPayload,
-  conversationCreateIpcSchema,
+  conversationGetForBotIpcSchema,
+  conversationGetSegmentsIpcSchema,
+  conversationClearIpcSchema,
   conversationListIpcSchema,
   conversationGetMessagesIpcSchema,
   conversationRenameIpcSchema,
@@ -48,7 +54,21 @@ export interface ConversationIpcHandlerOptions {
  */
 export function registerConversationIpcHandlers(options: ConversationIpcHandlerOptions): void {
   const { getMainWindow, conversationManager, turnService, activeContext } = options
-  const streamManager = options.streamManager ?? new ConversationStreamManager()
+  const streamManager =
+    options.streamManager ??
+    new ConversationStreamManager({
+      conversationRepo:
+        (
+          conversationManager as unknown as {
+            conversationRepo?: import('../database/repositories/conversation-repository').ConversationRepository
+          }
+        ).conversationRepo ??
+        (
+          turnService as unknown as {
+            conversationRepo?: import('../database/repositories/conversation-repository').ConversationRepository
+          }
+        ).conversationRepo
+    })
 
   const assertAuthorizedSender = (
     event: IpcSenderEventLike
@@ -70,15 +90,33 @@ export function registerConversationIpcHandlers(options: ConversationIpcHandlerO
     return { mainWindow: mainWindow!, sessionId }
   }
 
-  // 1. Create Conversation
-  ipcMain.removeHandler(CONVERSATION_IPC_CHANNELS.CREATE)
+  // Ensure legacy renderer conversation creation channel is explicitly removed
+  ipcMain.removeHandler('conversation:create')
+
+  // 1. Open Canonical Conversation for Bot (1:1 invariant)
+  ipcMain.removeHandler(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
   ipcMain.handle(
-    CONVERSATION_IPC_CHANNELS.CREATE,
-    async (event, rawPayload: unknown): Promise<ConversationDto> => {
+    CONVERSATION_IPC_CHANNELS.GET_FOR_BOT,
+    async (event, rawPayload: unknown): Promise<BotConversationWorkspaceDto> => {
       try {
         const { sessionId } = assertAuthorizedSender(event)
-        const payload = validateConversationIpcPayload(conversationCreateIpcSchema, rawPayload)
-        return conversationManager.createConversation(sessionId, payload)
+        const payload = validateConversationIpcPayload(conversationGetForBotIpcSchema, rawPayload)
+        return conversationManager.openBotConversation(sessionId, payload.botId)
+      } catch (err) {
+        throw formatConversationIpcError(err)
+      }
+    }
+  )
+
+  // 1b. Load Historical Conversation Segments
+  ipcMain.removeHandler(CONVERSATION_IPC_CHANNELS.GET_SEGMENTS)
+  ipcMain.handle(
+    CONVERSATION_IPC_CHANNELS.GET_SEGMENTS,
+    async (event, rawPayload: unknown): Promise<readonly ConversationSegmentDto[]> => {
+      try {
+        const { sessionId } = assertAuthorizedSender(event)
+        const payload = validateConversationIpcPayload(conversationGetSegmentsIpcSchema, rawPayload)
+        return conversationManager.getSegments(sessionId, payload.conversationId)
       } catch (err) {
         throw formatConversationIpcError(err)
       }
@@ -136,7 +174,51 @@ export function registerConversationIpcHandlers(options: ConversationIpcHandlerO
     }
   )
 
-  // 5. Delete Conversation
+  // 5. Get Clear Conversation Preview
+  ipcMain.removeHandler(CONVERSATION_IPC_CHANNELS.GET_CLEAR_PREVIEW)
+  ipcMain.handle(
+    CONVERSATION_IPC_CHANNELS.GET_CLEAR_PREVIEW,
+    async (event, rawPayload: unknown): Promise<ClearConversationPreviewDto> => {
+      try {
+        const { sessionId } = assertAuthorizedSender(event)
+        const { conversationId } = validateConversationIpcPayload(
+          conversationClearIpcSchema,
+          rawPayload
+        )
+        return conversationManager.getClearPreview(sessionId, conversationId, {
+          isGenerating: turnService.isGenerating(conversationId),
+          isDeleting: turnService.isDeleting(conversationId)
+        })
+      } catch (err) {
+        throw formatConversationIpcError(err)
+      }
+    }
+  )
+
+  // 5b. Clear Conversation (retains canonical conversation ID and preserves Agent Task audit trail)
+  ipcMain.removeHandler(CONVERSATION_IPC_CHANNELS.CLEAR)
+  ipcMain.handle(
+    CONVERSATION_IPC_CHANNELS.CLEAR,
+    async (event, rawPayload: unknown): Promise<ClearConversationResultDto> => {
+      try {
+        const { sessionId } = assertAuthorizedSender(event)
+        const { conversationId } = validateConversationIpcPayload(
+          conversationClearIpcSchema,
+          rawPayload
+        )
+        turnService.acquireDeletionLock(conversationId)
+        try {
+          return conversationManager.clearConversation(sessionId, conversationId)
+        } finally {
+          turnService.releaseDeletionLock(conversationId)
+        }
+      } catch (err) {
+        throw formatConversationIpcError(err)
+      }
+    }
+  )
+
+  // 5c. Delete Conversation
   ipcMain.removeHandler(CONVERSATION_IPC_CHANNELS.DELETE)
   ipcMain.handle(
     CONVERSATION_IPC_CHANNELS.DELETE,
@@ -274,11 +356,16 @@ export function registerFailingConversationIpcHandlers(
     throw formatConversationIpcError(err)
   }
 
+  ipcMain.removeHandler('conversation:create')
+
   const channels = [
-    CONVERSATION_IPC_CHANNELS.CREATE,
+    CONVERSATION_IPC_CHANNELS.GET_FOR_BOT,
+    CONVERSATION_IPC_CHANNELS.GET_SEGMENTS,
     CONVERSATION_IPC_CHANNELS.LIST,
     CONVERSATION_IPC_CHANNELS.GET_MESSAGES,
     CONVERSATION_IPC_CHANNELS.RENAME,
+    CONVERSATION_IPC_CHANNELS.GET_CLEAR_PREVIEW,
+    CONVERSATION_IPC_CHANNELS.CLEAR,
     CONVERSATION_IPC_CHANNELS.DELETE,
     CONVERSATION_IPC_CHANNELS.SEND_MESSAGE,
     CONVERSATION_IPC_CHANNELS.RETRY_LAST_USER_MESSAGE,

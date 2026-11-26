@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { StreamLifecycleStage } from './conversations'
 
 // ============================================================================
 // Canonical & Legacy Tool Identifiers
@@ -400,6 +401,7 @@ export interface DispatchAgentTaskRequest {
   readonly conversationId: string
   readonly taskPrompt: string
   readonly workspaceAccessRequested?: boolean
+  readonly executionMode?: 'agent'
 }
 
 export interface DispatchAgentTaskResponse {
@@ -491,6 +493,8 @@ export interface RespondToApprovalResponse {
 // ============================================================================
 
 export type AgentStreamEventType =
+  | 'agent_stage_change'
+  | 'agent_text_delta'
   | 'agent_run_started'
   | 'agent_iteration_started'
   | 'tool_call_started'
@@ -504,9 +508,22 @@ export type AgentStreamEventType =
 
 export interface AgentStreamEventBase {
   readonly agentRunId: string
-  readonly conversationId?: string
+  readonly conversationId: string
+  readonly botId?: string
+  readonly executionMode: 'agent'
+  readonly stage: StreamLifecycleStage
   readonly sequenceNumber: number
   readonly timestamp: number
+}
+
+export interface AgentStageChangeStreamEvent extends AgentStreamEventBase {
+  readonly type: 'agent_stage_change'
+  readonly stage: StreamLifecycleStage
+}
+
+export interface AgentTextDeltaStreamEvent extends AgentStreamEventBase {
+  readonly type: 'agent_text_delta'
+  readonly textDelta: string
 }
 
 export interface AgentRunStartedStreamEvent extends AgentStreamEventBase {
@@ -582,6 +599,8 @@ export interface AgentRunCancelledStreamEvent extends AgentStreamEventBase {
 }
 
 export type AgentStreamEvent =
+  | AgentStageChangeStreamEvent
+  | AgentTextDeltaStreamEvent
   | AgentRunStartedStreamEvent
   | AgentIterationStartedStreamEvent
   | ToolCallStartedStreamEvent
@@ -608,7 +627,8 @@ export const dispatchAgentTaskRequestSchema = z
       .max(MAX_AGENT_TASK_PROMPT_LENGTH, {
         message: `taskPrompt cannot exceed ${MAX_AGENT_TASK_PROMPT_LENGTH} characters.`
       }),
-    workspaceAccessRequested: z.boolean().optional().default(false)
+    workspaceAccessRequested: z.boolean().optional().default(false),
+    executionMode: z.literal('agent').optional().default('agent')
   })
   .strict()
 

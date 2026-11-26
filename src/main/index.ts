@@ -490,10 +490,13 @@ app.whenReady().then(async () => {
   // Initialize ActiveWorkspaceContext and BotManagerService, and register Bot IPC handlers
   try {
     botRepo = botRepo ?? new BotRepository(db)
+    conversationRepo = conversationRepo ?? new ConversationRepository(db)
     botManager = new BotManagerService({
       botRepo,
       kbRepo,
       connectionRepo,
+      conversationRepo,
+      db,
       registry: providerRegistry,
       activeContext: activeWorkspaceContext
     })

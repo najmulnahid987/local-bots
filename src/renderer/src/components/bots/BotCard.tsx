@@ -10,7 +10,11 @@ import {
   Trash2,
   Brain
 } from 'lucide-react'
-import type { BotDto } from '../../../../shared/bots'
+import {
+  getBotResponsePolicyMeta,
+  resolveBotResponsePolicy,
+  type BotDto
+} from '../../../../shared/bots'
 
 export interface BotCardProps {
   readonly bot: BotDto
@@ -231,6 +235,19 @@ export function BotCard({
               Unassigned
             </span>
           )}
+          {(() => {
+            const effectivePolicy = resolveBotResponsePolicy(bot.responsePolicy)
+            const policyMeta = getBotResponsePolicyMeta(effectivePolicy)
+            return (
+              <span
+                className={`bot-policy-badge policy-${effectivePolicy}`}
+                data-testid="bot-response-policy"
+                title={policyMeta.description}
+              >
+                {policyMeta.shortLabel}
+              </span>
+            )
+          })()}
         </div>
 
         <div className="bot-card-tools-section">

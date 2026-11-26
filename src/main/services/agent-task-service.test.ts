@@ -849,8 +849,17 @@ describe('AgentTaskService (Phase 8 Step 8.8)', () => {
     })
 
     it('allows different conversations to run agent tasks concurrently', async () => {
+      const bot2 = botRepo.create({
+        knowledgeBaseId: defaultKbId,
+        name: 'Researcher Bot 2',
+        description: 'Test Bot 2',
+        systemPrompt: 'You are an analytical researcher.',
+        modelId: 'gpt-6-luna',
+        providerConnectionId: defaultConnId,
+        toolPermissions: ['search_knowledge_base', 'read_workspace_file']
+      })
       const conv2 = convRepo.create({
-        botId: defaultBotId,
+        botId: bot2.id,
         knowledgeBaseId: defaultKbId,
         title: 'Thread 2'
       })
@@ -865,7 +874,7 @@ describe('AgentTaskService (Phase 8 Step 8.8)', () => {
           taskContent: 'Task 1'
         }),
         agentTaskService.dispatchTask(defaultSessionId, {
-          botId: defaultBotId,
+          botId: bot2.id,
           conversationId: conv2.id,
           taskContent: 'Task 2'
         })

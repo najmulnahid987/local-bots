@@ -733,10 +733,13 @@ describe('ConversationTurnService (Phase 7 Step 7.6B.3)', () => {
         expect(errEv.error.code).toBe('OPERATION_ABORTED')
       }
 
-      // User message was saved, assistant message was NOT saved
+      // Phase 12 Step 12.7: User message was saved, and partial assistant message was saved with isPartial: true
       const messages = msgRepo.listByConversation(convAId, botAId, kbAId)
-      expect(messages).toHaveLength(1)
+      expect(messages).toHaveLength(2)
       expect(messages[0].role).toBe('user')
+      expect(messages[1].role).toBe('assistant')
+      expect(messages[1].metadata.isPartial).toBe(true)
+      expect(messages[1].metadata.status).toBe('cancelled')
 
       expect(customTurnService.isGenerating(convAId)).toBe(false)
     })
@@ -949,6 +952,7 @@ describe('ConversationTurnService (Phase 7 Step 7.6B.3)', () => {
           providerConnectionId: connId,
           providerId: 'openai',
           modelId: 'gpt-6-luna',
+          responsePolicy: 'strict_kb_only',
           systemInstruction: 'Prompt',
           messages: [{ role: 'user', content: 'Crashed query' }],
           conversationMessages: [],
@@ -1436,6 +1440,543 @@ describe('ConversationTurnService (Phase 7 Step 7.6B.3)', () => {
       expect(retryResult.userMessage.id).toBe(userMsg.id)
       expect(retryResult.userMessage.content).toBe('Initial query')
       expect(retryResult.assistantMessage.content).toBeDefined()
+    })
+  })
+
+  describe('Step 12.3: Response Policy Selection Boundary', () => {
+    it('enforces strict_kb_only pre-flight refusal on NO_RESULTS without contacting provider, while balanced_kb_first and general_ai_chat execute without strict fallback', async () => {
+      vi.spyOn(ragService, 'retrieve').mockReturnValue({
+        status: 'NO_RESULTS',
+        chunks: [],
+        citations: [],
+        totalTokens: 0
+      })
+
+      const strictBot = botRepo.create({
+        knowledgeBaseId: kbAId,
+        providerConnectionId: connId,
+        name: 'Strict Chat Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'strict_kb_only'
+      })
+      const strictConv = convRepo.create({
+        botId: strictBot.id,
+        knowledgeBaseId: kbAId,
+        title: 'Strict Conv'
+      })
+
+      const balancedBot = botRepo.create({
+        knowledgeBaseId: kbAId,
+        providerConnectionId: connId,
+        name: 'Balanced Chat Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'balanced_kb_first'
+      })
+      const balancedConv = convRepo.create({
+        botId: balancedBot.id,
+        knowledgeBaseId: kbAId,
+        title: 'Balanced Conv'
+      })
+
+      const generalBot = botRepo.create({
+        knowledgeBaseId: kbAId,
+        providerConnectionId: connId,
+        name: 'General Chat Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'general_ai_chat'
+      })
+      const generalConv = convRepo.create({
+        botId: generalBot.id,
+        knowledgeBaseId: kbAId,
+        title: 'General Conv'
+      })
+
+      const streamMock = vi.fn((turn) =>
+        createMockExecutionStream({
+          botId: turn.botId,
+          conversationId: turn.conversationId,
+          resultText: 'General answer claiming fake citation [99] is ignored in metadata.'
+        })
+      )
+      const localTurnService = new ConversationTurnService({
+        db,
+        conversationRepo: convRepo,
+        messageRepo: msgRepo,
+        activeWorkspaceContext: activeContext,
+        conversationService,
+        executionService: {
+          streamPreparedTurn: streamMock
+        } as unknown as ConversationExecutionService,
+        persistenceService
+      })
+
+      // 1. Strict KB Only: intercepted before provider call
+      const strictStream = localTurnService.sendMessage(sessionId, {
+        conversationId: strictConv.id,
+        content: 'What is outside the KB?'
+      })
+      for await (const ev of strictStream) {
+        void ev
+      }
+      const strictResult = await strictStream.getResult()
+      expect(streamMock).not.toHaveBeenCalled()
+      expect(strictResult.assistantMessage.content).toContain('could not find')
+
+      // 2. Balanced KB First: does NOT fall back to strict refusal or UNGROUNDED_RESPONSE
+      const balancedStream = localTurnService.sendMessage(sessionId, {
+        conversationId: balancedConv.id,
+        content: 'Explain TypeScript generics'
+      })
+      for await (const ev of balancedStream) {
+        void ev
+      }
+      const balancedResult = await balancedStream.getResult()
+      expect(streamMock).toHaveBeenCalledTimes(1)
+      expect(streamMock.mock.calls[0][0].responsePolicy).toBe('balanced_kb_first')
+      expect(balancedResult.assistantMessage.content).toContain('General answer')
+      expect(balancedResult.assistantMessage.metadata.citations).toEqual([])
+
+      // 3. General AI Chat: does NOT fall back to strict refusal or UNGROUNDED_RESPONSE
+      const generalStream = localTurnService.sendMessage(sessionId, {
+        conversationId: generalConv.id,
+        content: 'Write a short poem'
+      })
+      for await (const ev of generalStream) {
+        void ev
+      }
+      const generalResult = await generalStream.getResult()
+      expect(streamMock).toHaveBeenCalledTimes(2)
+      expect(streamMock.mock.calls[1][0].responsePolicy).toBe('general_ai_chat')
+      expect(generalResult.assistantMessage.content).toContain('General answer')
+      expect(generalResult.assistantMessage.metadata.citations).toEqual([])
+      expect(generalResult.assistantMessage.metadata.groundingMode).toBe('general_chat')
+    })
+  })
+
+  describe('Step 12.4: Balanced KB-First Full Turn Execution & Failure Semantics', () => {
+    it('completes Balanced relevant, partial, empty-KB, and no-usable-KB turns with accurate persisted groundingMode metadata', async () => {
+      const balancedBot = botRepo.create({
+        knowledgeBaseId: kbAId,
+        providerConnectionId: connId,
+        name: 'Balanced Pipeline Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'balanced_kb_first'
+      })
+      const balancedConv = convRepo.create({
+        botId: balancedBot.id,
+        knowledgeBaseId: kbAId,
+        title: 'Balanced Pipeline Conv'
+      })
+
+      const streamMock = vi.fn((turn) =>
+        createMockExecutionStream({
+          botId: turn.botId,
+          conversationId: turn.conversationId,
+          resultText:
+            turn.citationCandidates.length > 0
+              ? 'From KB [1], authentication requires rotating tokens plus general context [99].'
+              : 'Answered via general model knowledge without citations [42].'
+        })
+      )
+      const localTurnService = new ConversationTurnService({
+        db,
+        conversationRepo: convRepo,
+        messageRepo: msgRepo,
+        activeWorkspaceContext: activeContext,
+        conversationService,
+        executionService: {
+          streamPreparedTurn: streamMock
+        } as unknown as ConversationExecutionService,
+        persistenceService
+      })
+
+      const retrieveSpy = vi.spyOn(ragService, 'retrieve')
+
+      // Case 1: Relevant KB evidence
+      retrieveSpy.mockReturnValueOnce({
+        status: 'SUCCESS',
+        chunks: [
+          {
+            citationNumber: 1,
+            sourceId: sampleCitation.sourceId,
+            chunkId: sampleCitation.chunkId,
+            fileName: sampleCitation.fileName,
+            fileType: sampleCitation.fileType,
+            pageNumber: sampleCitation.pageNumber,
+            headingPath: sampleCitation.headingPath,
+            chunkIndex: sampleCitation.chunkIndex,
+            score: 1.0,
+            content: 'Rotating tokens protocol',
+            tokenCount: 8,
+            isTruncated: false,
+            citation: sampleCitation
+          }
+        ],
+        citations: [sampleCitation],
+        totalTokens: 8,
+        assessment: {
+          outcome: 'relevant_evidence',
+          kbReadySourceCount: 1,
+          kbChunkCount: 1,
+          queryContentTermCount: 2,
+          matchedContentTermCount: 2,
+          termCoverageRatio: 1,
+          matchStrategy: 'exact'
+        }
+      })
+
+      const relevantStream = localTurnService.sendMessage(sessionId, {
+        conversationId: balancedConv.id,
+        content: 'Token rotation policy'
+      })
+      for await (const ev of relevantStream) {
+        void ev
+      }
+      const relevantResult = await relevantStream.getResult()
+      expect(relevantResult.assistantMessage.metadata.groundingMode).toBe('kb_grounded')
+      // Keeps authentic [1] citation and drops fabricated [99]
+      expect(relevantResult.assistantMessage.metadata.citations).toHaveLength(1)
+      expect(relevantResult.assistantMessage.metadata.citations![0].citationNumber).toBe(1)
+
+      // Case 3: Partial KB evidence
+      retrieveSpy.mockReturnValueOnce({
+        status: 'SUCCESS',
+        chunks: [
+          {
+            citationNumber: 1,
+            sourceId: sampleCitation.sourceId,
+            chunkId: sampleCitation.chunkId,
+            fileName: sampleCitation.fileName,
+            fileType: sampleCitation.fileType,
+            pageNumber: sampleCitation.pageNumber,
+            headingPath: sampleCitation.headingPath,
+            chunkIndex: sampleCitation.chunkIndex,
+            score: 0.7,
+            content: 'Rotating tokens protocol',
+            tokenCount: 8,
+            isTruncated: false,
+            citation: sampleCitation
+          }
+        ],
+        citations: [sampleCitation],
+        totalTokens: 8,
+        assessment: {
+          outcome: 'partial_evidence',
+          kbReadySourceCount: 1,
+          kbChunkCount: 1,
+          queryContentTermCount: 4,
+          matchedContentTermCount: 2,
+          termCoverageRatio: 0.5,
+          matchStrategy: 'relaxed_terms'
+        }
+      })
+
+      const partialStream = localTurnService.sendMessage(sessionId, {
+        conversationId: balancedConv.id,
+        content: 'Token rotation policy and Mars orbital relay'
+      })
+      for await (const ev of partialStream) {
+        void ev
+      }
+      const partialResult = await partialStream.getResult()
+      expect(partialResult.assistantMessage.metadata.groundingMode).toBe(
+        'kb_partial_with_general_fallback'
+      )
+      expect(partialResult.assistantMessage.metadata.citations).toHaveLength(1)
+
+      // Case 2: Populated KB with no relevant match
+      retrieveSpy.mockReturnValueOnce({
+        status: 'NO_RESULTS',
+        chunks: [],
+        citations: [],
+        totalTokens: 0,
+        assessment: {
+          outcome: 'no_relevant_evidence',
+          kbReadySourceCount: 1,
+          kbChunkCount: 2,
+          queryContentTermCount: 2,
+          matchedContentTermCount: 0,
+          termCoverageRatio: 0,
+          matchStrategy: 'none'
+        }
+      })
+
+      const noHitStream = localTurnService.sendMessage(sessionId, {
+        conversationId: balancedConv.id,
+        content: 'Black hole thermodynamics'
+      })
+      for await (const ev of noHitStream) {
+        void ev
+      }
+      const noHitResult = await noHitStream.getResult()
+      expect(noHitResult.assistantMessage.metadata.groundingMode).toBe(
+        'general_fallback_no_kb_evidence'
+      )
+      expect(noHitResult.assistantMessage.metadata.citations).toEqual([])
+
+      // Case 4: No usable KB content
+      retrieveSpy.mockReturnValueOnce({
+        status: 'NO_RESULTS',
+        chunks: [],
+        citations: [],
+        totalTokens: 0,
+        assessment: {
+          outcome: 'no_usable_kb',
+          kbReadySourceCount: 0,
+          kbChunkCount: 0,
+          queryContentTermCount: 2,
+          matchedContentTermCount: 0,
+          termCoverageRatio: 0,
+          matchStrategy: 'skipped'
+        }
+      })
+
+      const emptyKbStream = localTurnService.sendMessage(sessionId, {
+        conversationId: balancedConv.id,
+        content: 'Explain closures'
+      })
+      for await (const ev of emptyKbStream) {
+        void ev
+      }
+      const emptyKbResult = await emptyKbStream.getResult()
+      expect(emptyKbResult.assistantMessage.metadata.groundingMode).toBe(
+        'general_fallback_no_usable_kb'
+      )
+      expect(emptyKbResult.assistantMessage.metadata.citations).toEqual([])
+      expect(streamMock).toHaveBeenCalledTimes(4)
+    })
+
+    it('surfaces technical retrieval errors loudly on sendMessage and retryLastUserMessage without falling back to general AI', async () => {
+      const balancedBot = botRepo.create({
+        knowledgeBaseId: kbAId,
+        providerConnectionId: connId,
+        name: 'Balanced Error Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'balanced_kb_first'
+      })
+      const balancedConv = convRepo.create({
+        botId: balancedBot.id,
+        knowledgeBaseId: kbAId,
+        title: 'Balanced Error Conv'
+      })
+
+      const streamMock = vi.fn(() => createMockExecutionStream())
+      const localTurnService = new ConversationTurnService({
+        db,
+        conversationRepo: convRepo,
+        messageRepo: msgRepo,
+        activeWorkspaceContext: activeContext,
+        conversationService,
+        executionService: {
+          streamPreparedTurn: streamMock
+        } as unknown as ConversationExecutionService,
+        persistenceService
+      })
+
+      vi.spyOn(ragService, 'retrieve').mockImplementation(() => {
+        throw new Error('SQLITE_IOERR: simulated retrieval failure')
+      })
+
+      // 1. sendMessage fails loudly with RETRIEVAL_ERROR without calling provider
+      const sendStream = localTurnService.sendMessage(sessionId, {
+        conversationId: balancedConv.id,
+        content: 'Will fail retrieval'
+      })
+      const sendEvents: ConversationTurnEvent[] = []
+      for await (const ev of sendStream) {
+        sendEvents.push(ev)
+      }
+      expect(streamMock).not.toHaveBeenCalled()
+      const sendErr = sendEvents.find((e) => e.type === 'error')
+      expect(sendErr?.type).toBe('error')
+      if (sendErr?.type === 'error') {
+        expect(sendErr.error.code).toBe('RETRIEVAL_ERROR')
+      }
+      await expect(sendStream.getResult()).rejects.toMatchObject({
+        code: 'RETRIEVAL_ERROR'
+      })
+
+      // 2. retryLastUserMessage also surfaces RETRIEVAL_ERROR loudly without general fallback
+      const unansweredUser = msgRepo.create({
+        conversationId: balancedConv.id,
+        botId: balancedBot.id,
+        knowledgeBaseId: kbAId,
+        role: 'user',
+        content: 'Retry query'
+      })
+
+      const retryStream = localTurnService.retryLastUserMessage(sessionId, {
+        conversationId: balancedConv.id,
+        messageId: unansweredUser.id
+      })
+      const retryEvents: ConversationTurnEvent[] = []
+      for await (const ev of retryStream) {
+        retryEvents.push(ev)
+      }
+      expect(streamMock).not.toHaveBeenCalled()
+      const retryErr = retryEvents.find((e) => e.type === 'error')
+      expect(retryErr?.type).toBe('error')
+      if (retryErr?.type === 'error') {
+        expect(retryErr.error.code).toBe('RETRIEVAL_ERROR')
+      }
+      await expect(retryStream.getResult()).rejects.toMatchObject({
+        code: 'RETRIEVAL_ERROR'
+      })
+    })
+  })
+
+  describe('Step 12.5: Claim-Level Provenance Validation & Verifier Failure Resilience', () => {
+    it('persists per-claim provenance for mixed Balanced answers and rejects Strict partially supported claims', async () => {
+      const balancedBot = botRepo.create({
+        knowledgeBaseId: kbAId,
+        providerConnectionId: connId,
+        name: 'Balanced Claim Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'balanced_kb_first'
+      })
+      const balancedConv = convRepo.create({
+        botId: balancedBot.id,
+        knowledgeBaseId: kbAId,
+        title: 'Balanced Claim Conv'
+      })
+
+      const strictBot = botRepo.create({
+        knowledgeBaseId: kbAId,
+        providerConnectionId: connId,
+        name: 'Strict Claim Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'strict_kb_only'
+      })
+      const strictConv = convRepo.create({
+        botId: strictBot.id,
+        knowledgeBaseId: kbAId,
+        title: 'Strict Claim Conv'
+      })
+
+      const retrieveSpy = vi.spyOn(ragService, 'retrieve').mockReturnValue({
+        status: 'SUCCESS',
+        chunks: [
+          {
+            citationNumber: 1,
+            sourceId: sampleCitation.sourceId,
+            chunkId: sampleCitation.chunkId,
+            fileName: sampleCitation.fileName,
+            fileType: sampleCitation.fileType,
+            pageNumber: sampleCitation.pageNumber,
+            headingPath: sampleCitation.headingPath,
+            chunkIndex: sampleCitation.chunkIndex,
+            score: 1.0,
+            content: 'Standard authentication procedures require 30 second session handshakes.',
+            tokenCount: 12,
+            isTruncated: false,
+            citation: sampleCitation
+          }
+        ],
+        citations: [sampleCitation],
+        totalTokens: 12,
+        assessment: {
+          outcome: 'relevant_evidence',
+          kbReadySourceCount: 1,
+          kbChunkCount: 1,
+          queryContentTermCount: 2,
+          matchedContentTermCount: 2,
+          termCoverageRatio: 1,
+          matchStrategy: 'exact'
+        }
+      })
+
+      const mixedExec = {
+        streamPreparedTurn: vi.fn((turn) =>
+          createMockExecutionStream({
+            botId: turn.botId,
+            conversationId: turn.conversationId,
+            resultText:
+              turn.botId === balancedBot.id
+                ? 'Standard authentication procedures use 30 second session handshakes [1]. General cloud security recommends short token TTLs.'
+                : 'Standard authentication procedures require 999 second lockouts [1].'
+          })
+        )
+      } as unknown as ConversationExecutionService
+
+      const failingVerifierTurnService = new ConversationTurnService({
+        db,
+        conversationRepo: convRepo,
+        messageRepo: msgRepo,
+        activeWorkspaceContext: activeContext,
+        conversationService,
+        executionService: {
+          streamPreparedTurn: vi.fn((turn) =>
+            createMockExecutionStream({
+              botId: turn.botId,
+              conversationId: turn.conversationId,
+              resultText: 'Standard authentication procedures require 30 second handshakes [1].'
+            })
+          )
+        } as unknown as ConversationExecutionService,
+        persistenceService,
+        claimVerifier: {
+          verifyClaims: vi.fn().mockResolvedValue({ badPayload: true })
+        }
+      })
+
+      const localTurnService = new ConversationTurnService({
+        db,
+        conversationRepo: convRepo,
+        messageRepo: msgRepo,
+        activeWorkspaceContext: activeContext,
+        conversationService,
+        executionService: mixedExec,
+        persistenceService
+      })
+
+      // 1. Balanced mixed response persists KB + General AI claims & harmonizes groundingMode
+      const bStream = localTurnService.sendMessage(sessionId, {
+        conversationId: balancedConv.id,
+        content: 'How do session handshakes work?'
+      })
+      for await (const ev of bStream) {
+        void ev
+      }
+      const bResult = await bStream.getResult()
+      expect(bResult.assistantMessage.metadata.groundingMode).toBe(
+        'kb_partial_with_general_fallback'
+      )
+      expect(bResult.assistantMessage.metadata.claims).toHaveLength(2)
+      expect(bResult.assistantMessage.metadata.claims?.[0].provenance).toBe('kb_supported')
+      expect(
+        bResult.assistantMessage.metadata.claims?.[0].evidenceReferences[0].knowledgeBaseId
+      ).toBe(kbAId)
+      expect(bResult.assistantMessage.metadata.claims?.[1].provenance).toBe('general_knowledge')
+      expect(bResult.assistantMessage.metadata.claims?.[1].evidenceReferences).toEqual([])
+
+      // 2. Strict rejects partially supported / mismatched-number claim even with valid citation [1]
+      const sStream = localTurnService.sendMessage(sessionId, {
+        conversationId: strictConv.id,
+        content: 'What is the session handshake duration?'
+      })
+      for await (const ev of sStream) {
+        void ev
+      }
+      const sResult = await sStream.getResult()
+      expect(sResult.assistantMessage.content).toContain('could not be verified')
+      expect(sResult.assistantMessage.metadata.citations).toEqual([])
+      expect(sResult.assistantMessage.metadata.claims).toBeUndefined()
+
+      // 3. Malformed verifier never yields validated KB support under Balanced
+      const vStream = failingVerifierTurnService.sendMessage(sessionId, {
+        conversationId: balancedConv.id,
+        content: 'Verify handshake claim'
+      })
+      for await (const ev of vStream) {
+        void ev
+      }
+      const vResult = await vStream.getResult()
+      expect(vResult.assistantMessage.metadata.claims?.[0].provenance).toBe('uncertain')
+      expect(vResult.assistantMessage.metadata.claims?.[0].validationStatus).toBe(
+        'insufficient_evidence'
+      )
+
+      retrieveSpy.mockRestore()
     })
   })
 })

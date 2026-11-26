@@ -61,7 +61,8 @@ describe('ExtractionCompletenessEvaluator', () => {
         failed: 0,
         unknown: 0
       },
-      expectedSearchableCharacters: text.length
+      expectedSearchableCharacters: text.length,
+      expectedNormalizedText: text
     }
 
     const result = evaluator.evaluate(doc, inventory)
@@ -115,7 +116,8 @@ describe('ExtractionCompletenessEvaluator', () => {
         failed: 0,
         unknown: 0
       },
-      expectedSearchableCharacters: text.length
+      expectedSearchableCharacters: text.length,
+      expectedNormalizedText: text
     }
 
     const result = evaluator.evaluate(doc, inventory)
@@ -218,7 +220,8 @@ describe('ExtractionCompletenessEvaluator', () => {
         failed: 0,
         unknown: 0
       },
-      expectedSearchableCharacters: text.length
+      expectedSearchableCharacters: text.length,
+      expectedNormalizedText: text
     }
 
     const result = evaluator.evaluate(doc, inventory)
@@ -651,6 +654,399 @@ describe('ExtractionCompletenessEvaluator', () => {
       const result = evaluator.evaluate(doc, inventory)
       expect(result.status).not.toBe('complete')
       expect(result.status).toBe('partial')
+    })
+  })
+
+  describe('Finding A: Mandatory Textual Fidelity Tests', () => {
+    it('1. equal-length but different extracted text never receives complete textual fidelity', () => {
+      const originalText = 'The document is preserved.' // 26 chars
+      const modifiedText = 'The document is collapsed.' // 26 chars (same length)
+      const doc = makeMockDoc(modifiedText)
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'elem-1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: 26
+          }
+        ],
+        totalElements: 1,
+        elementCountsByType: { paragraph: 1 },
+        dispositionCounts: {
+          fully_extracted: 1,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedSearchableCharacters: 26,
+        expectedNormalizedText: originalText
+      }
+
+      const result = evaluator.evaluate(doc, inventory)
+      expect(result.textualFidelity).toBe('partial')
+      expect(result.status).toBe('partial')
+      expect(result.warnings.some((w) => w.includes('equal character count'))).toBe(true)
+    })
+
+    it('2. replaced paragraph with another paragraph of equal length is detected as partial', () => {
+      const originalText = 'Alpha paragraph.\n\nBravo paragraph.' // 16 + 2 + 16 = 34
+      const alteredText = 'Alpha paragraph.\n\nDelta paragraph.' // 16 + 2 + 16 = 34 (same length)
+      const doc = makeMockDoc(alteredText)
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'p1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: 34
+          }
+        ],
+        totalElements: 1,
+        elementCountsByType: { paragraph: 1 },
+        dispositionCounts: {
+          fully_extracted: 1,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedNormalizedText: originalText
+      }
+
+      const result = evaluator.evaluate(doc, inventory)
+      expect(result.textualFidelity).toBe('partial')
+      expect(result.status).toBe('partial')
+    })
+
+    it('3. detects missing text at the beginning', () => {
+      const originalText = 'Introductory header.\n\nBody content of the document.'
+      const truncatedText = 'Body content of the document.'
+      const doc = makeMockDoc(truncatedText)
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'p1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: truncatedText.length
+          }
+        ],
+        totalElements: 1,
+        elementCountsByType: { paragraph: 1 },
+        dispositionCounts: {
+          fully_extracted: 1,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedNormalizedText: originalText
+      }
+
+      const result = evaluator.evaluate(doc, inventory)
+      expect(result.textualFidelity).toBe('partial')
+      expect(result.warnings.some((w) => w.includes('at the beginning'))).toBe(true)
+    })
+
+    it('4. detects missing text in the middle', () => {
+      const originalText = 'Header line.\n\nMiddle missing paragraph.\n\nFooter line.'
+      const truncatedText = 'Header line.\n\nFooter line.'
+      const doc = makeMockDoc(truncatedText)
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'p1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: truncatedText.length
+          }
+        ],
+        totalElements: 1,
+        elementCountsByType: { paragraph: 1 },
+        dispositionCounts: {
+          fully_extracted: 1,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedNormalizedText: originalText
+      }
+
+      const result = evaluator.evaluate(doc, inventory)
+      expect(result.textualFidelity).toBe('partial')
+      expect(result.warnings.some((w) => w.includes('missing source content'))).toBe(true)
+    })
+
+    it('5. detects missing text at the end', () => {
+      const originalText = 'First section text.\n\nTrailing conclusion.'
+      const truncatedText = 'First section text.'
+      const doc = makeMockDoc(truncatedText)
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'p1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: truncatedText.length
+          }
+        ],
+        totalElements: 1,
+        elementCountsByType: { paragraph: 1 },
+        dispositionCounts: {
+          fully_extracted: 1,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedNormalizedText: originalText
+      }
+
+      const result = evaluator.evaluate(doc, inventory)
+      expect(result.textualFidelity).toBe('partial')
+      expect(result.warnings.some((w) => w.includes('at the end'))).toBe(true)
+    })
+
+    it('6. detects duplicated text', () => {
+      const originalText = 'Paragraph one.\n\nParagraph two.'
+      const duplicatedText = 'Paragraph one.\n\nParagraph one.\n\nParagraph two.'
+      const doc = makeMockDoc(duplicatedText)
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'p1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: originalText.length
+          }
+        ],
+        totalElements: 1,
+        elementCountsByType: { paragraph: 1 },
+        dispositionCounts: {
+          fully_extracted: 1,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedNormalizedText: originalText
+      }
+
+      const result = evaluator.evaluate(doc, inventory)
+      expect(result.textualFidelity).toBe('partial')
+      expect(result.warnings.some((w) => w.includes('duplicated characters'))).toBe(true)
+    })
+
+    it('7. detects reordered source blocks', () => {
+      const doc: UniversalDocument = {
+        id: 'doc-reorder',
+        format: 'txt',
+        extractedAt: Date.now(),
+        extractor: { id: 'test', name: 'Test', version: '1.0.0' },
+        text: 'Section B content.\n\nSection A content.',
+        blocks: [
+          { id: 'b2', type: 'paragraph', orderIndex: 0, text: 'Section B content.' },
+          { id: 'b1', type: 'paragraph', orderIndex: 1, text: 'Section A content.' }
+        ],
+        metadata: {},
+        warnings: [],
+        quality: { fidelity: 'high', isLossy: false, isOcr: false }
+      }
+
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'elem-1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: 18
+          },
+          {
+            id: 'elem-2',
+            type: 'paragraph',
+            orderIndex: 1,
+            disposition: 'fully_extracted',
+            blockId: 'b2',
+            isSearchable: true,
+            characterCount: 18
+          }
+        ],
+        totalElements: 2,
+        elementCountsByType: { paragraph: 2 },
+        dispositionCounts: {
+          fully_extracted: 2,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedNormalizedText: 'Section A content.\n\nSection B content.'
+      }
+
+      const result = evaluator.evaluate(doc, inventory)
+      expect(result.textualFidelity).toBe('partial')
+      expect(result.structuralFidelity).toBe('partial')
+      expect(result.status).toBe('partial')
+      expect(result.warnings.some((w) => w.includes('Reordered source blocks'))).toBe(true)
+    })
+
+    it('8. valid CRLF-to-LF normalization evaluates to complete', () => {
+      const sourceWithCrlf = 'Line 1\r\nLine 2\r\nLine 3\r\n'
+      const extractedLf = 'Line 1\nLine 2\nLine 3\n'
+      const doc = makeMockDoc(extractedLf)
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'p1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: extractedLf.length
+          }
+        ],
+        totalElements: 1,
+        elementCountsByType: { paragraph: 1 },
+        dispositionCounts: {
+          fully_extracted: 1,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedNormalizedText: sourceWithCrlf
+      }
+
+      const result = evaluator.evaluate(doc, inventory)
+      expect(result.textualFidelity).toBe('complete')
+      expect(result.status).toBe('complete')
+      expect(result.textualCoverage.status).toBe('exact')
+    })
+
+    it('9. valid Unicode normalization under documented NFC policy evaluates to complete', () => {
+      const decomposedNfd = 'cafe\u0301' // NFD: e + combining acute
+      const precomposedNfc = 'caf\u00E9' // NFC: é
+      const doc = makeMockDoc(precomposedNfc)
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'p1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: precomposedNfc.length
+          }
+        ],
+        totalElements: 1,
+        elementCountsByType: { paragraph: 1 },
+        dispositionCounts: {
+          fully_extracted: 1,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedNormalizedText: decomposedNfd
+      }
+
+      const result = evaluator.evaluate(doc, inventory)
+      expect(result.textualFidelity).toBe('complete')
+      expect(result.status).toBe('complete')
+    })
+
+    it('10. handles Bengali characters, combining marks, and emoji correctly', () => {
+      const bengaliAndEmoji = 'বাংলা ভাষা ও রোবট 🤖 \u0995\u09CD\u09B7'
+      const doc = makeMockDoc(bengaliAndEmoji)
+      const inventory: SourceElementInventory = {
+        format: 'txt',
+        sourceElements: [
+          {
+            id: 'p1',
+            type: 'paragraph',
+            orderIndex: 0,
+            disposition: 'fully_extracted',
+            blockId: 'b1',
+            isSearchable: true,
+            characterCount: bengaliAndEmoji.length
+          }
+        ],
+        totalElements: 1,
+        elementCountsByType: { paragraph: 1 },
+        dispositionCounts: {
+          fully_extracted: 1,
+          text_preserved_unparsed: 0,
+          reference_only: 0,
+          partially_extracted: 0,
+          unsupported: 0,
+          failed: 0,
+          unknown: 0
+        },
+        expectedNormalizedText: bengaliAndEmoji
+      }
+
+      const cleanResult = evaluator.evaluate(doc, inventory)
+      expect(cleanResult.textualFidelity).toBe('complete')
+      expect(cleanResult.status).toBe('complete')
+
+      // If Bengali characters were corrupted (e.g. replaced by question marks)
+      const corruptedDoc = makeMockDoc('???? ???? ? ???? 🤖 ???')
+      const corruptedResult = evaluator.evaluate(corruptedDoc, inventory)
+      expect(corruptedResult.textualFidelity).toBe('partial')
+      expect(corruptedResult.status).toBe('partial')
     })
   })
 })

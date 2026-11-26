@@ -42,6 +42,7 @@ describe('WorkspaceBotsPage Integration (Phase 6 Step 6.6)', () => {
     systemPrompt: 'You are an intelligent research assistant.',
     providerConnectionId: 'conn-openai-01',
     modelId: 'gpt-6-luna',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: ['search_knowledge_base', 'read_knowledge_base_document'],
     status: 'active',
     createdAt: 1700000000000,
@@ -56,6 +57,7 @@ describe('WorkspaceBotsPage Integration (Phase 6 Step 6.6)', () => {
     systemPrompt: 'You are an archived bot.',
     providerConnectionId: null,
     modelId: 'gpt-6-luna',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: [],
     status: 'archived',
     createdAt: 1690000000000,
@@ -135,6 +137,7 @@ describe('WorkspaceBotsPage Integration (Phase 6 Step 6.6)', () => {
         systemPrompt: request.systemPrompt ?? '',
         providerConnectionId: request.providerConnectionId ?? null,
         modelId: request.modelId,
+        responsePolicy: request.responsePolicy ?? 'balanced_kb_first',
         enabledTools: request.enabledTools ?? [],
         status: 'active',
         createdAt: Date.now(),
@@ -162,6 +165,7 @@ describe('WorkspaceBotsPage Integration (Phase 6 Step 6.6)', () => {
             ? request.providerConnectionId
             : existing.providerConnectionId,
         modelId: request.modelId ?? existing.modelId,
+        responsePolicy: request.responsePolicy ?? existing.responsePolicy,
         enabledTools: request.enabledTools ?? existing.enabledTools,
         updatedAt: Date.now()
       }
@@ -596,6 +600,70 @@ describe('WorkspaceBotsPage Integration (Phase 6 Step 6.6)', () => {
       // Create button is disabled
       expect((screen.getByTestId('create-bot-btn') as HTMLButtonElement).disabled).toBe(true)
       expect(listMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Step 12.3: Response Policy Creation, Editing & Header/Card Independence', () => {
+    it('creates a Bot with explicit responsePolicy, shows parent KB context, and updates policy independently of tools', async () => {
+      renderPage()
+
+      await waitFor(() => {
+        expect(screen.getByText('Research Assistant')).toBeDefined()
+      })
+
+      // 1. Open Create modal and verify parent KB context + Balanced default
+      fireEvent.click(screen.getByTestId('create-bot-btn'))
+      await waitFor(() => {
+        expect(screen.getByTestId('create-bot-modal')).toBeDefined()
+      })
+      expect(screen.getByTestId('parent-kb-indicator').textContent).toContain('Research Workspace')
+
+      const strictRadio = screen
+        .getByTestId('policy-option-strict_kb_only')
+        .querySelector('input') as HTMLInputElement
+      fireEvent.click(strictRadio)
+      fireEvent.change(screen.getByTestId('bot-name-input'), {
+        target: { value: 'Strict Workspace Bot' }
+      })
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('bot-form-submit-btn'))
+      })
+
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Strict Workspace Bot',
+          responsePolicy: 'strict_kb_only'
+        })
+      )
+
+      // 2. Edit Research Assistant to General AI Chat without altering enabledTools
+      await waitFor(() => {
+        expect(screen.getByText('Strict Workspace Bot')).toBeDefined()
+      })
+
+      fireEvent.click(screen.getByTestId(`bot-card-edit-btn-${sampleActiveBot.id}`))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('edit-bot-modal')).toBeDefined()
+      })
+
+      const generalRadio = screen
+        .getByTestId('policy-option-general_ai_chat')
+        .querySelector('input') as HTMLInputElement
+      fireEvent.click(generalRadio)
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('bot-form-submit-btn'))
+      })
+
+      expect(updateMock).toHaveBeenCalledWith(
+        sampleActiveBot.id,
+        expect.objectContaining({
+          responsePolicy: 'general_ai_chat',
+          enabledTools: ['search_knowledge_base', 'read_knowledge_base_document']
+        })
+      )
     })
   })
 })

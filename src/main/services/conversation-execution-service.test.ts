@@ -94,7 +94,8 @@ describe('ConversationExecutionService (Phase 7 Step 7.6B.1)', () => {
       includedMessageCount: 2,
       excludedMessageCount: 0,
       historyTrimmingOccurred: false,
-      ...overrides
+      ...overrides,
+      responsePolicy: overrides?.responsePolicy ?? 'balanced_kb_first'
     })
   }
 

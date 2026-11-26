@@ -6,6 +6,7 @@ import {
   documentExtractionResultToUniversalDocument,
   universalDocumentToLegacy
 } from '../../model/converter'
+import { serializeUniversalDocument, deserializeUniversalDocument } from '../../model/schema'
 import { PresentationChunker } from '../../chunking/presentation-chunker'
 import type {
   UniversalTableBlock,
@@ -797,6 +798,44 @@ describe('Phase 11 Step 11.8: PPTX Extraction Fidelity & Structured PowerPoint P
       expect(chunkingResult.chunks[0].content).toContain('[Slide 1: Architecture Strategy]')
       expect(chunkingResult.chunks[1].metadata?.slideNumber).toBe(2)
       expect(chunkingResult.chunks[1].content).toContain('[Slide 2: Execution Matrix]')
+    })
+
+    it('25. successfully serializes and deserializes multi-slide PPTX UniversalDocument without circular reference errors', async () => {
+      const pptx = buildRichPptx({
+        title: 'Multi-Slide Serialization Deck',
+        slides: [
+          {
+            title: 'Slide 1: Ingestion',
+            paragraphs: ['Paragraph 1', 'Paragraph 2']
+          },
+          {
+            title: 'Slide 2: Chunking',
+            paragraphs: ['Paragraph 3', 'Paragraph 4']
+          },
+          {
+            title: 'Slide 3: Retrieval',
+            paragraphs: ['Paragraph 5']
+          }
+        ]
+      })
+
+      const rawResult = await extractor.extract({ bytes: pptx })
+      const universalDoc = documentExtractionResultToUniversalDocument(rawResult, {
+        documentId: 'doc-pptx-multi',
+        sourceId: 'src-pptx-multi',
+        knowledgeBaseId: 'kb-001'
+      })
+
+      // Verify serialization does not throw Circular reference error on blocks[x].metadata.dimensions
+      expect(() => serializeUniversalDocument(universalDoc)).not.toThrow()
+      const json = serializeUniversalDocument(universalDoc)
+      expect(typeof json).toBe('string')
+      expect(json).toContain('Slide 1: Ingestion')
+      expect(json).toContain('Slide 2: Chunking')
+
+      const deserialized = deserializeUniversalDocument(json)
+      expect(deserialized.id).toBe(universalDoc.id)
+      expect(deserialized.blocks.length).toBe(universalDoc.blocks.length)
     })
   })
 })

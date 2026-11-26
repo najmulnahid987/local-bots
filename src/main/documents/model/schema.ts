@@ -239,7 +239,7 @@ export const universalDocumentSchema: z.ZodType<UniversalDocument> = z.object({
  * Detects and rejects BigInt, Function, Symbol, and circular references with informative path errors.
  */
 export function assertJsonSafe(value: unknown, rootPath = '$'): void {
-  const seen = new WeakSet<object>()
+  const activeStack = new WeakSet<object>()
 
   function walk(val: unknown, currentPath: string): void {
     if (val === null || val === undefined) {
@@ -262,21 +262,25 @@ export function assertJsonSafe(value: unknown, rootPath = '$'): void {
       )
     }
     if (valType === 'object') {
-      if (seen.has(val as object)) {
+      if (activeStack.has(val as object)) {
         throw new Error(
           `JSON serialization safety violation at ${currentPath}: Circular reference detected.`
         )
       }
-      seen.add(val as object)
+      activeStack.add(val as object)
 
-      if (Array.isArray(val)) {
-        for (let i = 0; i < val.length; i++) {
-          walk(val[i], `${currentPath}[${i}]`)
+      try {
+        if (Array.isArray(val)) {
+          for (let i = 0; i < val.length; i++) {
+            walk(val[i], `${currentPath}[${i}]`)
+          }
+        } else {
+          for (const [key, v] of Object.entries(val as Record<string, unknown>)) {
+            walk(v, `${currentPath}.${key}`)
+          }
         }
-      } else {
-        for (const [key, v] of Object.entries(val as Record<string, unknown>)) {
-          walk(v, `${currentPath}.${key}`)
-        }
+      } finally {
+        activeStack.delete(val as object)
       }
     }
   }

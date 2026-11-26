@@ -1,7 +1,8 @@
-import { ReactElement, useState, useRef, KeyboardEvent } from 'react'
-import { Send, Loader2, Square, MessageSquare, Bot, Sparkles } from 'lucide-react'
+import { ReactElement, useState, useRef, useEffect, KeyboardEvent } from 'react'
+import { Send, Loader2, Square, MessageSquare, Bot, Sparkles, AlertCircle } from 'lucide-react'
 import type { BotDto } from '../../../../shared/bots'
 import { isBotToolEnabled } from '../../../../shared/agents'
+import type { ExecutionMode } from '../../../../shared/conversations'
 
 export interface ConversationComposerProps {
   readonly onSend: (content: string) => Promise<void>
@@ -13,6 +14,8 @@ export interface ConversationComposerProps {
   readonly disabled?: boolean
   readonly placeholder?: string
   readonly bot?: BotDto | null
+  readonly mode?: ExecutionMode
+  readonly onModeChange?: (mode: ExecutionMode) => void
 }
 
 export function ConversationComposer({
@@ -24,17 +27,40 @@ export function ConversationComposer({
   isCancelling = false,
   disabled = false,
   placeholder = 'Type a message... (Enter to send, Shift+Enter for newline)',
-  bot = null
+  bot = null,
+  mode: controlledMode,
+  onModeChange
 }: ConversationComposerProps): ReactElement {
   const [content, setContent] = useState<string>('')
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
-  const [mode, setMode] = useState<'chat' | 'agent'>('chat')
+  const [internalMode, setInternalMode] = useState<ExecutionMode>('chat')
   const [workspaceAccessRequested, setWorkspaceAccessRequested] = useState<boolean>(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
+  const mode = controlledMode ?? internalMode
+
+  // Reset mode to 'chat' whenever switching bots to prevent accidental carryover
+  const lastBotIdRef = useRef<string | undefined>(bot?.id)
+  useEffect(() => {
+    if (bot?.id !== lastBotIdRef.current) {
+      lastBotIdRef.current = bot?.id
+      setInternalMode('chat')
+      onModeChange?.('chat')
+      setWorkspaceAccessRequested(false)
+    }
+  }, [bot?.id, onModeChange])
+
+  const handleModeSelect = (newMode: ExecutionMode): void => {
+    setInternalMode(newMode)
+    onModeChange?.(newMode)
+  }
+
+  const enabledTools = bot?.enabledTools ?? []
+  const hasTools = enabledTools.length > 0
+
   const isBusy = isGenerating || isTaskRunning || isSubmitting
   const isBlank = !content.trim()
-  const canSend = !disabled && !isBusy && !isBlank
+  const canSend = !disabled && !isBusy && !isBlank && (mode !== 'agent' || hasTools)
 
   const hasWorkspaceTools = Boolean(
     bot &&
@@ -119,7 +145,7 @@ export function ConversationComposer({
           className={`btn btn-sm ${mode === 'chat' ? 'btn-primary' : 'btn-secondary'}`}
           data-testid="composer-mode-chat-btn"
           aria-pressed={mode === 'chat'}
-          onClick={() => setMode('chat')}
+          onClick={() => handleModeSelect('chat')}
           disabled={isBusy || disabled}
           style={{
             padding: '3px 10px',
@@ -139,7 +165,7 @@ export function ConversationComposer({
           className={`btn btn-sm ${mode === 'agent' ? 'btn-primary' : 'btn-secondary'}`}
           data-testid="composer-mode-agent-btn"
           aria-pressed={mode === 'agent'}
-          onClick={() => setMode('agent')}
+          onClick={() => handleModeSelect('agent')}
           disabled={isBusy || disabled}
           style={{
             padding: '3px 10px',
@@ -155,8 +181,69 @@ export function ConversationComposer({
         </button>
       </div>
 
-      {/* Agent Task Mode Option: Workspace Folder Authorization Toggle */}
+      {/* Agent Mode Capability & Tool Context */}
       {mode === 'agent' && (
+        <div
+          className="agent-mode-context-panel"
+          data-testid="agent-mode-context-panel"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px'
+          }}
+        >
+          {hasTools ? (
+            <div
+              className="agent-tools-info"
+              data-testid="agent-tools-info"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '12px',
+                color: '#334155',
+                padding: '4px 8px',
+                borderRadius: '6px',
+                backgroundColor: '#f1f5f9'
+              }}
+            >
+              <Sparkles size={13} className="inline-icon text-accent" aria-hidden="true" />
+              <span data-testid="agent-tools-count-badge" style={{ fontWeight: 600 }}>
+                {enabledTools.length} tool{enabledTools.length === 1 ? '' : 's'} enabled:
+              </span>
+              <span data-testid="agent-tools-list" style={{ color: '#475569' }}>
+                {enabledTools.map((t) => t.replace(/_/g, ' ')).join(', ')}
+              </span>
+            </div>
+          ) : (
+            <div
+              className="agent-no-tools-warning"
+              data-testid="agent-no-tools-warning"
+              role="alert"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 10px',
+                borderRadius: '6px',
+                backgroundColor: '#fffbeb',
+                border: '1px solid #fef3c7',
+                color: '#b45309',
+                fontSize: '12px'
+              }}
+            >
+              <AlertCircle size={14} className="inline-icon text-warning" aria-hidden="true" />
+              <span>
+                This Bot has no enabled tools. Configure tools in Bot settings to execute Agent
+                tasks.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Agent Task Mode Option: Workspace Folder Authorization Toggle */}
+      {mode === 'agent' && hasTools && (
         <div
           className="workspace-access-container"
           data-testid="workspace-access-container"

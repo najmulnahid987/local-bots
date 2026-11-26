@@ -18,6 +18,7 @@ describe('Renderer: BotDeleteDialog (Phase 6 Step 6.5)', () => {
     systemPrompt: '',
     providerConnectionId: 'conn-1',
     modelId: 'gpt-6-luna',
+    responsePolicy: 'balanced_kb_first',
     enabledTools: ['search_knowledge_base'],
     status: 'active',
     createdAt: 1700000000000,

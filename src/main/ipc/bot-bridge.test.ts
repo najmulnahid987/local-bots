@@ -596,6 +596,7 @@ describe('Phase 6 Step 6.3: Bot IPC Bridge & Preload Integration', () => {
         systemPrompt: '',
         modelId: 'gpt-6-luna',
         status: 'active',
+        responsePolicy: 'balanced_kb_first',
         enabledTools: [],
         createdAt: 1000,
         updatedAt: 1000
@@ -684,6 +685,45 @@ describe('Phase 6 Step 6.3: Bot IPC Bridge & Preload Integration', () => {
       registerFailingBotIpcHandlers(() => mockWindow, 'SQLite connection died.')
 
       await expect(invoke(BOT_IPC_CHANNELS.LIST)).rejects.toThrow(/BOT_SUBSYSTEM_FAILED/)
+    })
+  })
+
+  describe('8. Step 12.3 Response Policy IPC Roundtrip & Validation', () => {
+    it('creates, retrieves, lists, and updates responsePolicy independently over IPC', async () => {
+      const kb = kbRepo.create({ name: 'IPC Policy KB' })
+      await invoke(BOT_IPC_CHANNELS.ACTIVATE_WORKSPACE, { id: kb.id })
+
+      const defaultBot = (await invoke(BOT_IPC_CHANNELS.CREATE, {
+        name: 'Default Policy Bot',
+        modelId: 'gpt-6-luna'
+      })) as BotDto
+      expect(defaultBot.responsePolicy).toBe('balanced_kb_first')
+
+      const strictBot = (await invoke(BOT_IPC_CHANNELS.CREATE, {
+        name: 'Strict Policy Bot',
+        modelId: 'gpt-6-luna',
+        responsePolicy: 'strict_kb_only',
+        enabledTools: ['search_knowledge_base']
+      })) as BotDto
+      expect(strictBot.responsePolicy).toBe('strict_kb_only')
+
+      const updatedBot = (await invoke(BOT_IPC_CHANNELS.UPDATE, {
+        id: strictBot.id,
+        input: { responsePolicy: 'general_ai_chat' }
+      })) as BotDto
+      expect(updatedBot.responsePolicy).toBe('general_ai_chat')
+      expect(updatedBot.enabledTools).toEqual(['search_knowledge_base'])
+
+      const fetched = (await invoke(BOT_IPC_CHANNELS.GET, { id: strictBot.id })) as BotDto
+      expect(fetched.responsePolicy).toBe('general_ai_chat')
+
+      await expect(
+        invoke(BOT_IPC_CHANNELS.CREATE, {
+          name: 'Invalid Policy Bot',
+          modelId: 'gpt-6-luna',
+          responsePolicy: 'not_a_real_policy'
+        })
+      ).rejects.toThrow(/VALIDATION_ERROR/)
     })
   })
 })

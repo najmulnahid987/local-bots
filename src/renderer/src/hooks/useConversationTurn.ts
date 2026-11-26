@@ -4,7 +4,9 @@ import type {
   SendMessageRequest,
   ConversationTurnResultDto,
   PublicConversationTurnEvent,
-  ConversationApi
+  ConversationApi,
+  StreamLifecycleStage,
+  MessageDto
 } from '../../../shared/conversations'
 import { ConversationBridgeError } from '../../../shared/conversations'
 
@@ -12,6 +14,7 @@ export interface TurnError {
   readonly code: string
   readonly message: string
   readonly retryable: boolean
+  readonly partialMessage?: MessageDto
 }
 
 export interface UseConversationTurnOptions {
@@ -24,6 +27,7 @@ export interface UseConversationTurnOptions {
 export interface UseConversationTurnState {
   readonly isGenerating: boolean
   readonly isCancelling: boolean
+  readonly stage: StreamLifecycleStage
   readonly streamingText: string
   readonly activeRequestId: string | null
   readonly finishResult: ConversationTurnResultDto | null
@@ -43,16 +47,23 @@ export interface UseConversationTurnState {
 function sanitizeConversationError(err: unknown): TurnError {
   let code = 'GENERATION_ERROR'
   let retryable = false
+  let partialMessage: MessageDto | undefined
 
   if (err instanceof ConversationBridgeError) {
     code = err.code
     retryable = err.retryable
+    if ('partialMessage' in err && err.partialMessage) {
+      partialMessage = err.partialMessage as MessageDto
+    }
   } else if (err && typeof err === 'object') {
     if ('code' in err && typeof (err as { code: unknown }).code === 'string') {
       code = (err as { code: string }).code
     }
     if ('retryable' in err && typeof (err as { retryable: unknown }).retryable === 'boolean') {
       retryable = (err as { retryable: boolean }).retryable
+    }
+    if ('partialMessage' in err && (err as { partialMessage: unknown }).partialMessage) {
+      partialMessage = (err as { partialMessage: MessageDto }).partialMessage
     }
   }
 
@@ -74,7 +85,8 @@ function sanitizeConversationError(err: unknown): TurnError {
   return {
     code,
     message: sanitizedMsg,
-    retryable
+    retryable,
+    ...(partialMessage ? { partialMessage } : {})
   }
 }
 
@@ -107,6 +119,7 @@ export function useConversationTurn(
 
   const [isGenerating, setIsGenerating] = useState<boolean>(false)
   const [isCancelling, setIsCancelling] = useState<boolean>(false)
+  const [stage, setStage] = useState<StreamLifecycleStage>('idle')
   const [streamingText, setStreamingText] = useState<string>('')
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null)
   const [finishResult, setFinishResult] = useState<ConversationTurnResultDto | null>(null)
@@ -153,6 +166,7 @@ export function useConversationTurn(
       isGeneratingRef.current = false
       setIsGenerating(false)
       setIsCancelling(false)
+      setStage('idle')
       setStreamingText('')
       setActiveRequestId(null)
       setError(null)
@@ -190,6 +204,7 @@ export function useConversationTurn(
     isGeneratingRef.current = false
     setIsGenerating(false)
     setIsCancelling(false)
+    setStage('idle')
   }, [])
 
   const sendMessage = useCallback(
@@ -235,6 +250,7 @@ export function useConversationTurn(
 
       setIsGenerating(true)
       setIsCancelling(false)
+      setStage('preparing')
       setStreamingText('')
       setActiveRequestId(requestId)
       setError(null)
@@ -246,13 +262,21 @@ export function useConversationTurn(
           return
         }
 
-        if (event.type === 'text_delta') {
+        if (event.type === 'stage_change') {
+          setStage(event.stage)
+        } else if (event.type === 'text_delta') {
+          setStage('streaming')
           setStreamingText((prev) => prev + event.textDelta)
+        } else if (event.type === 'finish') {
+          setStage('completed')
         } else if (event.type === 'error') {
+          const isCancelled = event.error.code === 'OPERATION_ABORTED'
+          setStage(isCancelled ? 'cancelled' : 'failed')
           const turnError: TurnError = {
             code: event.error.code,
             message: event.error.message,
-            retryable: event.error.retryable
+            retryable: event.error.retryable,
+            partialMessage: event.partialMessage
           }
           setError(turnError)
           setIsGenerating(false)
@@ -274,6 +298,7 @@ export function useConversationTurn(
 
         if (mountedRef.current && activeRequestIdRef.current === requestId) {
           setFinishResult(result)
+          setStage('completed')
           setIsGenerating(false)
           isGeneratingRef.current = false
           setStreamingText('')
@@ -286,7 +311,11 @@ export function useConversationTurn(
       } catch (err) {
         const turnError = sanitizeConversationError(err)
         if (mountedRef.current && activeRequestIdRef.current === requestId) {
-          setError(turnError)
+          setStage(turnError.code === 'OPERATION_ABORTED' ? 'cancelled' : 'failed')
+          setError((prev) => ({
+            ...turnError,
+            partialMessage: turnError.partialMessage ?? prev?.partialMessage
+          }))
           setIsGenerating(false)
           isGeneratingRef.current = false
           activeRequestIdRef.current = null
@@ -330,6 +359,7 @@ export function useConversationTurn(
 
       setIsGenerating(true)
       setIsCancelling(false)
+      setStage('preparing')
       setStreamingText('')
       setActiveRequestId(requestId)
       setError(null)
@@ -340,13 +370,21 @@ export function useConversationTurn(
           return
         }
 
-        if (event.type === 'text_delta') {
+        if (event.type === 'stage_change') {
+          setStage(event.stage)
+        } else if (event.type === 'text_delta') {
+          setStage('streaming')
           setStreamingText((prev) => prev + event.textDelta)
+        } else if (event.type === 'finish') {
+          setStage('completed')
         } else if (event.type === 'error') {
+          const isCancelled = event.error.code === 'OPERATION_ABORTED'
+          setStage(isCancelled ? 'cancelled' : 'failed')
           const turnError: TurnError = {
             code: event.error.code,
             message: event.error.message,
-            retryable: event.error.retryable
+            retryable: event.error.retryable,
+            partialMessage: event.partialMessage
           }
           setError(turnError)
           setIsGenerating(false)
@@ -367,6 +405,7 @@ export function useConversationTurn(
 
         if (mountedRef.current && activeRequestIdRef.current === requestId) {
           setFinishResult(result)
+          setStage('completed')
           setIsGenerating(false)
           isGeneratingRef.current = false
           setStreamingText('')
@@ -379,7 +418,11 @@ export function useConversationTurn(
       } catch (err) {
         const turnError = sanitizeConversationError(err)
         if (mountedRef.current && activeRequestIdRef.current === requestId) {
-          setError(turnError)
+          setStage(turnError.code === 'OPERATION_ABORTED' ? 'cancelled' : 'failed')
+          setError((prev) => ({
+            ...turnError,
+            partialMessage: turnError.partialMessage ?? prev?.partialMessage
+          }))
           setIsGenerating(false)
           isGeneratingRef.current = false
           activeRequestIdRef.current = null
@@ -405,6 +448,7 @@ export function useConversationTurn(
       await api.cancelGeneration(currentReqId)
     } finally {
       if (mountedRef.current) {
+        setStage('cancelled')
         setIsGenerating(false)
         setIsCancelling(false)
         isGeneratingRef.current = false
@@ -418,6 +462,7 @@ export function useConversationTurn(
   return {
     isGenerating,
     isCancelling,
+    stage,
     streamingText,
     activeRequestId,
     finishResult,

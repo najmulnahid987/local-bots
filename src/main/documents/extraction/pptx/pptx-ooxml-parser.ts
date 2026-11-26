@@ -392,7 +392,7 @@ export class PptxOoxmlParser {
           isBlank,
           ...(sectionName ? { sectionName } : {}),
           ...(transition ? { transition } : {}),
-          dimensions
+          dimensions: { ...dimensions }
         }
       }
 
@@ -429,7 +429,7 @@ export class PptxOoxmlParser {
         hiddenSlideCount,
         mediaCount: pkg.validationResult.mediaEntries.length,
         sections: sections.map((s) => ({ name: s.name, slideIndices: [...s.slideIndices] })),
-        dimensions
+        dimensions: { ...dimensions }
       },
       warnings,
       quality: {

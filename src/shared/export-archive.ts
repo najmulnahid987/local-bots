@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { knowledgeBaseIdSchema } from './knowledge-bases'
+import { botResponsePolicySchema, type BotResponsePolicy } from './bots'
 
 /**
  * Format identifier and schema version for Voyaro Knowledge Base export archives.
@@ -87,6 +88,7 @@ export interface ExportBotDto {
   readonly systemPrompt: string
   readonly modelId: string
   readonly status: 'active' | 'archived'
+  readonly responsePolicy?: BotResponsePolicy
   readonly toolPermissions: readonly string[]
   readonly createdAt: number
   readonly updatedAt: number
@@ -247,6 +249,7 @@ export const exportBotDtoSchema = z
     systemPrompt: z.string(),
     modelId: z.string().min(1),
     status: z.enum(['active', 'archived']),
+    responsePolicy: botResponsePolicySchema.optional(),
     toolPermissions: z.array(z.string()),
     createdAt: z.number().int().positive(),
     updatedAt: z.number().int().positive()

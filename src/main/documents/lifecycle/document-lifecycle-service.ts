@@ -30,7 +30,11 @@ import {
 import {
   type PreservationValidator,
   type DocumentPreservationReport,
-  defaultPreservationValidator
+  type ValidationStatus,
+  ChunkCoverageEvaluator,
+  defaultPreservationValidator,
+  defaultExtractionCompletenessEvaluator,
+  defaultSourceElementInventoryGenerator
 } from '../validation'
 import { toKnowledgeSourceDto, sanitizeDocumentErrorMessage } from '../../ipc/document-validation'
 import type { DocumentLifecycleServiceOptions } from './types'
@@ -302,6 +306,181 @@ export class DocumentLifecycleService {
       throw err
     } finally {
       this.activeOperations.delete(lockKey)
+    }
+  }
+
+  /**
+   * Regenerates retrieval chunks and recalculates chunk coverage directly from the
+   * canonical UniversalDocument when restoring a modern backup.
+   *
+   * Invariants:
+   * 1. Verifies restored original file exists and SHA-256 matches manifest and database record.
+   * 2. Uses canonical UniversalDocument directly without reparsing the raw file.
+   * 3. Runs the CURRENT format-aware chunker.
+   * 4. Persists the newly generated chunks and updates SQLite FTS5 index via replaceChunks.
+   * 5. Recalculates chunk coverage using the current ChunkCoverageEvaluator.
+   * 6. Records current chunker and validator versions.
+   * 7. Updates the preservation report with the fresh chunk coverage result.
+   * 8. Preserves the original extraction report only if valid for the same verified original and extractor version.
+   * 9. If UniversalDocument or report is missing/corrupted, safely re-indexes from verified original.
+   * 10. If original file hash mismatches manifest, fails closed.
+   */
+  public async restoreAndRegenerateDocument(options: {
+    knowledgeBaseId: string
+    sourceId: string
+    expectedContentHash?: string
+  }): Promise<ReindexDocumentResultDto> {
+    const { knowledgeBaseId, sourceId, expectedContentHash } = options
+
+    // Verify source exists
+    const source = this.sourceRepository.getById(sourceId, knowledgeBaseId)
+    if (!source) {
+      throw new Error(`Source '${sourceId}' not found in Knowledge Base '${knowledgeBaseId}'.`)
+    }
+
+    // Verify file on disk exists and verify SHA-256
+    const storagePath = this.storageManager.resolveOriginalPath(
+      knowledgeBaseId,
+      sourceId,
+      source.file_type
+    )
+    if (!fs.existsSync(storagePath)) {
+      throw DocumentErrors.fileNotFound()
+    }
+
+    const fileBytes = await fs.promises.readFile(storagePath)
+    const computedHash = crypto.createHash('sha256').update(fileBytes).digest('hex').toLowerCase()
+
+    if (expectedContentHash && computedHash !== expectedContentHash.toLowerCase()) {
+      const err = new Error(
+        `CHECKSUM_MISMATCH: Original file hash mismatch for source '${source.file_name}': expected ${expectedContentHash}, got ${computedHash}. Cannot verify as authentic original.`
+      )
+      ;(err as unknown as { code: string }).code = 'CHECKSUM_MISMATCH'
+      throw err
+    }
+
+    if (computedHash !== source.content_hash.toLowerCase()) {
+      const err = new Error(
+        'CHECKSUM_MISMATCH: Original file checksum on disk does not match registered database record.'
+      )
+      ;(err as unknown as { code: string }).code = 'CHECKSUM_MISMATCH'
+      throw err
+    }
+
+    // Try loading persisted canonical UniversalDocument
+    let universalDoc: UniversalDocument | null
+    try {
+      universalDoc = this.extractedDocRepo.get(sourceId, knowledgeBaseId)
+    } catch {
+      universalDoc = null
+    }
+
+    // If UniversalDocument is missing or invalid, fall back to re-extracting from verified original
+    if (!universalDoc || !Array.isArray(universalDoc.blocks)) {
+      return await this.reindex({ knowledgeBaseId, sourceId })
+    }
+
+    // 1. Run the CURRENT format-aware chunker on the canonical UniversalDocument
+    const chunkingResult = this.universalChunker.chunk(universalDoc)
+
+    // 2. Recalculate chunk coverage using current ChunkCoverageEvaluator
+    const coverageEvaluator = new ChunkCoverageEvaluator()
+    const chunkReport = coverageEvaluator.evaluate(universalDoc, chunkingResult)
+
+    // 3. Load restored preservation report if available
+    let restoredReport: DocumentPreservationReport | null
+    try {
+      restoredReport = this.validationRepo.getReport(sourceId, knowledgeBaseId)
+    } catch {
+      restoredReport = null
+    }
+
+    // 4. Derive updated preservation report
+    let extractionReport = restoredReport?.extractionReport
+    const isExtractorValid =
+      extractionReport &&
+      restoredReport?.versions.extractorVersion === universalDoc.extractor?.version
+
+    if (!isExtractorValid || !extractionReport) {
+      // Re-evaluate extraction completeness against the inventory
+      const completenessEvaluator = defaultExtractionCompletenessEvaluator
+      const inventoryGenerator = defaultSourceElementInventoryGenerator
+      const inventory = inventoryGenerator.generateInventory(
+        source.file_type,
+        fileBytes,
+        universalDoc
+      )
+      extractionReport = completenessEvaluator.evaluate(universalDoc, inventory)
+    }
+
+    let overallStatus: ValidationStatus
+    if (extractionReport.status === 'failed' || chunkReport.status === 'failed') {
+      overallStatus = 'failed'
+    } else if (extractionReport.status === 'partial' || chunkReport.status === 'partial') {
+      overallStatus = 'partial'
+    } else if (extractionReport.status === 'complete' && chunkReport.status === 'complete') {
+      overallStatus = 'complete'
+    } else {
+      overallStatus = 'unknown'
+    }
+
+    const now = Date.now()
+    const updatedPreservationReport: DocumentPreservationReport = {
+      schemaVersion: '1.0.0',
+      sourceId,
+      format: source.file_type,
+      timestamp: now,
+      status: overallStatus,
+      extractionStatus: extractionReport.status,
+      textualFidelity: extractionReport.textualFidelity,
+      structuralFidelity: extractionReport.structuralFidelity,
+      chunkCoverageStatus: chunkReport.status,
+      extractionReport,
+      chunkReport,
+      warnings: Array.from(new Set([...extractionReport.warnings, ...chunkReport.warnings])),
+      errors: Array.from(new Set([...chunkReport.errors])),
+      measurementLimitations: Array.from(
+        new Set([...(extractionReport.measurementLimitations ?? [])])
+      ),
+      versions: {
+        extractorVersion: universalDoc.extractor?.version,
+        chunkerVersion: chunkingResult.chunkerVersion,
+        validatorVersion: '1.0.0'
+      }
+    }
+
+    // 5. Atomic persist: chunks, FTS5 (via trigger), updated validation report, source status
+    const chunkInputs: CreateKnowledgeChunkInput[] = chunkingResult.chunks.map((c) => ({
+      id: randomUUID(),
+      knowledge_base_id: knowledgeBaseId,
+      source_id: sourceId,
+      chunk_index: c.chunkIndex,
+      content: c.content,
+      page_number: c.pageNumber,
+      token_count: c.tokenCount,
+      metadata_json: JSON.stringify({
+        ...c.metadata,
+        chunkerVersion: chunkingResult.chunkerVersion
+      }),
+      created_at: now
+    }))
+
+    const tx = this.db.transaction(() => {
+      this.validationRepo.saveReport(sourceId, updatedPreservationReport, now, knowledgeBaseId)
+      this.sourceRepository.replaceChunks(sourceId, knowledgeBaseId, chunkInputs, now)
+      this.sourceRepository.updateStatus(sourceId, knowledgeBaseId, 'completed', null)
+    })
+    tx()
+
+    const updatedSource = this.sourceRepository.getByIdWithChunkCount(sourceId, knowledgeBaseId)!
+
+    return {
+      status: 'completed',
+      source: toKnowledgeSourceDto(updatedSource),
+      totalChunks: chunkingResult.totalChunks,
+      totalTokens: chunkingResult.totalTokens,
+      chunkerVersion: chunkingResult.chunkerVersion,
+      preservationReport: updatedPreservationReport
     }
   }
 

@@ -63,6 +63,9 @@ describe('Renderer: useAgentTaskEvents hook', () => {
       streamListener?.({
         type: 'tool_call_started',
         agentRunId: 'run-stream-01',
+        conversationId: 'conv-01',
+        executionMode: 'agent',
+        stage: 'streaming',
         sequenceNumber: 1,
         timestamp: 1000,
         toolEventId: 'call-01',
@@ -80,7 +83,10 @@ describe('Renderer: useAgentTaskEvents hook', () => {
       streamListener?.({
         type: 'tool_call_completed',
         agentRunId: 'run-stream-01',
-        sequenceNumber: 1,
+        conversationId: 'conv-01',
+        executionMode: 'agent',
+        stage: 'streaming',
+        sequenceNumber: 2,
         timestamp: 1500,
         toolEventId: 'call-01',
         toolName: 'search_knowledge_base',
@@ -96,7 +102,10 @@ describe('Renderer: useAgentTaskEvents hook', () => {
       streamListener?.({
         type: 'agent_run_completed',
         agentRunId: 'run-stream-01',
-        sequenceNumber: 2,
+        conversationId: 'conv-01',
+        executionMode: 'agent',
+        stage: 'completed',
+        sequenceNumber: 3,
         timestamp: 1600,
         finalResponse: 'Budget summary report completed.',
         iterations: 1,
@@ -124,6 +133,9 @@ describe('Renderer: useAgentTaskEvents hook', () => {
       streamListener?.({
         type: 'approval_requested',
         agentRunId: 'run-stream-02',
+        conversationId: 'conv-01',
+        executionMode: 'agent',
+        stage: 'streaming',
         sequenceNumber: 1,
         timestamp: 2000,
         approvalRequestId: 'req-01',

@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   CONVERSATION_IPC_CHANNELS,
+  type BotConversationWorkspaceDto,
+  type ClearConversationPreviewDto,
+  type ClearConversationResultDto,
   type ConversationDto,
+  type ConversationSegmentDto,
   type MessageDto,
   type DeleteConversationResultDto,
   type PublicConversationTurnEvent,
@@ -371,8 +375,12 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
   })
 
   describe('1. Sender & Frame Validation', () => {
+    it('does not register removed conversation:create channel handler', () => {
+      expect(mockIpcHandlers.get('conversation:create')).toBeUndefined()
+    })
+
     it('rejects an unauthorized sender webContents', async () => {
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       expect(handler).toBeDefined()
 
       const unauthorizedSender = createMockWebContents(999)
@@ -381,39 +389,33 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
         senderFrame: unauthorizedSender.mainFrame
       }
 
-      await expect(handler!(event, { botId: bot1Id, title: 'Test' })).rejects.toThrow(
-        /UNAUTHORIZED_SENDER/
-      )
+      await expect(handler!(event, { botId: bot1Id })).rejects.toThrow(/UNAUTHORIZED_SENDER/)
     })
 
     it('rejects an unauthorized frame (e.g. child frame / iframe)', async () => {
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       const fakeChildFrame = { url: 'http://localhost:5173/child.html' } as WebFrameMainLike
       const event: IpcSenderEventLike = {
         sender: mockWebContents1,
         senderFrame: fakeChildFrame
       }
 
-      await expect(handler!(event, { botId: bot1Id, title: 'Test' })).rejects.toThrow(
-        /UNAUTHORIZED_SENDER/
-      )
+      await expect(handler!(event, { botId: bot1Id })).rejects.toThrow(/UNAUTHORIZED_SENDER/)
     })
 
     it('rejects when main window is destroyed', async () => {
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       isWindow1Destroyed = true
       const event: IpcSenderEventLike = {
         sender: mockWebContents1,
         senderFrame: mockWebContents1.mainFrame
       }
 
-      await expect(handler!(event, { botId: bot1Id, title: 'Test' })).rejects.toThrow(
-        /UNAUTHORIZED_SENDER/
-      )
+      await expect(handler!(event, { botId: bot1Id })).rejects.toThrow(/UNAUTHORIZED_SENDER/)
     })
 
     it('rejects when sender URL is untrusted', async () => {
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       const evilContents = createMockWebContents(1)
       ;(evilContents.mainFrame as { url: string }).url = 'https://malicious.evil.com/phish'
       const event: IpcSenderEventLike = {
@@ -421,15 +423,13 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
         senderFrame: evilContents.mainFrame
       }
 
-      await expect(handler!(event, { botId: bot1Id, title: 'Test' })).rejects.toThrow(
-        /UNAUTHORIZED_SENDER/
-      )
+      await expect(handler!(event, { botId: bot1Id })).rejects.toThrow(/UNAUTHORIZED_SENDER/)
     })
   })
 
   describe('2. Session & Knowledge Base Isolation', () => {
     it('rejects payload attempting to inject knowledgeBaseId', async () => {
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       const event: IpcSenderEventLike = {
         sender: mockWebContents1,
         senderFrame: mockWebContents1.mainFrame
@@ -438,14 +438,13 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
       await expect(
         handler!(event, {
           botId: bot1Id,
-          title: 'Malicious KB injection',
           knowledgeBaseId: kb2Id
         })
       ).rejects.toThrow(/INVALID_INPUT/)
     })
 
     it('rejects payload attempting to inject sessionId', async () => {
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       const event: IpcSenderEventLike = {
         sender: mockWebContents1,
         senderFrame: mockWebContents1.mainFrame
@@ -454,14 +453,13 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
       await expect(
         handler!(event, {
           botId: bot1Id,
-          title: 'Malicious session injection',
           sessionId: 2
         })
       ).rejects.toThrow(/INVALID_INPUT/)
     })
 
-    it('rejects creating a conversation for a Bot belonging to another KB', async () => {
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+    it('rejects opening conversation for a Bot belonging to another KB', async () => {
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       const event: IpcSenderEventLike = {
         sender: mockWebContents1,
         senderFrame: mockWebContents1.mainFrame
@@ -470,15 +468,14 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
       // Session 1 is active on KB1, but bot2 belongs to KB2
       await expect(
         handler!(event, {
-          botId: bot2Id,
-          title: 'Cross-KB Attempt'
+          botId: bot2Id
         })
-      ).rejects.toThrow(/BOT_MISMATCH/)
+      ).rejects.toThrow(/BOT_NOT_FOUND/)
     })
 
     it('rejects when session has no active workspace', async () => {
       activeContext.clearActiveWorkspace(1)
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       const event: IpcSenderEventLike = {
         sender: mockWebContents1,
         senderFrame: mockWebContents1.mainFrame
@@ -486,30 +483,32 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
 
       await expect(
         handler!(event, {
-          botId: bot1Id,
-          title: 'No Workspace'
+          botId: bot1Id
         })
       ).rejects.toThrow(/NO_ACTIVE_WORKSPACE/)
     })
   })
 
   describe('3. Conversation Management Operations', () => {
-    it('creates a conversation successfully for an active Bot', async () => {
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+    it('opens canonical conversation workspace for an active Bot and keeps ID identical on reopen', async () => {
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       const event: IpcSenderEventLike = {
         sender: mockWebContents1,
         senderFrame: mockWebContents1.mainFrame
       }
 
-      const conv = (await handler!(event, {
-        botId: bot1Id,
-        title: 'Project Alpha Talk'
-      })) as ConversationDto
+      const first = (await handler!(event, {
+        botId: bot1Id
+      })) as BotConversationWorkspaceDto
+      const second = (await handler!(event, {
+        botId: bot1Id
+      })) as BotConversationWorkspaceDto
 
-      expect(conv.id).toBeDefined()
-      expect(conv.botId).toBe(bot1Id)
-      expect(conv.knowledgeBaseId).toBe(kb1Id)
-      expect(conv.title).toBe('Project Alpha Talk')
+      expect(first.conversation.id).toBeDefined()
+      expect(first.conversation.botId).toBe(bot1Id)
+      expect(first.conversation.knowledgeBaseId).toBe(kb1Id)
+      expect(first.segments).toHaveLength(1)
+      expect(second.conversation.id).toBe(first.conversation.id)
     })
 
     it('lists conversations for a Bot', async () => {
@@ -751,15 +750,21 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
       // Wait for stream to finish
       await new Promise((r) => setTimeout(r, 50))
 
-      expect(receivedEvents.length).toBe(3)
-      expect(receivedEvents[0]).toEqual({ type: 'text_delta', textDelta: 'Assistant ' })
-      expect(receivedEvents[1]).toEqual({ type: 'text_delta', textDelta: 'answer' })
-      expect(receivedEvents[2].type).toBe('finish')
-      if (receivedEvents[2].type === 'finish') {
-        expect(receivedEvents[2].finishReason).toBe('stop')
-        expect(receivedEvents[2].message.id).toBe(assistantMessage.id)
-        expect(receivedEvents[2].userMessage?.id).toBe(userMessage.id)
-        expect(receivedEvents[2].message.metadata.citations?.length).toBe(1)
+      const textDeltas = receivedEvents.filter((e) => e.type === 'text_delta')
+      expect(textDeltas.length).toBe(2)
+      expect(textDeltas[0]).toEqual(
+        expect.objectContaining({ type: 'text_delta', textDelta: 'Assistant ' })
+      )
+      expect(textDeltas[1]).toEqual(
+        expect.objectContaining({ type: 'text_delta', textDelta: 'answer' })
+      )
+      const finishEvt = receivedEvents.find((e) => e.type === 'finish')
+      expect(finishEvt).toBeDefined()
+      if (finishEvt && finishEvt.type === 'finish') {
+        expect(finishEvt.finishReason).toBe('stop')
+        expect(finishEvt.message.id).toBe(assistantMessage.id)
+        expect(finishEvt.userMessage?.id).toBe(userMessage.id)
+        expect(finishEvt.message.metadata.citations?.length).toBe(1)
       }
     })
 
@@ -950,7 +955,11 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const api = createConversationApi({} as any)
 
-      expect(typeof api.createConversation).toBe('function')
+      expect((api as unknown as Record<string, unknown>).createConversation).toBeUndefined()
+      expect(typeof api.getConversationForBot).toBe('function')
+      expect(typeof api.getSegments).toBe('function')
+      expect(typeof api.getClearPreview).toBe('function')
+      expect(typeof api.clearConversation).toBe('function')
       expect(typeof api.listConversations).toBe('function')
       expect(typeof api.listMessages).toBe('function')
       expect(typeof api.renameConversation).toBe('function')
@@ -1081,10 +1090,15 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
       expect(result.assistantMessage.id).toBe(assistantMsg.id)
       expect(result.finishReason).toBe('stop')
       expect(result.userMessage?.id).toBe(userMsg.id)
-      expect(emittedChunks.length).toBe(3)
-      expect(emittedChunks[0]).toEqual({ type: 'text_delta', textDelta: 'Bridge ' })
-      expect(emittedChunks[1]).toEqual({ type: 'text_delta', textDelta: 'response' })
-      expect(emittedChunks[2].type).toBe('finish')
+      const textDeltas = emittedChunks.filter((e) => e.type === 'text_delta')
+      expect(textDeltas.length).toBe(2)
+      expect(textDeltas[0]).toEqual(
+        expect.objectContaining({ type: 'text_delta', textDelta: 'Bridge ' })
+      )
+      expect(textDeltas[1]).toEqual(
+        expect.objectContaining({ type: 'text_delta', textDelta: 'response' })
+      )
+      expect(emittedChunks.some((e) => e.type === 'finish')).toBe(true)
     })
 
     it('executes api.retryLastUserMessage end-to-end via Preload bridge', async () => {
@@ -1172,7 +1186,9 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
 
       expect(result.assistantMessage.id).toBe(assistantMsg.id)
       expect(result.finishReason).toBe('stop')
-      expect(emittedChunks.length).toBe(3)
+      const textDeltas = emittedChunks.filter((e) => e.type === 'text_delta')
+      expect(textDeltas.length).toBe(2)
+      expect(emittedChunks.some((e) => e.type === 'finish')).toBe(true)
     })
   })
 
@@ -1183,18 +1199,19 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
         'Subsystem crash at C:\\logs\\err.txt'
       )
 
-      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.CREATE)
+      expect(mockIpcHandlers.get('conversation:create')).toBeUndefined()
+      const handler = mockIpcHandlers.get(CONVERSATION_IPC_CHANNELS.GET_FOR_BOT)
       const event: IpcSenderEventLike = {
         sender: mockWebContents1,
         senderFrame: mockWebContents1.mainFrame
       }
 
-      await expect(handler!(event, { botId: bot1Id, title: 'Crash' })).rejects.toThrow(
+      await expect(handler!(event, { botId: bot1Id })).rejects.toThrow(
         /CONVERSATION_SUBSYSTEM_FAILED/
       )
 
       try {
-        await handler!(event, { botId: bot1Id, title: 'Crash' })
+        await handler!(event, { botId: bot1Id })
       } catch (err) {
         expect(String(err)).toContain('[REDACTED_PATH]')
         expect(String(err)).not.toContain('C:\\logs')
@@ -1421,6 +1438,129 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
           citationNumber: 1
         })
       ).rejects.toThrowError(ConversationBridgeError)
+    })
+  })
+
+  describe('10. Step 12.2 Unified Single-Conversation & Clear Conversation IPC', () => {
+    function createBridgeApi(): ReturnType<typeof createConversationApi> {
+      const mockIpc = {
+        invoke: vi.fn(async (channel: string, ...args: unknown[]) => {
+          const handler = mockIpcHandlers.get(channel)
+          if (!handler) {
+            throw new Error(`No handler registered for channel '${channel}'`)
+          }
+          const defaultEvent: IpcSenderEventLike = {
+            sender: mockWebContents1,
+            senderFrame: mockWebContents1.mainFrame
+          }
+          return handler(defaultEvent, ...args)
+        }),
+        on: vi.fn(),
+        removeListener: vi.fn()
+      }
+      // @ts-expect-error mock ipcRenderer
+      return createConversationApi(mockIpc)
+    }
+
+    it('opens canonical conversation with segments and >100 messages via preload bridge', async () => {
+      const canonical = convRepo.create({
+        botId: bot1Id,
+        knowledgeBaseId: kb1Id,
+        title: 'Bridge Canonical'
+      })
+      const baseTs = 1700000000000
+      for (let i = 0; i < 110; i++) {
+        const created = msgRepo.create({
+          conversationId: canonical.id,
+          botId: bot1Id,
+          knowledgeBaseId: kb1Id,
+          role: 'user',
+          content: `Msg ${i}`
+        })
+        dbContext.db
+          .prepare('UPDATE messages SET created_at = ? WHERE id = ?')
+          .run(baseTs + i, created.id)
+      }
+
+      const api = createBridgeApi()
+      const workspace: BotConversationWorkspaceDto = await api.getConversationForBot({
+        botId: bot1Id
+      })
+      expect(workspace.conversation.id).toBe(canonical.id)
+      expect(workspace.segments).toHaveLength(1)
+      expect(workspace.messages).toHaveLength(110)
+
+      const segments: readonly ConversationSegmentDto[] = await api.getSegments({
+        conversationId: canonical.id
+      })
+      expect(segments).toHaveLength(1)
+      expect(segments[0].conversationId).toBe(canonical.id)
+    })
+
+    it('executes getClearPreview and clearConversation end-to-end while acquiring locks and preserving agent_runs', async () => {
+      const canonical = convRepo.create({
+        botId: bot1Id,
+        knowledgeBaseId: kb1Id,
+        title: 'Clearable Bridge Conv'
+      })
+      msgRepo.create({
+        conversationId: canonical.id,
+        botId: bot1Id,
+        knowledgeBaseId: kb1Id,
+        role: 'user',
+        content: 'Initial prompt'
+      })
+      dbContext.db
+        .prepare(
+          `INSERT INTO agent_runs (id, bot_id, conversation_id, knowledge_base_id, selected_model, status, started_at)
+           VALUES (?, ?, ?, ?, 'gpt-4o', 'completed', ?)`
+        )
+        .run('run-ipc-retain', bot1Id, canonical.id, kb1Id, Date.now())
+
+      const api = createBridgeApi()
+      const preview: ClearConversationPreviewDto = await api.getClearPreview!(canonical.id)
+      expect(preview.conversationId).toBe(canonical.id)
+      expect(preview.messageCount).toBe(1)
+      expect(preview.agentRunCount).toBe(1)
+      expect(preview.isBlocked).toBe(false)
+
+      const clearRes: ClearConversationResultDto = await api.clearConversation({
+        conversationId: canonical.id
+      })
+      expect(clearRes.success).toBe(true)
+      expect(clearRes.conversation.id).toBe(canonical.id)
+      expect(clearRes.deletedMessagesCount).toBe(1)
+      expect(clearRes.preservedAgentRunsCount).toBe(1)
+      expect(clearRes.activeSegment.segmentOrder).toBe(0)
+      expect(turnService.acquireDeletionLock).toHaveBeenCalledWith(canonical.id)
+      expect(turnService.releaseDeletionLock).toHaveBeenCalledWith(canonical.id)
+
+      // Cross-KB clear attempt via window 1 fails safely
+      const crossKbConv = convRepo.create({
+        botId: bot2Id,
+        knowledgeBaseId: kb2Id,
+        title: 'KB2 Conv'
+      })
+      await expect(api.clearConversation({ conversationId: crossKbConv.id })).rejects.toThrowError(
+        ConversationBridgeError
+      )
+    })
+
+    it('blocks clearConversation IPC when turn generation is active', async () => {
+      const canonical = convRepo.create({
+        botId: bot1Id,
+        knowledgeBaseId: kb1Id,
+        title: 'Busy Conv'
+      })
+      vi.mocked(turnService.isGenerating).mockImplementation((id: string) => id === canonical.id)
+
+      const api = createBridgeApi()
+      const preview = await api.getClearPreview!(canonical.id)
+      expect(preview.isBlocked).toBe(true)
+
+      await expect(api.clearConversation({ conversationId: canonical.id })).rejects.toThrowError(
+        ConversationBridgeError
+      )
     })
   })
 })

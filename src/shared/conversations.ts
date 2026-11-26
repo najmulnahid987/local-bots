@@ -10,10 +10,13 @@ import { SUPPORTED_PROVIDERS, type ProviderId } from './providers'
  * Shared IPC channel definitions for conversations and messages.
  */
 export const CONVERSATION_IPC_CHANNELS = {
-  CREATE: 'conversation:create',
+  GET_FOR_BOT: 'conversation:get-for-bot',
+  GET_SEGMENTS: 'conversation:get-segments',
   LIST: 'conversation:list',
   GET_MESSAGES: 'conversation:get-messages',
   RENAME: 'conversation:rename',
+  CLEAR: 'conversation:clear',
+  GET_CLEAR_PREVIEW: 'conversation:get-clear-preview',
   DELETE: 'conversation:delete',
   GET_DELETION_PREVIEW: 'conversation:get-deletion-preview',
   SEND_MESSAGE: 'conversation:send-message',
@@ -74,6 +77,16 @@ export const TOOL_CALL_STATUSES = [
 ] as const
 export type ToolCallStatus = (typeof TOOL_CALL_STATUSES)[number]
 
+/**
+ * Supported execution modes for conversation interaction.
+ * - 'chat': Conversational interaction with response policy and grounding, tool-free.
+ * - 'agent': Explicitly requested agent tasks utilizing authorized bot tools.
+ */
+export const EXECUTION_MODES = ['chat', 'agent'] as const
+export type ExecutionMode = (typeof EXECUTION_MODES)[number]
+export const DEFAULT_EXECUTION_MODE: ExecutionMode = 'chat'
+export const executionModeSchema = z.enum(EXECUTION_MODES)
+
 // ============================================================================
 // Conversation DTOs and Interfaces
 // ============================================================================
@@ -89,6 +102,23 @@ export interface ConversationDto {
   readonly title: string
   readonly createdAt: number
   readonly updatedAt: number
+  readonly archivedAt: number | null
+}
+
+/**
+ * Public, renderer-safe Data Transfer Object representing a historical conversation segment/thread.
+ * Preserves the boundary of original conversation threads before single-conversation consolidation.
+ */
+export interface ConversationSegmentDto {
+  readonly id: string
+  readonly conversationId: string
+  readonly originalConversationId: string
+  readonly title: string
+  readonly segmentOrder: number
+  readonly firstMessageCreatedAt: number | null
+  readonly lastMessageCreatedAt: number | null
+  readonly messageCount: number
+  readonly createdAt: number
   readonly archivedAt: number | null
 }
 
@@ -117,6 +147,75 @@ export interface RenameConversationRequest {
 export interface ListConversationsRequest {
   readonly botId?: string
   readonly includeArchived?: boolean
+}
+
+/**
+ * Caller input for retrieving the single canonical conversation workspace for a Bot.
+ * Note: knowledgeBaseId is derived strictly by the Main process from ActiveWorkspaceContext.
+ */
+export interface GetConversationForBotRequest {
+  readonly botId: string
+}
+
+/**
+ * Caller input for retrieving historical segments of a conversation.
+ */
+export interface GetSegmentsRequest {
+  readonly conversationId: string
+}
+
+/**
+ * Unified Bot conversation payload returned when opening a Bot workspace.
+ */
+export interface BotConversationWorkspaceDto {
+  readonly conversation: ConversationDto
+  readonly segments: readonly ConversationSegmentDto[]
+  readonly messages: readonly MessageDto[]
+  readonly recoveredFromMissingInvariant?: boolean
+}
+
+/**
+ * Caller input for clearing messages/segments of a Bot's canonical conversation
+ * while preserving the conversation identity and Agent Task audit trail.
+ */
+export interface ClearConversationRequest {
+  readonly conversationId: string
+}
+
+/**
+ * Non-destructive preview summary before clearing a conversation.
+ */
+export interface ClearConversationPreviewDto {
+  readonly conversationId: string
+  readonly conversationTitle: string
+  readonly botId: string
+  readonly botName: string
+  readonly messageCount: number
+  readonly segmentCount: number
+  readonly agentRunCount: number
+  readonly toolEventCount: number
+  readonly isBlocked: boolean
+  readonly blockReason?: string
+}
+
+/**
+ * Structured result returned after atomically clearing a conversation.
+ */
+export interface ClearConversationResultDto {
+  readonly success: boolean
+  readonly conversation: ConversationDto
+  readonly activeSegment: ConversationSegmentDto
+  readonly deletedMessagesCount: number
+  readonly preservedAgentRunsCount: number
+}
+
+/**
+ * Chronological group associating historical segment metadata with its ordered messages.
+ */
+export interface SegmentTimelineGroup {
+  readonly key: string
+  readonly segment: ConversationSegmentDto | null
+  readonly messages: readonly MessageDto[]
 }
 
 /**
@@ -182,6 +281,74 @@ export interface GenerationMetadataDto {
 /**
  * Typed, serializable metadata stored in messages.metadata_json.
  */
+export const MESSAGE_GROUNDING_MODES = [
+  'kb_grounded',
+  'kb_partial_with_general_fallback',
+  'general_fallback_no_kb_evidence',
+  'general_fallback_no_usable_kb',
+  'general_chat'
+] as const
+
+export type MessageGroundingMode = (typeof MESSAGE_GROUNDING_MODES)[number]
+
+export const CLAIM_PROVENANCE_VALUES = [
+  'kb_supported',
+  'kb_partially_supported',
+  'general_knowledge',
+  'unsupported',
+  'uncertain'
+] as const
+
+export type ClaimProvenance = (typeof CLAIM_PROVENANCE_VALUES)[number]
+
+export const CLAIM_VALIDATION_STATUSES = [
+  'validated',
+  'partially_validated',
+  'not_supported',
+  'insufficient_evidence',
+  'invalid_reference',
+  'not_checked'
+] as const
+
+export type ClaimValidationStatus = (typeof CLAIM_VALIDATION_STATUSES)[number]
+
+/**
+ * Authoritative lifecycle stages for conversation turn streaming.
+ * Matches the explicit lifecycle model defined in Phase 12 Step 12.7.
+ */
+export const STREAM_LIFECYCLE_STAGES = [
+  'idle',
+  'preparing',
+  'streaming',
+  'finalizing',
+  'completed',
+  'cancelled',
+  'failed'
+] as const
+
+export type StreamLifecycleStage = (typeof STREAM_LIFECYCLE_STAGES)[number]
+
+export interface ClaimEvidenceReferenceDto {
+  readonly knowledgeBaseId?: string
+  readonly sourceId: string
+  readonly chunkId: string
+  readonly citationNumber: number
+  readonly fileName: string
+  readonly fileType: CitationFileType
+  readonly pageNumber: number | null
+  readonly headingPath: readonly string[] | null
+  readonly chunkIndex: number
+}
+
+export interface ClaimProvenanceDto {
+  readonly claimId: string
+  readonly claimText: string
+  readonly provenance: ClaimProvenance
+  readonly validationStatus: ClaimValidationStatus
+  readonly evidenceReferences: readonly ClaimEvidenceReferenceDto[]
+  readonly explanation?: string
+}
+
 export interface MessageMetadataDto {
   readonly providerId?: ProviderId
   readonly modelId?: string
@@ -189,6 +356,12 @@ export interface MessageMetadataDto {
   readonly toolCalls?: readonly MessageToolCallDto[]
   readonly generation?: GenerationMetadataDto
   readonly agentRunId?: string
+  readonly groundingMode?: MessageGroundingMode
+  readonly claims?: readonly ClaimProvenanceDto[]
+  readonly executionMode?: ExecutionMode
+  readonly isPartial?: boolean
+  readonly status?: 'completed' | 'cancelled' | 'failed' | 'interrupted'
+  readonly interruptedReason?: string
 }
 
 /**
@@ -197,6 +370,7 @@ export interface MessageMetadataDto {
 export interface MessageDto {
   readonly id: string
   readonly conversationId: string
+  readonly segmentId?: string | null
   readonly role: MessageRole
   readonly content: string
   readonly contentFormat: MessageContentFormat
@@ -212,6 +386,7 @@ export interface SendMessageRequest {
   readonly conversationId: string
   readonly content: string
   readonly contentFormat?: MessageContentFormat
+  readonly executionMode?: ExecutionMode
 }
 
 /**
@@ -246,6 +421,7 @@ export interface SendMessageIpcRequest {
   readonly conversationId: string
   readonly content: string
   readonly contentFormat?: MessageContentFormat
+  readonly executionMode?: ExecutionMode
 }
 
 /**
@@ -295,9 +471,27 @@ export interface ResolvedCitationTargetDto {
 // Public Streaming Event and Turn Result Contracts
 // ============================================================================
 
+export interface PublicStageChangeEvent {
+  readonly type: 'stage_change'
+  readonly stage: StreamLifecycleStage
+  readonly requestId: string
+  readonly botId?: string
+  readonly conversationId: string
+  readonly executionMode: ExecutionMode
+  readonly sequenceNumber: number
+  readonly timestamp: number
+}
+
 export interface PublicTextDeltaEvent {
   readonly type: 'text_delta'
   readonly textDelta: string
+  readonly requestId: string
+  readonly botId?: string
+  readonly conversationId: string
+  readonly executionMode: ExecutionMode
+  readonly sequenceNumber: number
+  readonly timestamp: number
+  readonly stage: StreamLifecycleStage
 }
 
 export interface PublicFinishEvent {
@@ -308,6 +502,13 @@ export interface PublicFinishEvent {
   readonly durationMs: number
   readonly message: MessageDto
   readonly userMessage?: MessageDto
+  readonly requestId: string
+  readonly botId?: string
+  readonly conversationId: string
+  readonly executionMode: ExecutionMode
+  readonly sequenceNumber: number
+  readonly timestamp: number
+  readonly stage: StreamLifecycleStage
 }
 
 export interface PublicErrorEvent {
@@ -317,10 +518,18 @@ export interface PublicErrorEvent {
     readonly message: string
     readonly retryable: boolean
   }
+  readonly partialMessage?: MessageDto
+  readonly requestId: string
+  readonly botId?: string
+  readonly conversationId: string
+  readonly executionMode: ExecutionMode
+  readonly sequenceNumber: number
+  readonly timestamp: number
+  readonly stage: StreamLifecycleStage
 }
 
 export type PublicConversationTurnEvent =
-  PublicTextDeltaEvent | PublicFinishEvent | PublicErrorEvent
+  PublicStageChangeEvent | PublicTextDeltaEvent | PublicFinishEvent | PublicErrorEvent
 
 export interface ConversationTurnResultDto {
   readonly userMessage?: MessageDto
@@ -332,12 +541,18 @@ export interface ConversationTurnResultDto {
 
 /**
  * Renderer-facing typed conversation API exposed via Preload bridge.
+ * Deliberately excludes arbitrary conversation creation (enforcing 1 Bot : 1 Conversation).
  */
 export interface ConversationApi {
-  createConversation(request: CreateConversationRequest): Promise<ConversationDto>
+  getConversationForBot(
+    request: GetConversationForBotRequest | string
+  ): Promise<BotConversationWorkspaceDto>
+  getSegments(request: GetSegmentsRequest | string): Promise<readonly ConversationSegmentDto[]>
   listConversations(request: ListConversationsRequest): Promise<readonly ConversationDto[]>
   listMessages(request: ListMessagesRequest | string): Promise<readonly MessageDto[]>
   renameConversation(request: RenameConversationIpcRequest): Promise<ConversationDto>
+  getClearPreview?(request: ClearConversationRequest | string): Promise<ClearConversationPreviewDto>
+  clearConversation(request: ClearConversationRequest | string): Promise<ClearConversationResultDto>
   deleteConversation(
     request: DeleteConversationIpcRequest | string
   ): Promise<DeleteConversationResultDto>
@@ -560,6 +775,50 @@ export const generationMetadataSchema = z
 /**
  * Validates message metadata structure.
  */
+export const messageGroundingModeSchema = z.enum(MESSAGE_GROUNDING_MODES)
+
+export const claimProvenanceKindSchema = z.enum(CLAIM_PROVENANCE_VALUES)
+export const claimValidationStatusSchema = z.enum(CLAIM_VALIDATION_STATUSES)
+
+export const claimEvidenceReferenceSchema = z
+  .object({
+    knowledgeBaseId: z.string().uuid().optional(),
+    sourceId: z.string().uuid({ message: 'Evidence reference sourceId must be a valid UUIDv4.' }),
+    chunkId: z.string().uuid({ message: 'Evidence reference chunkId must be a valid UUIDv4.' }),
+    citationNumber: z
+      .number()
+      .int({ message: 'Citation number must be an integer.' })
+      .positive({ message: 'Citation number must be >= 1.' }),
+    fileName: z
+      .string()
+      .trim()
+      .min(1, { message: 'Evidence fileName cannot be empty.' })
+      .max(255, { message: 'Evidence fileName exceeds 255 characters.' }),
+    fileType: z.enum(CITATION_FILE_TYPES),
+    pageNumber: z
+      .number()
+      .int({ message: 'Page number must be an integer.' })
+      .positive({ message: 'Page number must be >= 1.' })
+      .nullable(),
+    headingPath: z.array(z.string().trim().min(1).max(200)).max(20).nullable(),
+    chunkIndex: z
+      .number()
+      .int({ message: 'chunkIndex must be an integer.' })
+      .nonnegative({ message: 'chunkIndex must be a non-negative integer.' })
+  })
+  .strict()
+
+export const claimProvenanceItemSchema = z
+  .object({
+    claimId: z.string().trim().min(1).max(64),
+    claimText: z.string().trim().min(1).max(2000),
+    provenance: claimProvenanceKindSchema,
+    validationStatus: claimValidationStatusSchema,
+    evidenceReferences: z.array(claimEvidenceReferenceSchema).max(25),
+    explanation: z.string().trim().min(1).max(300).optional()
+  })
+  .strict()
+
 export const messageMetadataSchema = z
   .object({
     providerId: z.enum(SUPPORTED_PROVIDERS).optional(),
@@ -567,7 +826,13 @@ export const messageMetadataSchema = z
     citations: z.array(citationDtoSchema).optional(),
     toolCalls: z.array(messageToolCallSchema).optional(),
     generation: generationMetadataSchema.optional(),
-    agentRunId: z.string().uuid().optional()
+    agentRunId: z.string().uuid().optional(),
+    groundingMode: messageGroundingModeSchema.optional(),
+    claims: z.array(claimProvenanceItemSchema).max(200).optional(),
+    executionMode: executionModeSchema.optional(),
+    isPartial: z.boolean().optional(),
+    status: z.enum(['completed', 'cancelled', 'failed', 'interrupted']).optional(),
+    interruptedReason: z.string().max(2000).optional()
   })
   .strict()
 
@@ -584,9 +849,14 @@ export const sendMessageRequestSchema = z
       .max(MAX_MESSAGE_CONTENT_LENGTH, {
         message: `Message content cannot exceed ${MAX_MESSAGE_CONTENT_LENGTH} characters.`
       }),
-    contentFormat: messageContentFormatSchema.optional().default('markdown')
+    contentFormat: messageContentFormatSchema.optional().default('markdown'),
+    executionMode: executionModeSchema.optional().default('chat')
   })
   .strict()
+  .refine((data) => data.executionMode === 'chat', {
+    message: 'Chat endpoint does not permit agent execution mode. Dispatch an agent task instead.',
+    path: ['executionMode']
+  })
 
 /**
  * Validates list messages requests with optional pagination.
@@ -594,8 +864,35 @@ export const sendMessageRequestSchema = z
 export const listMessagesRequestSchema = z
   .object({
     conversationId: conversationIdSchema,
-    limit: z.number().int().positive().max(500).optional(),
+    limit: z.number().int().positive().max(10000).optional(),
     offset: z.number().int().nonnegative().optional()
+  })
+  .strict()
+
+/**
+ * Validates requests to open/load the canonical conversation for a Bot.
+ */
+export const getConversationForBotRequestSchema = z
+  .object({
+    botId: botIdSchema
+  })
+  .strict()
+
+/**
+ * Validates requests to list historical segments for a conversation.
+ */
+export const getSegmentsRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema
+  })
+  .strict()
+
+/**
+ * Validates requests to clear a conversation or preview clearing.
+ */
+export const clearConversationRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema
   })
   .strict()
 
@@ -632,9 +929,14 @@ export const sendMessageIpcRequestSchema = z
       .max(MAX_MESSAGE_CONTENT_LENGTH, {
         message: `Message content cannot exceed ${MAX_MESSAGE_CONTENT_LENGTH} characters.`
       }),
-    contentFormat: messageContentFormatSchema.optional().default('markdown')
+    contentFormat: messageContentFormatSchema.optional().default('markdown'),
+    executionMode: executionModeSchema.optional().default('chat')
   })
   .strict()
+  .refine((data) => data.executionMode === 'chat', {
+    message: 'Chat endpoint does not permit agent execution mode. Dispatch an agent task instead.',
+    path: ['executionMode']
+  })
 
 /**
  * Validates retry streaming IPC requests.
@@ -678,12 +980,37 @@ export const conversationDtoSchema = z
   .strict()
 
 /**
+ * Validates a complete ConversationSegmentDto.
+ */
+export const conversationSegmentDtoSchema = z
+  .object({
+    id: z.string().uuid({ message: 'Segment ID must be a valid RFC 4122 UUIDv4.' }),
+    conversationId: conversationIdSchema,
+    originalConversationId: z
+      .string()
+      .uuid({ message: 'originalConversationId must be a valid RFC 4122 UUIDv4.' }),
+    title: conversationTitleSchema,
+    segmentOrder: z.number().int().nonnegative(),
+    firstMessageCreatedAt: z.number().int().positive().nullable(),
+    lastMessageCreatedAt: z.number().int().positive().nullable(),
+    messageCount: z.number().int().nonnegative(),
+    createdAt: z.number().int().positive({ message: 'createdAt must be a positive integer.' }),
+    archivedAt: z
+      .number()
+      .int()
+      .positive({ message: 'archivedAt must be a positive integer.' })
+      .nullable()
+  })
+  .strict()
+
+/**
  * Validates a complete MessageDto.
  */
 export const messageDtoSchema = z
   .object({
     id: messageIdSchema,
     conversationId: conversationIdSchema,
+    segmentId: z.string().uuid().nullable().optional(),
     role: messageRoleSchema,
     content: z.string(),
     contentFormat: messageContentFormatSchema,
@@ -842,10 +1169,78 @@ export function toConversationDto(source: ConversationEntityLike): ConversationD
   return conversationDtoSchema.parse(dto)
 }
 
+export interface ConversationSegmentEntityLike {
+  id: string
+  conversation_id?: string
+  conversationId?: string
+  original_conversation_id?: string
+  originalConversationId?: string
+  title: string
+  segment_order?: number
+  segmentOrder?: number
+  first_message_created_at?: number | null
+  firstMessageCreatedAt?: number | null
+  last_message_created_at?: number | null
+  lastMessageCreatedAt?: number | null
+  message_count?: number
+  messageCount?: number
+  created_at?: number
+  createdAt?: number
+  archived_at?: number | null
+  archivedAt?: number | null
+}
+
+/**
+ * Maps a domain entity or database row to a validated, renderer-safe ConversationSegmentDto.
+ */
+export function toConversationSegmentDto(
+  source: ConversationSegmentEntityLike
+): ConversationSegmentDto {
+  const conversationId = source.conversationId ?? source.conversation_id
+  if (!conversationId) {
+    throw new Error('Conversation ID is required to construct ConversationSegmentDto.')
+  }
+  const originalConversationId =
+    source.originalConversationId ?? source.original_conversation_id ?? source.id
+  const segmentOrder = source.segmentOrder ?? source.segment_order ?? 0
+  const messageCount = source.messageCount ?? source.message_count ?? 0
+  const createdAt = source.createdAt ?? source.created_at
+  if (createdAt === undefined || createdAt === null) {
+    throw new Error('createdAt timestamp is required to construct ConversationSegmentDto.')
+  }
+  const firstMessageCreatedAt =
+    source.firstMessageCreatedAt !== undefined
+      ? source.firstMessageCreatedAt
+      : (source.first_message_created_at ?? null)
+  const lastMessageCreatedAt =
+    source.lastMessageCreatedAt !== undefined
+      ? source.lastMessageCreatedAt
+      : (source.last_message_created_at ?? null)
+  const archivedAt =
+    source.archivedAt !== undefined ? source.archivedAt : (source.archived_at ?? null)
+
+  const dto: ConversationSegmentDto = {
+    id: source.id,
+    conversationId,
+    originalConversationId,
+    title: source.title,
+    segmentOrder,
+    firstMessageCreatedAt,
+    lastMessageCreatedAt,
+    messageCount,
+    createdAt,
+    archivedAt
+  }
+
+  return conversationSegmentDtoSchema.parse(dto)
+}
+
 export interface MessageEntityLike {
   id: string
   conversation_id?: string
   conversationId?: string
+  segment_id?: string | null
+  segmentId?: string | null
   role: string
   content: string
   content_format?: string
@@ -888,9 +1283,12 @@ export function toMessageDto(source: MessageEntityLike): MessageDto {
         ? deserializeMessageTokenUsage(source.token_usage)
         : deserializeMessageTokenUsage(source.token_usage_json)
 
+  const segmentId = source.segmentId !== undefined ? source.segmentId : (source.segment_id ?? null)
+
   const dto: MessageDto = {
     id: source.id,
     conversationId,
+    segmentId,
     role,
     content: source.content,
     contentFormat,
@@ -900,4 +1298,85 @@ export function toMessageDto(source: MessageEntityLike): MessageDto {
   }
 
   return messageDtoSchema.parse(dto)
+}
+
+// ============================================================================
+// Historical Segment Grouping & Chronology Utilities
+// ============================================================================
+
+/**
+ * Deterministically groups messages by their originating conversation segment
+ * (ordered by segment_order ASC, createdAt ASC, id ASC).
+ * Never interleaves messages from separate historical threads based solely on timestamp.
+ */
+export function groupMessagesBySegments(
+  segments: readonly ConversationSegmentDto[],
+  messages: readonly MessageDto[]
+): readonly SegmentTimelineGroup[] {
+  const dedupedById = new Map<string, MessageDto>()
+  for (const msg of messages) {
+    dedupedById.set(msg.id, msg)
+  }
+  const uniqueMessages = Array.from(dedupedById.values())
+
+  const sortedSegments = [...segments].sort(
+    (a, b) =>
+      a.segmentOrder - b.segmentOrder || a.createdAt - b.createdAt || a.id.localeCompare(b.id)
+  )
+
+  const sortMessagesWithinSegment = (list: MessageDto[]): readonly MessageDto[] =>
+    Object.freeze([...list].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)))
+
+  if (sortedSegments.length === 0) {
+    return uniqueMessages.length > 0
+      ? [
+          {
+            key: 'unsegmented',
+            segment: null,
+            messages: sortMessagesWithinSegment(uniqueMessages)
+          }
+        ]
+      : []
+  }
+
+  const buckets = new Map<string, MessageDto[]>()
+  for (const seg of sortedSegments) {
+    buckets.set(seg.id, [])
+  }
+  const unsegmented: MessageDto[] = []
+
+  for (const msg of uniqueMessages) {
+    if (msg.segmentId && buckets.has(msg.segmentId)) {
+      buckets.get(msg.segmentId)!.push(msg)
+    } else {
+      unsegmented.push(msg)
+    }
+  }
+
+  const groups: SegmentTimelineGroup[] = sortedSegments.map((seg) => ({
+    key: seg.id,
+    segment: seg,
+    messages: sortMessagesWithinSegment(buckets.get(seg.id) ?? [])
+  }))
+
+  if (unsegmented.length > 0) {
+    groups.push({
+      key: 'unsegmented',
+      segment: null,
+      messages: sortMessagesWithinSegment(unsegmented)
+    })
+  }
+
+  return Object.freeze(groups)
+}
+
+/**
+ * Returns a flattened message array ordered by segment_order first, then createdAt ASC, id ASC.
+ */
+export function orderMessagesRespectingSegments(
+  messages: readonly MessageDto[],
+  segments: readonly ConversationSegmentDto[] = []
+): readonly MessageDto[] {
+  const groups = groupMessagesBySegments(segments, messages)
+  return Object.freeze(groups.flatMap((g) => g.messages))
 }

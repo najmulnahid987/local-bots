@@ -5,7 +5,7 @@ import { migrations } from '../migrations'
 import { KnowledgeBaseRepository } from './knowledge-base-repository'
 import { BotRepository } from './bot-repository'
 import { ConversationRepository } from './conversation-repository'
-import { ValidationError } from './types'
+import { ValidationError, RepositoryError } from './types'
 
 describe('ConversationRepository (Phase 7 Step 7.2)', () => {
   let db: Database.Database
@@ -182,84 +182,69 @@ describe('ConversationRepository (Phase 7 Step 7.2)', () => {
   })
 
   // ==========================================================================
-  // Listing & Ordering Tests
+  // Listing, Single-Bot Invariant & Segment Tests
   // ==========================================================================
 
-  it('10. lists multiple conversations belonging to one Bot', () => {
-    convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Conv 1' })
-    convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Conv 2' })
+  it('10. enforces exactly one conversation per Bot and rejects creating a second conversation', () => {
+    const conv1 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Conv 1' })
 
-    const list = convRepo.listByBot(botAId, kbAId)
-    expect(list.length).toBe(2)
-    expect(list.map((c) => c.title)).toContain('Conv 1')
-    expect(list.map((c) => c.title)).toContain('Conv 2')
-  })
-
-  it('11. excludes archived conversations by default', () => {
-    const conv1 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Active Conv' })
-    const conv2 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Archived Conv' })
-
-    // Soft-archive conv2 in SQLite
-    db.prepare('UPDATE conversations SET archived_at = ? WHERE id = ?').run(Date.now(), conv2.id)
+    // Attempting to create a second conversation for the same bot must throw RepositoryError
+    expect(() => {
+      convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Conv 2' })
+    }).toThrow(RepositoryError)
 
     const list = convRepo.listByBot(botAId, kbAId)
     expect(list.length).toBe(1)
     expect(list[0].id).toBe(conv1.id)
+    expect(list[0].title).toBe('Conv 1')
+  })
+
+  it('11. excludes archived conversations by default', () => {
+    const conv1 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Active Conv' })
+
+    // Soft-archive conv1 in SQLite
+    db.prepare('UPDATE conversations SET archived_at = ? WHERE id = ?').run(Date.now(), conv1.id)
+
+    const list = convRepo.listByBot(botAId, kbAId)
+    expect(list.length).toBe(0)
   })
 
   it('12. includes archived conversations when requested', () => {
     const conv1 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Active Conv' })
-    const conv2 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Archived Conv' })
 
-    db.prepare('UPDATE conversations SET archived_at = ? WHERE id = ?').run(Date.now(), conv2.id)
+    db.prepare('UPDATE conversations SET archived_at = ? WHERE id = ?').run(Date.now(), conv1.id)
 
     const list = convRepo.listByBot(botAId, kbAId, { includeArchived: true })
-    expect(list.length).toBe(2)
-    expect(list.map((c) => c.id)).toContain(conv1.id)
-    expect(list.map((c) => c.id)).toContain(conv2.id)
+    expect(list.length).toBe(1)
+    expect(list[0].id).toBe(conv1.id)
   })
 
-  it('13. provides deterministic newest-first ordering by updated_at DESC, id ASC', () => {
-    const conv1 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Oldest' })
-    const conv2 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Middle' })
-    const conv3 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Newest' })
+  it('13. getByBotId retrieves conversation and getOrCreate is idempotent', () => {
+    const conv1 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Canonical' })
 
-    // Simulate explicit updated_at with created_at <= updated_at
-    db.prepare('UPDATE conversations SET created_at = 1000, updated_at = 1000 WHERE id = ?').run(
-      conv1.id
-    )
-    db.prepare('UPDATE conversations SET created_at = 2000, updated_at = 2000 WHERE id = ?').run(
-      conv2.id
-    )
-    db.prepare('UPDATE conversations SET created_at = 3000, updated_at = 3000 WHERE id = ?').run(
-      conv3.id
-    )
+    const found = convRepo.getByBotId(botAId, kbAId)
+    expect(found).not.toBeNull()
+    expect(found!.id).toBe(conv1.id)
 
-    const list = convRepo.listByBot(botAId, kbAId)
-    expect(list[0].id).toBe(conv3.id)
-    expect(list[1].id).toBe(conv2.id)
-    expect(list[2].id).toBe(conv1.id)
+    // getOrCreate returns the existing conversation without throwing
+    const idempotent = convRepo.getOrCreate({
+      botId: botAId,
+      knowledgeBaseId: kbAId,
+      title: 'New Title'
+    })
+    expect(idempotent.id).toBe(conv1.id)
+    expect(idempotent.title).toBe('Canonical')
   })
 
-  it('14. applies pagination limits and offsets correctly', () => {
-    for (let i = 1; i <= 5; i++) {
-      const conv = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: `Thread ${i}` })
-      db.prepare('UPDATE conversations SET created_at = ?, updated_at = ? WHERE id = ?').run(
-        1000 + i * 10,
-        1000 + i * 10,
-        conv.id
-      )
-    }
+  it('14. creates initial segment on conversation creation and retrieves segments via getSegments', () => {
+    const conv = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Thread 1' })
 
-    const page1 = convRepo.listByBot(botAId, kbAId, { limit: 2, offset: 0 })
-    expect(page1.length).toBe(2)
-    expect(page1[0].title).toBe('Thread 5')
-    expect(page1[1].title).toBe('Thread 4')
-
-    const page2 = convRepo.listByBot(botAId, kbAId, { limit: 2, offset: 2 })
-    expect(page2.length).toBe(2)
-    expect(page2[0].title).toBe('Thread 3')
-    expect(page2[1].title).toBe('Thread 2')
+    const segments = convRepo.getSegments(conv.id)
+    expect(segments).toHaveLength(1)
+    expect(segments[0].conversationId).toBe(conv.id)
+    expect(segments[0].title).toBe('Thread 1')
+    expect(segments[0].segmentOrder).toBe(0)
+    expect(segments[0].messageCount).toBe(0)
   })
 
   // ==========================================================================
@@ -316,13 +301,13 @@ describe('ConversationRepository (Phase 7 Step 7.2)', () => {
 
   it('18. deletes only the specified conversation matching the full ownership tuple', () => {
     const conv1 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'To Delete' })
-    const conv2 = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'To Keep' })
+    const conv2 = convRepo.create({ botId: botBId, knowledgeBaseId: kbBId, title: 'To Keep' })
 
     const deleted = convRepo.delete(conv1.id, botAId, kbAId)
     expect(deleted).toBe(true)
 
     expect(convRepo.getById(conv1.id, botAId, kbAId)).toBeNull()
-    expect(convRepo.getById(conv2.id, botAId, kbAId)).not.toBeNull()
+    expect(convRepo.getById(conv2.id, botBId, kbBId)).not.toBeNull()
   })
 
   it('19. deleting a conversation cascades to its child messages and agent runs', () => {
@@ -417,6 +402,108 @@ describe('ConversationRepository (Phase 7 Step 7.2)', () => {
       // 4. Fabricated Bot/KB combinations cannot delete Bot B's conversation
       const deleteAttempt = convRepo.delete(convB.id, botAId, kbAId)
       expect(deleteAttempt).toBe(false)
+      expect(convRepo.getById(convB.id, botBId, kbBId)).not.toBeNull()
+    })
+  })
+
+  // ==========================================================================
+  // Step 12.2: Clear Conversation & Preview Stats
+  // ==========================================================================
+
+  describe('Step 12.2: Clear Conversation & Audit Preservation', () => {
+    it('returns accurate clear preview stats scoped to the conversation', () => {
+      const conv = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Preview Conv' })
+      const now = Date.now()
+      db.prepare(
+        `INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'user', 'M1', ?)`
+      ).run('msg-prev-1', conv.id, now)
+      db.prepare(
+        `INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'assistant', 'M2', ?)`
+      ).run('msg-prev-2', conv.id, now + 1)
+      db.prepare(
+        `INSERT INTO agent_runs (id, bot_id, conversation_id, knowledge_base_id, selected_model, status, started_at)
+         VALUES (?, ?, ?, ?, 'gpt-6-luna', 'completed', ?)`
+      ).run('run-prev-1', botAId, conv.id, kbAId, now)
+
+      const preview = convRepo.getClearPreviewStats(conv.id, botAId, kbAId)
+      expect(preview).toMatchObject({
+        messageCount: 2,
+        segmentCount: 1,
+        agentRunCount: 1,
+        toolEventCount: 0,
+        activeAgentRunCount: 0
+      })
+      expect(preview?.conversation.id).toBe(conv.id)
+    })
+
+    it('clears messages atomically, resets segments to empty segment 0, preserves conversation ID and detached agent_runs', () => {
+      const conv = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Clear Target' })
+      const now = Date.now()
+      db.prepare(
+        `INSERT INTO conversation_segments (id, conversation_id, original_conversation_id, title, segment_order, created_at)
+         VALUES (?, ?, ?, 'Second Segment', 1, ?)`
+      ).run('seg-extra-1', conv.id, conv.id, now + 5)
+
+      db.prepare(
+        `INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'user', 'Hello', ?)`
+      ).run('msg-clear-1', conv.id, now + 10)
+      db.prepare(
+        `INSERT INTO agent_runs (id, bot_id, conversation_id, knowledge_base_id, selected_model, status, started_at)
+         VALUES (?, ?, ?, ?, 'gpt-6-luna', 'completed', ?)`
+      ).run('run-clear-1', botAId, conv.id, kbAId, now + 12)
+
+      const result = convRepo.clearConversation(conv.id, botAId, kbAId)
+      expect(result).not.toBeNull()
+      expect(result?.conversation.id).toBe(conv.id)
+      expect(result?.deletedMessagesCount).toBe(1)
+      expect(result?.preservedAgentRunsCount).toBe(1)
+      expect(result?.activeSegment.segmentOrder).toBe(0)
+      expect(result?.activeSegment.title).toBe(conv.title)
+      expect(result?.activeSegment.messageCount).toBe(0)
+
+      // Canonical conversation row preserved with same ID and monotonic updated_at
+      const reloaded = convRepo.getById(conv.id, botAId, kbAId)
+      expect(reloaded).not.toBeNull()
+      expect(reloaded?.id).toBe(conv.id)
+      expect(reloaded?.updatedAt).toBeGreaterThanOrEqual(conv.updatedAt)
+
+      // Messages cleared; single fresh segment at order 0
+      const remainingMessages = db
+        .prepare('SELECT count(*) as c FROM messages WHERE conversation_id = ?')
+        .get(conv.id) as { c: number }
+      expect(remainingMessages.c).toBe(0)
+
+      const segments = convRepo.getSegments(conv.id)
+      expect(segments).toHaveLength(1)
+      expect(segments[0].id).toBe(result?.activeSegment.id)
+      expect(segments[0].segmentOrder).toBe(0)
+
+      // Historical agent_run is retained with conversation_id detached (NULL)
+      const retainedRun = db
+        .prepare('SELECT id, conversation_id, bot_id FROM agent_runs WHERE id = ?')
+        .get('run-clear-1') as
+        { id: string; conversation_id: string | null; bot_id: string } | undefined
+      expect(retainedRun).toEqual({
+        id: 'run-clear-1',
+        conversation_id: null,
+        bot_id: botAId
+      })
+    })
+
+    it('rejects clearConversation while an agent run is running', () => {
+      const conv = convRepo.create({ botId: botAId, knowledgeBaseId: kbAId, title: 'Busy Conv' })
+      db.prepare(
+        `INSERT INTO agent_runs (id, bot_id, conversation_id, knowledge_base_id, selected_model, status, started_at)
+         VALUES (?, ?, ?, ?, 'gpt-6-luna', 'running', ?)`
+      ).run('run-active-1', botAId, conv.id, kbAId, Date.now())
+
+      expect(() => convRepo.clearConversation(conv.id, botAId, kbAId)).toThrow(/active/i)
+      expect(convRepo.getClearPreviewStats(conv.id, botAId, kbAId)?.activeAgentRunCount).toBe(1)
+    })
+
+    it('enforces cross-KB ownership when clearing conversation', () => {
+      const convB = convRepo.create({ botId: botBId, knowledgeBaseId: kbBId, title: 'KB B Conv' })
+      expect(convRepo.clearConversation(convB.id, botAId, kbAId)).toBeNull()
       expect(convRepo.getById(convB.id, botBId, kbBId)).not.toBeNull()
     })
   })
