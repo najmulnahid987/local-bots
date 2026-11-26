@@ -34,6 +34,11 @@ const EXPECTED_METADATA_ENTRIES = new Set([
 ])
 
 /**
+ * Optional metadata filenames at archive root (introduced in schema 1.2.0).
+ */
+const OPTIONAL_METADATA_ENTRIES = new Set(['agent-runs.json', 'tool-events.json'])
+
+/**
  * Allowed document file extensions.
  */
 const ALLOWED_DOCUMENT_EXTENSIONS = new Set(['txt', 'md', 'pdf', 'docx', 'xlsx', 'pptx', 'csv'])
@@ -79,6 +84,8 @@ export interface ExtractedArchiveBundle {
   readonly botMemoriesRaw: string
   readonly sourcesRaw: string
   readonly conversationsRaw: string
+  readonly agentRunsRaw?: string
+  readonly toolEventsRaw?: string
   readonly stagedDocuments: Map<string, StagedDocumentFile>
   readonly stagedExtractedDocuments: Map<string, string>
   readonly stagedPreservationReports: Map<string, string>
@@ -139,7 +146,7 @@ export function validateArchiveEntryName(rawName: string): string {
   const normalized = segments.join('/')
 
   // Validate against allowlist
-  if (EXPECTED_METADATA_ENTRIES.has(normalized)) {
+  if (EXPECTED_METADATA_ENTRIES.has(normalized) || OPTIONAL_METADATA_ENTRIES.has(normalized)) {
     return normalized
   }
 
@@ -311,7 +318,10 @@ export class ArchiveExtractor {
             )
           }
 
-          if (EXPECTED_METADATA_ENTRIES.has(entry.filename)) {
+          if (
+            EXPECTED_METADATA_ENTRIES.has(entry.filename) ||
+            OPTIONAL_METADATA_ENTRIES.has(entry.filename)
+          ) {
             // Decompress metadata JSON in-memory
             const decompressed = await this.decompressEntry(fd, entry, dataOffset)
             totalUncompressedBytes += decompressed.length
@@ -374,6 +384,8 @@ export class ArchiveExtractor {
           botMemoriesRaw: rawMetadataMap.get('bot-memories.json')!,
           sourcesRaw: rawMetadataMap.get('sources.json')!,
           conversationsRaw: rawMetadataMap.get('conversations.json')!,
+          agentRunsRaw: rawMetadataMap.get('agent-runs.json'),
+          toolEventsRaw: rawMetadataMap.get('tool-events.json'),
           stagedDocuments,
           stagedExtractedDocuments,
           stagedPreservationReports,
@@ -500,6 +512,7 @@ export class ArchiveExtractor {
         )
       }
 
+      const versionMadeBy = cdBuffer.readUInt16LE(offset + 4)
       const flags = cdBuffer.readUInt16LE(offset + 8)
       const method = cdBuffer.readUInt16LE(offset + 10)
       const crc32 = cdBuffer.readUInt32LE(offset + 16)
@@ -508,10 +521,19 @@ export class ArchiveExtractor {
       const nameLen = cdBuffer.readUInt16LE(offset + 28)
       const extraLen = cdBuffer.readUInt16LE(offset + 30)
       const commentLen = cdBuffer.readUInt16LE(offset + 32)
+      const externalAttrs = cdBuffer.readUInt32LE(offset + 38)
       const localOffset = cdBuffer.readUInt32LE(offset + 42)
 
       const isEncrypted = (flags & 0x0001) !== 0
       const isUtf8 = (flags & 0x0800) !== 0
+      const hostOs = versionMadeBy >>> 8
+      const unixMode = (externalAttrs >>> 16) & 0o170000
+      if ((hostOs === 3 || hostOs === 19) && unixMode === 0o120000) {
+        throw new ArchiveValidationError(
+          'Symlink entries are forbidden in backup archives.',
+          'SYMLINK_NOT_ALLOWED'
+        )
+      }
 
       if (isEncrypted) {
         throw new ArchiveValidationError(

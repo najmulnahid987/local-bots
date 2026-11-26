@@ -33,7 +33,7 @@ export interface ConversationStreamSession {
   readonly abortController: AbortController
   readonly port: MessagePortMainLike
   readonly conversationId: string
-  botId?: string
+  readonly botId: string
   readonly executionMode: 'chat'
   stage: StreamLifecycleStage
   sequenceNumber: number
@@ -76,7 +76,7 @@ export function toSafeConversationErrorDto(err: unknown): {
 export interface ConversationStreamManagerOptions {
   maxStreams?: number
   channelFactory?: MessageChannelFactory
-  conversationRepo?: ConversationRepository
+  conversationRepo: ConversationRepository
 }
 
 /**
@@ -86,20 +86,35 @@ export interface ConversationStreamManagerOptions {
 export class ConversationStreamManager {
   private readonly maxStreams: number
   private readonly channelFactory: MessageChannelFactory
-  private readonly conversationRepo?: ConversationRepository
+  private readonly conversationRepo: ConversationRepository
   private readonly activeStreams = new Map<string, ConversationStreamSession>()
   private readonly windowListeners = new WeakSet<BrowserWindowLike>()
 
-  constructor(options?: ConversationStreamManagerOptions) {
-    this.maxStreams = options?.maxStreams ?? MAX_CONCURRENT_CONVERSATION_STREAMS_PER_WINDOW
-    this.conversationRepo = options?.conversationRepo
+  constructor(options: ConversationStreamManagerOptions) {
+    if (!options?.conversationRepo) {
+      throw new Error('ConversationRepository is required for ConversationStreamManager.')
+    }
+    this.maxStreams = options.maxStreams ?? MAX_CONCURRENT_CONVERSATION_STREAMS_PER_WINDOW
+    this.conversationRepo = options.conversationRepo
     this.channelFactory =
-      options?.channelFactory ??
+      options.channelFactory ??
       (() => {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { MessageChannelMain } = require('electron')
         return new MessageChannelMain()
       })
+  }
+
+  private resolveAuthoritativeBotId(conversationId: string): string {
+    const conv = this.conversationRepo.getByIdOnly(conversationId)
+    if (!conv || typeof conv.botId !== 'string' || conv.botId.trim().length === 0) {
+      const err = new Error(
+        `Conversation '${conversationId}' not found or has no authoritative Bot.`
+      )
+      ;(err as unknown as { code: string }).code = 'CONVERSATION_NOT_FOUND'
+      throw err
+    }
+    return conv.botId
   }
 
   /**
@@ -144,6 +159,7 @@ export class ConversationStreamManager {
     const { requestId, conversationId, content, contentFormat } = payload
 
     this.assertCapacity(window, requestId)
+    const authoritativeBotId = this.resolveAuthoritativeBotId(conversationId)
 
     const { port1, port2 } = this.channelFactory()
     const abortController = new AbortController()
@@ -155,7 +171,7 @@ export class ConversationStreamManager {
       abortController,
       port: port1,
       conversationId,
-      botId: this.conversationRepo?.getByIdOnly(conversationId)?.botId,
+      botId: authoritativeBotId,
       executionMode: 'chat',
       stage: 'preparing',
       sequenceNumber: 1,
@@ -240,6 +256,7 @@ export class ConversationStreamManager {
     const { requestId, conversationId, messageId } = payload
 
     this.assertCapacity(window, requestId)
+    const authoritativeBotId = this.resolveAuthoritativeBotId(conversationId)
 
     const { port1, port2 } = this.channelFactory()
     const abortController = new AbortController()
@@ -251,7 +268,7 @@ export class ConversationStreamManager {
       abortController,
       port: port1,
       conversationId,
-      botId: this.conversationRepo?.getByIdOnly(conversationId)?.botId,
+      botId: authoritativeBotId,
       executionMode: 'chat',
       stage: 'preparing',
       sequenceNumber: 1,

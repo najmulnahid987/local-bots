@@ -915,6 +915,9 @@ export function createConversationApi(ipc: typeof ipcRenderer): ConversationApi 
         port!.onmessage = (event: MessageEvent<PublicConversationTurnEvent>) => {
           if (isDone) return
           const chunk = event.data
+          if (!chunk || typeof chunk !== 'object' || typeof chunk.type !== 'string') {
+            return
+          }
           try {
             onEvent?.(chunk)
           } catch {
@@ -1009,6 +1012,9 @@ export function createConversationApi(ipc: typeof ipcRenderer): ConversationApi 
         port!.onmessage = (event: MessageEvent<PublicConversationTurnEvent>) => {
           if (isDone) return
           const chunk = event.data
+          if (!chunk || typeof chunk !== 'object' || typeof chunk.type !== 'string') {
+            return
+          }
           try {
             onEvent?.(chunk)
           } catch {
@@ -1125,6 +1131,13 @@ export function createAgentsApi(ipc: typeof ipcRenderer): AgentApi {
       const runId = payload.agentRunId
       port.onmessage = (msgEvent: MessageEvent<AgentStreamEvent>): void => {
         const streamEvent = msgEvent.data
+        if (
+          !streamEvent ||
+          typeof streamEvent !== 'object' ||
+          typeof streamEvent.type !== 'string'
+        ) {
+          return
+        }
         const subscribers = eventSubscribers.get(runId)
         if (subscribers) {
           for (const subscriber of subscribers) {

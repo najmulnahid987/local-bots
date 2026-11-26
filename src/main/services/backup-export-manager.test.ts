@@ -172,7 +172,10 @@ describe('BackupExportManager', () => {
       memories: 2,
       sources: 1,
       conversations: 1,
+      segments: 1,
       messages: 2,
+      agentRuns: 0,
+      toolEvents: 0,
       totalSourceBytes: Buffer.byteLength(docContent)
     })
 

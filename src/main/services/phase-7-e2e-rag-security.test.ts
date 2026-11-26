@@ -402,7 +402,8 @@ describe('Phase 7 — Step 7.12: Final End-to-End RAG, Conversation, and Securit
       channelFactory: createMockMessageChannel as unknown as () => {
         port1: Electron.MessagePortMain
         port2: Electron.MessagePortMain
-      }
+      },
+      conversationRepo: convRepo
     })
 
     // 1. Fixture Provider Connection in SQLite
@@ -1201,7 +1202,8 @@ describe('Phase 7 — Step 7.12: Final End-to-End RAG, Conversation, and Securit
       channelFactory: createMockMessageChannel as unknown as () => {
         port1: Electron.MessagePortMain
         port2: Electron.MessagePortMain
-      }
+      },
+      conversationRepo: convRepo
     })
 
     await customStreamManager.startSendStream(

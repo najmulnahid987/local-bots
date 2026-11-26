@@ -509,7 +509,7 @@ export type AgentStreamEventType =
 export interface AgentStreamEventBase {
   readonly agentRunId: string
   readonly conversationId: string
-  readonly botId?: string
+  readonly botId: string
   readonly executionMode: 'agent'
   readonly stage: StreamLifecycleStage
   readonly sequenceNumber: number
@@ -711,61 +711,69 @@ export const respondToApprovalRequestSchema = z
   })
   .strict()
 
+const agentStreamEventBaseShape = {
+  agentRunId: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  botId: z.string().uuid(),
+  executionMode: z.literal('agent'),
+  stage: z.enum([
+    'idle',
+    'preparing',
+    'streaming',
+    'finalizing',
+    'completed',
+    'cancelled',
+    'failed'
+  ]),
+  sequenceNumber: z.number().int().positive(),
+  timestamp: z.number().int().positive()
+}
+
 export const agentStreamEventSchema = z.discriminatedUnion('type', [
   z.object({
+    type: z.literal('agent_stage_change'),
+    ...agentStreamEventBaseShape
+  }),
+  z.object({
+    type: z.literal('agent_text_delta'),
+    ...agentStreamEventBaseShape,
+    textDelta: z.string()
+  }),
+  z.object({
     type: z.literal('agent_run_started'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
-    botId: z.string().uuid(),
+    ...agentStreamEventBaseShape,
     selectedModel: z.string().min(1)
   }),
   z.object({
     type: z.literal('agent_iteration_started'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
+    ...agentStreamEventBaseShape,
     iteration: z.number().int().min(1).max(MAX_AGENT_RUN_ITERATIONS),
     maxIterations: z.number().int().min(1).max(MAX_AGENT_RUN_ITERATIONS)
   }),
   z.object({
     type: z.literal('tool_call_started'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
+    ...agentStreamEventBaseShape,
     toolEventId: z.string().uuid(),
     toolName: canonicalBotToolSchema,
     argumentsSummary: z.string()
   }),
   z.object({
     type: z.literal('tool_call_completed'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
+    ...agentStreamEventBaseShape,
     toolEventId: z.string().uuid(),
     toolName: canonicalBotToolSchema,
     resultSummary: z.string()
   }),
   z.object({
     type: z.literal('tool_call_failed'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
+    ...agentStreamEventBaseShape,
     toolEventId: z.string().uuid(),
     toolName: canonicalBotToolSchema,
     errorMessage: z.string()
   }),
   z.object({
     type: z.literal('approval_requested'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
+    ...agentStreamEventBaseShape,
     approvalRequestId: z.string().uuid(),
     title: z.string(),
     contentPreview: z.string(),
@@ -774,20 +782,14 @@ export const agentStreamEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('approval_resolved'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
+    ...agentStreamEventBaseShape,
     approvalRequestId: z.string().uuid(),
     status: z.enum(['approved', 'rejected', 'cancelled', 'expired']),
     reason: z.string().optional()
   }),
   z.object({
     type: z.literal('agent_run_completed'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
+    ...agentStreamEventBaseShape,
     finalResponse: z.string(),
     iterations: z.number().int().min(0),
     toolEventsCount: z.number().int().min(0),
@@ -796,10 +798,7 @@ export const agentStreamEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('agent_run_failed'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
+    ...agentStreamEventBaseShape,
     error: z.object({
       code: z.string(),
       message: z.string(),
@@ -808,10 +807,7 @@ export const agentStreamEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('agent_run_cancelled'),
-    agentRunId: z.string().uuid(),
-    conversationId: z.string().uuid().optional(),
-    sequenceNumber: z.number().int().positive(),
-    timestamp: z.number().int().positive(),
+    ...agentStreamEventBaseShape,
     reason: z.string()
   })
 ])

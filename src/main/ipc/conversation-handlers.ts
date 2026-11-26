@@ -54,21 +54,26 @@ export interface ConversationIpcHandlerOptions {
  */
 export function registerConversationIpcHandlers(options: ConversationIpcHandlerOptions): void {
   const { getMainWindow, conversationManager, turnService, activeContext } = options
-  const streamManager =
-    options.streamManager ??
-    new ConversationStreamManager({
-      conversationRepo:
-        (
-          conversationManager as unknown as {
-            conversationRepo?: import('../database/repositories/conversation-repository').ConversationRepository
-          }
-        ).conversationRepo ??
-        (
-          turnService as unknown as {
-            conversationRepo?: import('../database/repositories/conversation-repository').ConversationRepository
-          }
-        ).conversationRepo
+  let streamManager = options.streamManager
+  if (!streamManager) {
+    const resolvedConversationRepo =
+      (
+        conversationManager as unknown as {
+          conversationRepo?: import('../database/repositories/conversation-repository').ConversationRepository
+        }
+      ).conversationRepo ??
+      (
+        turnService as unknown as {
+          conversationRepo?: import('../database/repositories/conversation-repository').ConversationRepository
+        }
+      ).conversationRepo
+    if (!resolvedConversationRepo) {
+      throw new Error('ConversationRepository is required to initialize ConversationStreamManager.')
+    }
+    streamManager = new ConversationStreamManager({
+      conversationRepo: resolvedConversationRepo
     })
+  }
 
   const assertAuthorizedSender = (
     event: IpcSenderEventLike

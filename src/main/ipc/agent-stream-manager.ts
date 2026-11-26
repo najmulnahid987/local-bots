@@ -13,7 +13,7 @@ export const MAX_CONCURRENT_AGENT_STREAMS_PER_WINDOW = 5
 export interface AgentStreamSession {
   readonly agentRunId: string
   readonly conversationId: string
-  readonly botId?: string
+  readonly botId: string
   readonly window: BrowserWindowLike
   readonly senderFrame: WebFrameWithPostMessage
   readonly abortController: AbortController
@@ -164,13 +164,16 @@ export class AgentStreamManager {
     senderFrame: WebFrameWithPostMessage,
     agentRunId: string,
     conversationId: string,
-    onCancelRequested?: (agentRunId: string) => void,
-    botId?: string
+    onCancelRequested: ((agentRunId: string) => void) | undefined,
+    botId: string
   ): {
     abortSignal: AbortSignal
     emitEvent: (input: AgentStreamEventInput) => void
     close: () => void
   } {
+    if (typeof botId !== 'string' || botId.trim().length === 0) {
+      throw new Error('Authoritative botId is required to start an agent stream.')
+    }
     this.assertCapacity(window, agentRunId)
 
     const { port1, port2 } = this.channelFactory()
@@ -260,7 +263,7 @@ export class AgentStreamManager {
       ...input,
       agentRunId: session.agentRunId,
       conversationId: session.conversationId,
-      ...(session.botId ? { botId: session.botId } : {}),
+      botId: session.botId,
       executionMode: 'agent',
       stage: nextStage,
       sequenceNumber: session.sequenceNumber++,

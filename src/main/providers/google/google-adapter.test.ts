@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { GoogleAdapter } from './google-adapter'
-import { ProviderAdapterError } from './errors'
-import { GOOGLE_OFFICIAL_BASE_URL } from './types'
+import { ProviderAdapterError, sanitizeGoogleError } from './errors'
+import { GOOGLE_OFFICIAL_BASE_URL, DEFAULT_GENERATION_TIMEOUT_MS } from './types'
+import { defaultErrorRingBuffer } from '../../services/error-ring-buffer'
 import { type GenerateTextOptions } from '../types'
 
 describe('GoogleAdapter (Phase 3 Step 3.6)', () => {
@@ -876,5 +877,117 @@ describe('GoogleAdapter (Phase 3 Step 3.6)', () => {
     expect(result.finishReason).toBe('tool_calls')
     expect(result.usage.promptTokens).toBe(20)
     expect(result.usage.completionTokens).toBe(12)
+  })
+
+  // 35. Unwraps AI_RetryError wrapping HTTP 503 / 429 so statusCode and retryable are preserved
+  it('35. unwraps AI_RetryError lastError statusCode (503 & 429) instead of returning UNKNOWN_ERROR', () => {
+    const retry503 = Object.assign(new Error('Failed after 3 attempts.'), {
+      name: 'AI_RetryError',
+      reason: 'maxRetriesExceeded',
+      lastError: Object.assign(new Error('The model is experiencing high load'), {
+        name: 'AI_APICallError',
+        statusCode: 503
+      })
+    })
+    const err503 = sanitizeGoogleError(retry503)
+    expect(err503.code).toBe('SERVER_ERROR')
+    expect(err503.statusCode).toBe(503)
+    expect(err503.retryable).toBe(true)
+
+    const retry429 = Object.assign(new Error('Failed after 3 attempts.'), {
+      name: 'AI_RetryError',
+      reason: 'maxRetriesExceeded',
+      errors: [
+        Object.assign(new Error('Too many requests'), {
+          name: 'AI_APICallError',
+          statusCode: 429
+        })
+      ]
+    })
+    const err429 = sanitizeGoogleError(retry429)
+    expect(err429.code).toBe('RATE_LIMITED')
+    expect(err429.statusCode).toBe(429)
+    expect(err429.retryable).toBe(true)
+  })
+
+  // 36. Classifies mid-stream Undici/Node socket errors in err.cause as retryable NETWORK_ERROR / TIMEOUT
+  it('36. inspects err.cause for mid-stream terminated/ECONNRESET and body timeouts', () => {
+    const streamDrop = Object.assign(new TypeError('terminated'), {
+      cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+    })
+    const resDrop = sanitizeGoogleError(streamDrop)
+    expect(resDrop.code).toBe('NETWORK_ERROR')
+    expect(resDrop.retryable).toBe(true)
+
+    const bodyTimeout = Object.assign(new TypeError('terminated'), {
+      cause: Object.assign(new Error('Body Timeout Error'), { code: 'UND_ERR_BODY_TIMEOUT' })
+    })
+    const resTimeout = sanitizeGoogleError(bodyTimeout)
+    expect(resTimeout.code).toBe('TIMEOUT')
+    expect(resTimeout.retryable).toBe(true)
+  })
+
+  // 37. Classifies AI SDK stream validation / empty-output errors and records sanitized diagnostics for unknown errors
+  it('37. classifies AI SDK stream validation & empty response errors and logs sanitized unknown diagnostics', () => {
+    const emptyErr = sanitizeGoogleError(
+      Object.assign(new Error('No output generated.'), { name: 'AI_NoOutputGeneratedError' })
+    )
+    expect(emptyErr.code).toBe('SERVER_ERROR')
+    expect(emptyErr.retryable).toBe(true)
+
+    const parseErr = sanitizeGoogleError(
+      Object.assign(new Error('Type validation failed'), { name: 'AI_TypeValidationError' })
+    )
+    expect(parseErr.code).toBe('SERVER_ERROR')
+    expect(parseErr.retryable).toBe(true)
+
+    defaultErrorRingBuffer.clear()
+    const weird = sanitizeGoogleError(new Error('Weird failure with key AIzaSySecretKey1234567890'))
+    expect(weird.code).toBe('UNKNOWN_ERROR')
+    const recent = defaultErrorRingBuffer.getRecentErrors()
+    expect(recent.length).toBeGreaterThanOrEqual(1)
+    expect(recent[recent.length - 1].code).toBe('GOOGLE_UNKNOWN_ERROR')
+    expect(recent[recent.length - 1].sanitizedMessage).not.toContain('AIzaSySecretKey1234567890')
+  })
+
+  // 38. Normalizes consecutive user turns and skips blank assistant turns in convertMessages payload
+  it('38. merges consecutive user messages and drops blank assistant turns before sending to Gemini', async () => {
+    let capturedBody: { contents?: Array<{ role: string; parts: Array<{ text?: string }> }> } = {}
+    const customFetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof init?.body === 'string') {
+        capturedBody = JSON.parse(init.body)
+      }
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: 'Recovered answer' }] },
+              finishReason: 'STOP'
+            }
+          ],
+          usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }) as unknown as typeof fetch
+
+    expect(DEFAULT_GENERATION_TIMEOUT_MS).toBeGreaterThanOrEqual(120000)
+
+    const adapter = new GoogleAdapter({ customFetch })
+    const result = await adapter.generateText(dummyApiKey, {
+      modelId: 'gemini-3.8-flash',
+      messages: [
+        { role: 'user', content: 'First failed question' },
+        { role: 'assistant', content: '   ' },
+        { role: 'user', content: 'Second question' }
+      ]
+    })
+
+    expect(result.text).toBe('Recovered answer')
+    expect(capturedBody.contents).toHaveLength(1)
+    expect(capturedBody.contents?.[0].role).toBe('user')
+    const mergedText = capturedBody.contents?.[0].parts.map((p) => p.text ?? '').join('\n')
+    expect(mergedText).toContain('First failed question')
+    expect(mergedText).toContain('Second question')
   })
 })

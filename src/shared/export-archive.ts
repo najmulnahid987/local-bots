@@ -6,8 +6,8 @@ import { botResponsePolicySchema, type BotResponsePolicy } from './bots'
  * Format identifier and schema version for Voyaro Knowledge Base export archives.
  */
 export const EXPORT_ARCHIVE_FORMAT = 'voyaro-knowledge-base-export' as const
-export const EXPORT_ARCHIVE_SCHEMA_VERSION = '1.1.0' as const
-export const SUPPORTED_EXPORT_SCHEMA_VERSIONS = ['1.0.0', '1.1.0'] as const
+export const EXPORT_ARCHIVE_SCHEMA_VERSION = '1.2.0' as const
+export const SUPPORTED_EXPORT_SCHEMA_VERSIONS = ['1.0.0', '1.1.0', '1.2.0'] as const
 export type ExportArchiveSchemaVersion = (typeof SUPPORTED_EXPORT_SCHEMA_VERSIONS)[number]
 export const DEFAULT_EXPORT_EXTENSION = '.voyaro-kb.zip' as const
 
@@ -19,9 +19,7 @@ export const EXCLUDED_EXPORT_CATEGORIES = [
   'api_keys',
   'database_files',
   'machine_paths',
-  'fts5_indexes',
-  'agent_runs',
-  'tool_events'
+  'fts5_indexes'
 ] as const
 
 /**
@@ -41,7 +39,10 @@ export interface ExportCountsDto {
   readonly memories: number
   readonly sources: number
   readonly conversations: number
+  readonly segments?: number
   readonly messages: number
+  readonly agentRuns?: number
+  readonly toolEvents?: number
   readonly totalSourceBytes: number
   readonly extractedDocuments?: number
   readonly preservationReports?: number
@@ -119,6 +120,7 @@ export interface ExportKnowledgeSourceDto {
   readonly fileSizeBytes: number
   readonly contentHash: string
   readonly indexingStatus: string
+  readonly errorMessage?: string | null
   readonly createdAt: number
   readonly updatedAt: number
   readonly indexedAt: number | null
@@ -139,25 +141,77 @@ export interface ExportConversationDto {
 }
 
 /**
+ * Serialized historical conversation segment stored in `conversations.json`.
+ */
+export interface ExportConversationSegmentDto {
+  readonly id: string
+  readonly conversationId: string
+  readonly originalConversationId: string
+  readonly title: string
+  readonly segmentOrder: number
+  readonly firstMessageCreatedAt: number | null
+  readonly lastMessageCreatedAt: number | null
+  readonly messageCount: number
+  readonly createdAt: number
+  readonly archivedAt: number | null
+}
+
+/**
  * Serialized conversation message stored in `conversations.json`.
- * Excludes internal token counts, machine paths, or credential markers.
+ * Excludes machine paths or credential markers.
  */
 export interface ExportMessageDto {
   readonly id: string
   readonly conversationId: string
+  readonly segmentId?: string | null
   readonly role: 'user' | 'assistant' | 'system' | 'tool'
   readonly content: string
   readonly contentFormat: 'text' | 'markdown' | 'json'
   readonly metadata?: Record<string, unknown> | null
+  readonly tokenUsage?: Record<string, unknown> | null
   readonly createdAt: number
 }
 
 /**
- * Full conversation bundle containing conversation metadata and ordered messages.
+ * Full conversation bundle containing conversation metadata, segments, and ordered messages.
  */
 export interface ExportConversationBundleDto {
   readonly conversation: ExportConversationDto
+  readonly segments?: readonly ExportConversationSegmentDto[]
   readonly messages: readonly ExportMessageDto[]
+}
+
+/**
+ * Serialized Agent Run audit record stored in `agent-runs.json`.
+ */
+export interface ExportAgentRunDto {
+  readonly id: string
+  readonly botId: string
+  readonly conversationId: string | null
+  readonly status: 'queued' | 'running' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled'
+  readonly selectedModel: string
+  readonly iterationCount: number
+  readonly errorSummary: string | null
+  readonly startedAt: number
+  readonly completedAt: number | null
+}
+
+/**
+ * Serialized Tool Event audit record stored in `tool-events.json`.
+ */
+export interface ExportToolEventDto {
+  readonly id: string
+  readonly agentRunId: string
+  readonly sequenceNumber: number
+  readonly toolName: string
+  readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  readonly approvalStatus:
+    'not_required' | 'auto_approved' | 'pending_approval' | 'user_approved' | 'user_rejected'
+  readonly argumentsSummary: string
+  readonly resultSummary: string
+  readonly errorMessage: string | null
+  readonly startedAt: number
+  readonly completedAt: number | null
 }
 
 /**
@@ -205,7 +259,10 @@ export const exportCountsDtoSchema = z
     memories: z.number().int().nonnegative(),
     sources: z.number().int().nonnegative(),
     conversations: z.number().int().nonnegative(),
+    segments: z.number().int().nonnegative().optional(),
     messages: z.number().int().nonnegative(),
+    agentRuns: z.number().int().nonnegative().optional(),
+    toolEvents: z.number().int().nonnegative().optional(),
     totalSourceBytes: z.number().int().nonnegative(),
     extractedDocuments: z.number().int().nonnegative().optional(),
     preservationReports: z.number().int().nonnegative().optional()
@@ -277,6 +334,7 @@ export const exportKnowledgeSourceDtoSchema = z
     fileSizeBytes: z.number().int().nonnegative(),
     contentHash: z.string().regex(/^[0-9a-f]{64}$/i),
     indexingStatus: z.string(),
+    errorMessage: z.string().optional().nullable(),
     createdAt: z.number().int().positive(),
     updatedAt: z.number().int().positive(),
     indexedAt: z.number().int().positive().nullable(),
@@ -296,14 +354,31 @@ export const exportConversationDtoSchema = z
   })
   .strict()
 
+export const exportConversationSegmentDtoSchema = z
+  .object({
+    id: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    originalConversationId: z.string().uuid(),
+    title: z.string().min(1),
+    segmentOrder: z.number().int().nonnegative(),
+    firstMessageCreatedAt: z.number().int().positive().nullable(),
+    lastMessageCreatedAt: z.number().int().positive().nullable(),
+    messageCount: z.number().int().nonnegative(),
+    createdAt: z.number().int().positive(),
+    archivedAt: z.number().int().positive().nullable()
+  })
+  .strict()
+
 export const exportMessageDtoSchema = z
   .object({
     id: z.string().uuid(),
     conversationId: z.string().uuid(),
+    segmentId: z.string().uuid().nullable().optional(),
     role: z.enum(['user', 'assistant', 'system', 'tool']),
     content: z.string(),
     contentFormat: z.enum(['text', 'markdown', 'json']),
     metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+    tokenUsage: z.record(z.string(), z.unknown()).nullable().optional(),
     createdAt: z.number().int().positive()
   })
   .strict()
@@ -311,7 +386,56 @@ export const exportMessageDtoSchema = z
 export const exportConversationBundleDtoSchema = z
   .object({
     conversation: exportConversationDtoSchema,
+    segments: z.array(exportConversationSegmentDtoSchema).optional(),
     messages: z.array(exportMessageDtoSchema)
+  })
+  .strict()
+
+export const exportAgentRunDtoSchema = z
+  .object({
+    id: z.string().uuid(),
+    botId: z.string().uuid(),
+    conversationId: z.string().uuid().nullable(),
+    status: z.enum(['queued', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled']),
+    selectedModel: z.string().min(1),
+    iterationCount: z.number().int().nonnegative(),
+    errorSummary: z.string().nullable(),
+    startedAt: z.number().int().positive(),
+    completedAt: z.number().int().positive().nullable()
+  })
+  .strict()
+
+export const exportToolEventDtoSchema = z
+  .object({
+    id: z.string().uuid(),
+    agentRunId: z.string().uuid(),
+    sequenceNumber: z.number().int().nonnegative(),
+    toolName: z.string().min(1),
+    status: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled']),
+    approvalStatus: z.enum([
+      'not_required',
+      'auto_approved',
+      'pending_approval',
+      'user_approved',
+      'user_rejected'
+    ]),
+    argumentsSummary: z.string(),
+    resultSummary: z.string(),
+    errorMessage: z.string().nullable(),
+    startedAt: z.number().int().positive(),
+    completedAt: z.number().int().positive().nullable()
+  })
+  .strict()
+
+export const exportAgentRunsFileSchema = z
+  .object({
+    agentRuns: z.array(exportAgentRunDtoSchema)
+  })
+  .strict()
+
+export const exportToolEventsFileSchema = z
+  .object({
+    toolEvents: z.array(exportToolEventDtoSchema)
   })
   .strict()
 

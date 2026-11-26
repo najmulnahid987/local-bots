@@ -57,6 +57,18 @@ const REDACTION_PATTERNS: readonly RedactionPattern[] = [
     regex: /\bBearer\s+[a-zA-Z0-9_.-]{20,}\b/gi,
     replacement: 'Bearer [REDACTED_TOKEN]'
   },
+  // API Key Headers
+  {
+    name: 'API Key Header',
+    regex: /\b((?:x-api-key|x-goog-api-key)\s*:\s*)[^\s,;'"\r\n]+/gi,
+    replacement: '$1[REDACTED_SECRET]'
+  },
+  // Secret-bearing URL query parameters
+  {
+    name: 'Secret URL Query Parameter',
+    regex: /([?&](?:api_?key|key|token|access_token|secret|auth)=)[^&\s"'<>]+/gi,
+    replacement: '$1[REDACTED_SECRET]'
+  },
   // Quarantined and Staging folder patterns
   {
     name: 'Quarantine folder',

@@ -48,4 +48,9 @@ export function sanitizeErrorMessage(message: string): string {
       '[REDACTED_REF]'
     )
     .replace(/Bearer\s+[a-zA-Z0-9_\-.]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b((?:x-api-key|x-goog-api-key)\s*:\s*)[^\s,;'"\r\n]+/gi, '$1[REDACTED_SECRET]')
+    .replace(
+      /([?&](?:api_?key|key|token|access_token|secret|auth)=)[^&\s"'<>]+/gi,
+      '$1[REDACTED_SECRET]'
+    )
 }

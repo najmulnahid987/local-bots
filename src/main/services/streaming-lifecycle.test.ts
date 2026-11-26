@@ -507,7 +507,8 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
       } as unknown as ConversationTurnService
 
       const streamManager = new ConversationStreamManager({
-        channelFactory: createMockMessageChannel
+        channelFactory: createMockMessageChannel,
+        conversationRepo: convRepo
       })
 
       const mockWindow = { isDestroyed: () => false } as unknown as BrowserWindowLike
@@ -533,7 +534,8 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
 
     it('14. Error during streaming terminates turn cleanly with error event', async () => {
       const streamManager = new ConversationStreamManager({
-        channelFactory: createMockMessageChannel
+        channelFactory: createMockMessageChannel,
+        conversationRepo: convRepo
       })
       const mockWindow = { isDestroyed: () => false } as unknown as BrowserWindowLike
       const receivedEvents: PublicConversationTurnEvent[] = []
@@ -876,7 +878,14 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
       const onCancel = vi.fn()
 
       const runId = randomUUID()
-      agentStreamManager.startStream(mockWindow, mockSenderFrame, runId, conversationId, onCancel)
+      agentStreamManager.startStream(
+        mockWindow,
+        mockSenderFrame,
+        runId,
+        conversationId,
+        onCancel,
+        botId
+      )
 
       const cancelled = agentStreamManager.cancelStream(runId, mockWindow, 'User clicked stop')
       expect(cancelled).toBe(true)
@@ -886,7 +895,8 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
 
     it('27. Cancellation is idempotent (duplicate cancel requests are safe no-ops)', () => {
       const streamManager = new ConversationStreamManager({
-        channelFactory: createMockMessageChannel
+        channelFactory: createMockMessageChannel,
+        conversationRepo: convRepo
       })
       const mockWindow = { isDestroyed: () => false } as unknown as BrowserWindowLike
       const mockSenderFrame = createMockSenderFrame()
@@ -922,7 +932,8 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
       const reqId = randomUUID()
 
       const streamManager = new ConversationStreamManager({
-        channelFactory: createMockMessageChannel
+        channelFactory: createMockMessageChannel,
+        conversationRepo: convRepo
       })
       const mockWindow = { isDestroyed: () => false } as unknown as BrowserWindowLike
       const events: PublicConversationTurnEvent[] = []
@@ -1251,7 +1262,8 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
   describe('Category 6: IPC and Renderer lifecycle (Scenarios 38–46)', () => {
     it('38. MessagePortMain transfer succeeds for send message stream', async () => {
       const streamManager = new ConversationStreamManager({
-        channelFactory: createMockMessageChannel
+        channelFactory: createMockMessageChannel,
+        conversationRepo: convRepo
       })
       const mockWindow = { isDestroyed: () => false } as unknown as BrowserWindowLike
       let transferredChannel: string | undefined
@@ -1279,7 +1291,8 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
 
     it('39. MessagePortMain transfer succeeds for retry stream', async () => {
       const streamManager = new ConversationStreamManager({
-        channelFactory: createMockMessageChannel
+        channelFactory: createMockMessageChannel,
+        conversationRepo: convRepo
       })
       const mockWindow = { isDestroyed: () => false } as unknown as BrowserWindowLike
       let transferredChannel: string | undefined
@@ -1321,7 +1334,8 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
         mockSenderFrame,
         randomUUID(),
         conversationId,
-        vi.fn()
+        vi.fn(),
+        botId
       )
 
       expect(transferredChannel).toBe('agent:stream-port')
@@ -1329,7 +1343,8 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
 
     it('41. Window close or navigation aborts active streams and cleans up ports', () => {
       const streamManager = new ConversationStreamManager({
-        channelFactory: createMockMessageChannel
+        channelFactory: createMockMessageChannel,
+        conversationRepo: convRepo
       })
       const mockWindow = { isDestroyed: () => false } as unknown as BrowserWindowLike
       const mockSenderFrame = createMockSenderFrame()
@@ -1808,7 +1823,8 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
 
     it('52. Top-level navigation aborts active streams while in-place hash navigation preserves them', () => {
       const streamManager = new ConversationStreamManager({
-        channelFactory: createMockMessageChannel
+        channelFactory: createMockMessageChannel,
+        conversationRepo: convRepo
       })
       const navListeners = new Map<string, (...args: unknown[]) => void>()
       const mockWindow = {
@@ -1846,6 +1862,162 @@ describe('Phase 12 Step 12.7: Streaming Lifecycle Specification (All 46 Scenario
       // Top-level navigation (isInPlace = false) MUST abort active stream
       didStartNav?.({}, 'http://localhost/reload', false)
       expect(streamManager.getActiveStreamCount(mockWindow)).toBe(0)
+    })
+
+    it('53. Every Chat event carries non-empty authoritative botId from SQLite and ignores/rejects spoofed botId', async () => {
+      const bot2 = botRepo.create({
+        knowledgeBaseId: kbId,
+        name: 'OtherBot',
+        modelId: 'gpt-4o'
+      })
+
+      const streamManager = new ConversationStreamManager({
+        channelFactory: createMockMessageChannel,
+        conversationRepo: convRepo
+      })
+      const mockWindow = { isDestroyed: () => false } as unknown as BrowserWindowLike
+      const events: PublicConversationTurnEvent[] = []
+      const mockSenderFrame = createMockSenderFrame((_ch, _data, ports) => {
+        const p = ports[0]
+        p.on('message', (ev) => events.push(ev.data as PublicConversationTurnEvent))
+        p.start()
+      })
+
+      const reqId = randomUUID()
+      const mockTurnStream: ConversationTurnStream = {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text_delta' as const, textDelta: 'Authoritative reply' }
+          yield {
+            type: 'finish' as const,
+            finishReason: 'stop' as const,
+            totalTextLength: 19,
+            durationMs: 20,
+            message: {
+              id: randomUUID(),
+              conversationId,
+              role: 'assistant',
+              content: 'Authoritative reply',
+              contentFormat: 'markdown',
+              metadata: {},
+              tokenUsage: null,
+              createdAt: Date.now()
+            }
+          }
+        },
+        getResult: async () => ({
+          userMessage: {
+            id: randomUUID(),
+            conversationId,
+            role: 'user',
+            content: 'Hi',
+            contentFormat: 'markdown',
+            metadata: {},
+            tokenUsage: null,
+            createdAt: Date.now()
+          },
+          assistantMessage: {
+            id: randomUUID(),
+            conversationId,
+            role: 'assistant',
+            content: 'Authoritative reply',
+            contentFormat: 'markdown',
+            metadata: {},
+            tokenUsage: null,
+            createdAt: Date.now()
+          },
+          finishReason: 'stop' as const,
+          durationMs: 20
+        })
+      }
+
+      // Attempt to smuggle another botId in payload (cast to bypass TS)
+      await streamManager.startSendStream(
+        mockWindow,
+        mockSenderFrame,
+        {
+          requestId: reqId,
+          conversationId,
+          content: 'Hi',
+          botId: bot2.id
+        } as unknown as import('../../shared/conversations').SendMessageIpcRequest,
+        1,
+        {
+          sendMessage: vi.fn().mockReturnValue(mockTurnStream)
+        } as unknown as ConversationTurnService
+      )
+
+      await new Promise((r) => setTimeout(r, 40))
+
+      expect(events.length).toBeGreaterThanOrEqual(4)
+      for (const ev of events) {
+        expect(typeof ev.botId).toBe('string')
+        expect(ev.botId.length).toBeGreaterThan(0)
+        expect(ev.botId).toBe(botId)
+        expect(ev.botId).not.toBe(bot2.id)
+      }
+
+      // Unknown conversationId must be rejected before starting stream
+      await expect(
+        streamManager.startSendStream(
+          mockWindow,
+          mockSenderFrame,
+          { requestId: randomUUID(), conversationId: randomUUID(), content: 'Hi' },
+          1,
+          { sendMessage: vi.fn() } as unknown as ConversationTurnService
+        )
+      ).rejects.toThrow(/not found/i)
+    })
+
+    it('54. Every Agent event carries non-empty authoritative botId and startStream rejects missing botId', async () => {
+      const agentStreamManager = new AgentStreamManager({
+        channelFactory: createMockMessageChannel
+      })
+      const mockWindow = { isDestroyed: () => false } as unknown as BrowserWindowLike
+      const events: import('../../shared/agents').AgentStreamEvent[] = []
+      const mockSenderFrame = createMockSenderFrame((_ch, _data, ports) => {
+        const p = ports[0]
+        p.on('message', (ev) =>
+          events.push(ev.data as import('../../shared/agents').AgentStreamEvent)
+        )
+        p.start()
+      })
+
+      expect(() =>
+        agentStreamManager.startStream(
+          mockWindow,
+          mockSenderFrame,
+          randomUUID(),
+          conversationId,
+          undefined,
+          ''
+        )
+      ).toThrow(/Authoritative botId is required/i)
+
+      const runId = randomUUID()
+      const stream = agentStreamManager.startStream(
+        mockWindow,
+        mockSenderFrame,
+        runId,
+        conversationId,
+        undefined,
+        botId
+      )
+
+      stream.emitEvent({ type: 'agent_iteration_started', iteration: 1, maxIterations: 5 })
+      stream.emitEvent({
+        type: 'agent_run_failed',
+        error: { code: 'EXECUTION_ERROR', message: 'Boom' }
+      })
+
+      await new Promise((r) => setTimeout(r, 40))
+
+      expect(events).toHaveLength(2)
+      for (const ev of events) {
+        expect(ev.botId).toBe(botId)
+        expect(ev.executionMode).toBe('agent')
+        expect(ev.conversationId).toBe(conversationId)
+        expect(ev.agentRunId).toBe(runId)
+      }
     })
   })
 })

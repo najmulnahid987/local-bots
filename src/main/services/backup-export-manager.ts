@@ -13,10 +13,14 @@ import {
   type ExportBotMemoryDto,
   type ExportKnowledgeSourceDto,
   type ExportConversationDto,
+  type ExportConversationSegmentDto,
   type ExportMessageDto,
   type ExportConversationBundleDto,
+  type ExportAgentRunDto,
+  type ExportToolEventDto,
   type ExportKnowledgeBaseResultDto
 } from '../../shared/export-archive'
+import { toAppAgentRunStatus, type DbAgentRunStatus } from '../../shared/agents'
 import { KnowledgeBaseRepository } from '../database/repositories/knowledge-base-repository'
 import { BotRepository } from '../database/repositories/bot-repository'
 import { BotMemoryRepository } from '../database/repositories/bot-memory-repository'
@@ -145,6 +149,8 @@ export class BackupExportManager {
     let memoriesData: ExportBotMemoryDto[]
     let sourcesData: ExportKnowledgeSourceDto[]
     let conversationBundles: ExportConversationBundleDto[]
+    let agentRunsData: ExportAgentRunDto[]
+    let toolEventsData: ExportToolEventDto[]
 
     try {
       const snapshot = this.readKnowledgeBaseSnapshot(knowledgeBaseId)
@@ -153,6 +159,8 @@ export class BackupExportManager {
       memoriesData = snapshot.memoriesData
       sourcesData = snapshot.sourcesData
       conversationBundles = snapshot.conversationBundles
+      agentRunsData = snapshot.agentRunsData
+      toolEventsData = snapshot.toolEventsData
     } catch (err) {
       return {
         success: false,
@@ -219,7 +227,15 @@ export class BackupExportManager {
     }
 
     // 3. Post-Export Secret Scanner: Inspect all serialized data
-    const serializedPayloads = [kbData, botsData, memoriesData, sourcesData, conversationBundles]
+    const serializedPayloads = [
+      kbData,
+      botsData,
+      memoriesData,
+      sourcesData,
+      conversationBundles,
+      agentRunsData,
+      toolEventsData
+    ]
 
     for (const payload of serializedPayloads) {
       const scanResult = this.secretScanner.scanObject(payload)
@@ -301,12 +317,16 @@ export class BackupExportManager {
     })
 
     // 6. Build ZIP Archive
+    const segmentsCount = conversationBundles.reduce((acc, c) => acc + (c.segments?.length ?? 0), 0)
     const counts: ExportCountsDto = {
       bots: botsData.length,
       memories: memoriesData.length,
       sources: sourcesData.length,
       conversations: conversationBundles.length,
+      segments: segmentsCount,
       messages: conversationBundles.reduce((acc, c) => acc + c.messages.length, 0),
+      agentRuns: agentRunsData.length,
+      toolEvents: toolEventsData.length,
       totalSourceBytes
     }
     if (extractedDocsCount > 0) {
@@ -335,6 +355,14 @@ export class BackupExportManager {
       { path: 'bot-memories.json', data: memoriesJsonBuffer },
       { path: 'sources.json', data: sourcesJsonBuffer },
       { path: 'conversations.json', data: conversationsJsonBuffer },
+      {
+        path: 'agent-runs.json',
+        data: Buffer.from(JSON.stringify({ agentRuns: agentRunsData }, null, 2), 'utf8')
+      },
+      {
+        path: 'tool-events.json',
+        data: Buffer.from(JSON.stringify({ toolEvents: toolEventsData }, null, 2), 'utf8')
+      },
       ...extraDocEntries
     ]
 
@@ -435,6 +463,8 @@ export class BackupExportManager {
     memoriesData: ExportBotMemoryDto[]
     sourcesData: ExportKnowledgeSourceDto[]
     conversationBundles: ExportConversationBundleDto[]
+    agentRunsData: ExportAgentRunDto[]
+    toolEventsData: ExportToolEventDto[]
   } {
     const readTx = this.db.transaction(() => {
       const kb = this.kbRepository.getById(knowledgeBaseId)
@@ -495,6 +525,40 @@ export class BackupExportManager {
             archivedAt: conv.archivedAt
           }
 
+          const segmentsRows = this.db
+            .prepare(
+              `SELECT id, conversation_id, original_conversation_id, title, segment_order,
+                      first_message_created_at, last_message_created_at, message_count, created_at, archived_at
+               FROM conversation_segments
+               WHERE conversation_id = ?
+               ORDER BY segment_order ASC, created_at ASC`
+            )
+            .all(conv.id) as Array<{
+            id: string
+            conversation_id: string
+            original_conversation_id: string
+            title: string
+            segment_order: number
+            first_message_created_at: number | null
+            last_message_created_at: number | null
+            message_count: number
+            created_at: number
+            archived_at: number | null
+          }>
+
+          const segmentsDto: ExportConversationSegmentDto[] = segmentsRows.map((seg) => ({
+            id: seg.id,
+            conversationId: seg.conversation_id,
+            originalConversationId: seg.original_conversation_id,
+            title: seg.title,
+            segmentOrder: seg.segment_order,
+            firstMessageCreatedAt: seg.first_message_created_at,
+            lastMessageCreatedAt: seg.last_message_created_at,
+            messageCount: seg.message_count,
+            createdAt: seg.created_at,
+            archivedAt: seg.archived_at
+          }))
+
           const messages = this.messageRepository.listByConversation(
             conv.id,
             bot.id,
@@ -503,19 +567,93 @@ export class BackupExportManager {
           const messagesDto: ExportMessageDto[] = messages.map((msg) => ({
             id: msg.id,
             conversationId: msg.conversationId,
+            segmentId: msg.segmentId ?? null,
             role: msg.role,
             content: msg.content,
             contentFormat: msg.contentFormat,
             metadata: msg.metadata ? { ...msg.metadata } : null,
+            tokenUsage: msg.tokenUsage ? { ...msg.tokenUsage } : null,
             createdAt: msg.createdAt
           }))
 
           conversationBundles.push({
             conversation: convDto,
+            segments: segmentsDto,
             messages: messagesDto
           })
         }
       }
+
+      const agentRunRows = this.db
+        .prepare(
+          `SELECT id, bot_id, conversation_id, status, selected_model, iteration_count,
+                  error_summary, started_at, completed_at
+           FROM agent_runs
+           WHERE knowledge_base_id = ?
+           ORDER BY started_at ASC`
+        )
+        .all(knowledgeBaseId) as Array<{
+        id: string
+        bot_id: string
+        conversation_id: string | null
+        status: DbAgentRunStatus
+        selected_model: string
+        iteration_count: number
+        error_summary: string | null
+        started_at: number
+        completed_at: number | null
+      }>
+
+      const agentRunsData: ExportAgentRunDto[] = agentRunRows.map((run) => ({
+        id: run.id,
+        botId: run.bot_id,
+        conversationId: run.conversation_id,
+        status: toAppAgentRunStatus(run.status),
+        selectedModel: run.selected_model,
+        iterationCount: run.iteration_count,
+        errorSummary: run.error_summary,
+        startedAt: run.started_at,
+        completedAt: run.completed_at
+      }))
+
+      const toolEventRows = this.db
+        .prepare(
+          `SELECT te.id, te.agent_run_id, te.sequence_number, te.tool_name, te.status,
+                  te.approval_status, te.arguments_summary, te.result_summary,
+                  te.error_message, te.started_at, te.completed_at
+           FROM tool_events te
+           INNER JOIN agent_runs ar ON te.agent_run_id = ar.id
+           WHERE ar.knowledge_base_id = ?
+           ORDER BY te.started_at ASC, te.sequence_number ASC`
+        )
+        .all(knowledgeBaseId) as Array<{
+        id: string
+        agent_run_id: string
+        sequence_number: number
+        tool_name: string
+        status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+        approval_status:
+          'not_required' | 'auto_approved' | 'pending_approval' | 'user_approved' | 'user_rejected'
+        arguments_summary: string
+        result_summary: string
+        error_message: string | null
+        started_at: number
+        completed_at: number | null
+      }>
+
+      const toolEventsData: ExportToolEventDto[] = toolEventRows.map((ev) => ({
+        id: ev.id,
+        agentRunId: ev.agent_run_id,
+        sequenceNumber: ev.sequence_number,
+        toolName: ev.tool_name,
+        status: ev.status,
+        approvalStatus: ev.approval_status,
+        argumentsSummary: ev.arguments_summary,
+        resultSummary: ev.result_summary,
+        errorMessage: ev.error_message,
+        startedAt: ev.started_at,
+        completedAt: ev.completed_at
+      }))
 
       const sources = this.knowledgeSourceRepository.listByKnowledgeBase(knowledgeBaseId)
       const sourcesData: ExportKnowledgeSourceDto[] = sources.map((s) => ({
@@ -527,6 +665,7 @@ export class BackupExportManager {
         fileSizeBytes: s.file_size,
         contentHash: s.content_hash,
         indexingStatus: s.indexing_status,
+        errorMessage: s.error_message ?? null,
         createdAt: s.created_at,
         updatedAt: s.updated_at,
         indexedAt: s.indexed_at
@@ -537,7 +676,9 @@ export class BackupExportManager {
         botsData,
         memoriesData,
         sourcesData,
-        conversationBundles
+        conversationBundles,
+        agentRunsData,
+        toolEventsData
       }
     })
 

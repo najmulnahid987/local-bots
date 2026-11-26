@@ -341,9 +341,10 @@ describe('Conversation IPC Bridge & Preload Integration', () => {
     // Activate KB2 for session 2
     activeContext.activateWorkspace(2, kb2Id)
 
-    // Setup custom stream manager with mock channel factory
+    // Setup custom stream manager with mock channel factory and authoritative conversationRepo
     streamManager = new ConversationStreamManager({
-      channelFactory: createMockMessageChannel
+      channelFactory: createMockMessageChannel,
+      conversationRepo: convRepo
     })
 
     // Setup Mock ConversationTurnService

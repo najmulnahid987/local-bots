@@ -20,6 +20,7 @@ describe('Renderer: useConversationTurn Hook (Phase 7 Step 7.8)', () => {
 
   const baseMeta = {
     requestId: 'req-0000-0000-0000-000000000001',
+    botId: 'bot-1111-1111-1111-111111111111',
     conversationId,
     executionMode: 'chat' as const,
     sequenceNumber: 1,

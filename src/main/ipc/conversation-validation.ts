@@ -32,6 +32,11 @@ export function sanitizeConversationErrorMessage(message: string): string {
     .replace(/(?:\/|\.\.\/)[a-zA-Z0-9_./-]+/g, '[REDACTED_PATH]')
     .replace(/(sk-proj-|sk-ant-|AIzaSy|sk-)[a-zA-Z0-9_\-+/=]{10,}/gi, '[REDACTED_KEY]')
     .replace(/Bearer\s+[a-zA-Z0-9_\-.~+/=]{10,}/gi, 'Bearer [REDACTED_TOKEN]')
+    .replace(/\b((?:x-api-key|x-goog-api-key)\s*:\s*)[^\s,;'"\r\n]+/gi, '$1[REDACTED_SECRET]')
+    .replace(
+      /([?&](?:api_?key|key|token|access_token|secret|auth)=)[^&\s"'<>]+/gi,
+      '$1[REDACTED_SECRET]'
+    )
     .replace(
       /cred_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
       '[REDACTED_REF]'

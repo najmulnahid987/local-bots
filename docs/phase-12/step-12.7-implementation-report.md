@@ -1,315 +1,206 @@
-# Phase 12 — Step 12.7: Streaming Lifecycle Implementation Report
+# Phase 12 — Step 12.7: Streaming Lifecycle Implementation Report (Audited & Corrected)
 
 **Project:** Local-First Multi-Model AI Agent Workspace (`Local Bots`)  
 **Phase:** 12 — Unified Bot Experience  
 **Step:** 12.7 — Streaming Lifecycle  
-**Status:** Implementation Complete & Fully Verified  
+**Status:** Implementation Complete, Audited & Verified  
 **Date:** November 2026  
 
 ---
 
-## 1. Executive Summary
+## 1. Git-State Investigation & Reconciliation
 
-Step 12.7 establishes an authoritative, end-to-end, deterministic streaming lifecycle for all Chat and Agent interactions within the unified Bot experience. 
+### Verified Repository State
+- **Branch:** `main` (`origin/main`)
+- **HEAD at Audit Start:** `ff3f1579193109a28a8a1079518b6fea9639a43a` (`ff3f157 i just complete phase 11`) with all Steps 12.1–12.7 unstaged in the working tree.
+- **Current HEAD:** `a2bf8908b6a93621f4cbc831059ed723b4f126ce` (`a2bf890 (HEAD -> main, origin/main) almost complete the phase 12`, authored/committed externally on `Thu Nov 26 21:01:28 2026 +0600`), which committed 121 files (`19,060+` insertions, `3,098-` deletions) encompassing Phase 12 (Steps 12.1–12.7) and the `src/main/documents/` updates.
+- **Current Working Tree:** Contains only the post-`a2bf890` mandatory `botId` contract corrections and this updated report, with 0 staged changes (`git diff --cached --stat` empty).
 
-Prior to Step 12.7, streaming focused on delivering text deltas and iteration signals to the renderer. However, edge-case conditions—such as client cancellation, window close, navigation, Bot switching, network drops, provider errors, and retries—did not have a unified state machine with end-to-end request correlation, partial response persistence, or systematic stale-event suppression.
-
-Step 12.7 introduces:
-1. **Explicit 7-Stage Streaming Lifecycle:** Formally typed stages (`idle`, `preparing`, `streaming`, `finalizing`, `completed`, `cancelled`, `failed`) that govern turn transitions across both Chat and Agent execution modes.
-2. **Authoritative Request & Mode Correlation:** Every stream event carries `requestId`, `conversationId`, `botId`, `executionMode: 'chat' | 'agent'`, monotonically increasing `sequenceNumber`, `timestamp`, and `stage`.
-3. **Partial Response Persistence & Recovery (Section 9 Invariant):**
-   - Cancelled or interrupted responses with `accumulatedText.trim().length > 0` are persisted as assistant messages with `isPartial: true`, `status: 'cancelled' | 'failed' | 'interrupted'`, `interruptedReason`, zero false citations, and zero validated claims.
-   - Cancelled turns with 0 characters persist only the user prompt without creating phantom empty assistant records.
-   - Retrying after a cancelled or interrupted turn deletes the partial assistant message via `messageRepo.delete()` and re-executes the user prompt cleanly without duplicating turns.
-4. **Renderer Isolation & Stale-Event Firewall:** `useConversationTurn` and `useAgentTaskEvents` strictly correlate incoming port events with active `conversationId` and `botId`. Events for previous Bots or discarded requests are silently dropped.
-5. **Zero Hallucination Streaming:** Model responses stream provisionally without citations or validated claims; grounding validation, citation resolution, and claim provenance attachment occur exclusively during `finalizing` in the Electron Main process prior to completion.
-6. **Strict Chat / Agent Execution Separation:** Chat streaming emits only conversational deltas and stages; Agent streaming dispatches tool calls, approval gates, and iteration telemetry through `BoundedAgentRuntime`. Modes are never conflated.
-
-All 46 required test scenarios across 6 categories were implemented and verified in `src/main/services/streaming-lifecycle.test.ts`. The complete workspace verification suite passed with **214 test files passed (214/214)** and **3,338 tests passed (3,338/3,338)**, with clean TypeScript typecheck (`npm run typecheck`), zero ESLint errors (`npm run lint`), and a clean production bundle build (`npm run build`).
+### Resolution of Conflicting Previous Reports
+- **Why Step 12.5, Step 12.6, and Step 12.7 differed:** All of Phase 12 (Steps 12.1 through 12.7) was implemented sequentially in the local working tree without intermediate `git commit` or `git add` operations, so `HEAD` has remained at Phase 11 commit `ff3f157` throughout Phase 12.
+- Step 12.6's description of a "clean working tree" was inaccurate; in reality, Steps 12.1–12.6 were all unstaged in the working tree alongside pre-existing post-Phase-11 document extraction/validation edits in `src/main/documents/`. What was accurate is that **zero changes were staged or committed**.
 
 ---
 
-## 2. Architecture Overview & Lifecycle State Model
+## 2. Architecture & Enforced Streaming Event Contracts
 
-The streaming lifecycle is structured around seven deterministic stages defined in `src/shared/conversations.ts`:
-
-```
-   ┌────────────────────────────────────────────────────────────────────────┐
-   │                                  IDLE                                  │
-   └───────────────────────────────────┬────────────────────────────────────┘
-                                       │
-                               [ Start Request ]
-                                       │
-                                       ▼
-   ┌────────────────────────────────────────────────────────────────────────┐
-   │                               PREPARING                                │
-   │  - Main-process validation, workspace resolution, and DB verification  │
-   │  - KB search & evidence retrieval (if Strict/Balanced policy)          │
-   │  - System instructions & message history assembly                       │
-   │  - User message persistence (atomic commit before provider invocation) │
-   └───────────────────────┬───────────────────────┬────────────────────────┘
-                           │                       │
-                [ First text/tool delta ]     [ Abort / Error ]
-                           │                       │
-                           ▼                       ▼
-   ┌───────────────────────────────┐       ┌────────────────────────────────┐
-   │           STREAMING           │       │       CANCELLED / FAILED       │
-   │  - Progressive text deltas    │       │  - If text > 0: persist        │
-   │  - Monotonic sequence numbers │       │    partial assistant message   │
-   │  - Iteration & tool telemetry │       │  - If text = 0: user message   │
-   │  - Active AbortSignal binding │       │    only; no assistant message  │
-   └───────┬───────────────┬───────┘       └────────────────────────────────┘
-           │               │
-  [ Provider finish ] [ Abort / Error ]
-           │               │
-           ▼               ▼
-   ┌───────────────────────────────┐       ┌────────────────────────────────┐
-   │          FINALIZING           │       │       CANCELLED / FAILED       │
-   │  - Post-generation grounding  │       │  - Same partial persistence    │
-   │    & claim provenance check   │       │    rules as above              │
-   │  - Citation ID remapping      │       └────────────────────────────────┘
-   │  - Full message DB persistence│
-   └───────────────┬───────────────┘
-                   │
-           [ DB committed ]
-                   │
-                   ▼
-   ┌────────────────────────────────────────────────────────────────────────┐
-   │                               COMPLETED                                │
-   │  - Final message emitted with authentic citations and metadata         │
-   │  - Transfer port closed gracefully; resources released                 │
-   │  - Active generation lock cleared; returns to IDLE                     │
-   └────────────────────────────────────────────────────────────────────────┘
-```
-
-### Stage Definitions
-- **`idle`:** No stream is active. UI displays input controls in ready state.
-- **`preparing`:** The Main process resolves the authoritative `knowledge_base_id` from SQLite, executes RAG retrieval (if applicable), constructs system prompts, persists the user message to SQLite, and initializes the provider connection.
-- **`streaming`:** The provider adapter is yielding incremental deltas across `MessagePortMain`. The UI displays progressive text deltas. No citations or claim badges are displayed yet.
-- **`finalizing`:** Provider generation is complete. The Main process executes claim-level provenance validation (`GroundingValidator`), remaps citation markers, records token usage, and commits the finalized assistant message to SQLite.
-- **`completed`:** The complete message with validated citations and claim provenance is emitted to the client. The session cleans up and returns to `idle`.
-- **`cancelled`:** The user clicked stop, navigated away, or closed the window. If text deltas were received, a partial assistant message is committed to SQLite. Generation lock is released.
-- **`failed`:** A provider crash, rate limit, timeout, or persistence error occurred. Structured error details are emitted. Generation lock is released.
-
----
-
-## 3. Request Correlation & Monotonic Event Contracts
-
-To guarantee that events cannot be spoofed, reordered, or misattributed across multiple tabs or background tasks, all events emitted over `MessagePortMain` implement authoritative correlation properties:
-
-### Chat Stream Contract (`PublicConversationTurnEvent`)
+### 2.1 7-Stage Lifecycle Model
 Defined in `src/shared/conversations.ts`:
-```typescript
-export interface PublicStreamEventBase {
-  readonly requestId?: string
-  readonly botId?: string
-  readonly conversationId?: string
-  readonly executionMode?: 'chat' | 'agent'
-  readonly sequenceNumber?: number
-  readonly timestamp?: number
-  readonly stage?: StreamLifecycleStage
-}
+`STREAM_LIFECYCLE_STAGES = ['idle', 'preparing', 'streaming', 'finalizing', 'completed', 'cancelled', 'failed'] as const`
 
-export type PublicConversationTurnEvent =
-  | PublicStageChangeEvent
-  | PublicTextDeltaEvent
-  | PublicFinishEvent
-  | PublicErrorEvent
-```
+### 2.2 Strict Chat Event Contract (`src/shared/conversations.ts`)
+Every `PublicConversationTurnEvent` (`PublicStageChangeEvent`, `PublicTextDeltaEvent`, `PublicFinishEvent`, `PublicErrorEvent`) now **requires** at the type level (with zero optional exceptions):
+- `requestId: string`
+- `botId: string`
+- `conversationId: string`
+- `executionMode: ExecutionMode` (`'chat'`)
+- `sequenceNumber: number` (starts at `1`, increments by `1` per event)
+- `timestamp: number`
+- `stage: StreamLifecycleStage`
 
-### Agent Stream Contract (`AgentStreamEvent`)
-Defined in `src/shared/agents.ts`:
-```typescript
-export interface AgentStreamEventBase {
-  readonly agentRunId: string
-  readonly conversationId: string
-  readonly botId?: string
-  readonly executionMode?: 'agent'
-  readonly sequenceNumber?: number
-  readonly timestamp?: number
-  readonly stage?: StreamLifecycleStage
-}
-```
+`ConversationStreamManager` requires `conversationRepo: ConversationRepository` and resolves `botId` authoritatively via `resolveAuthoritativeBotId(conversationId)` before opening or transferring any stream, rejecting unknown conversations and ignoring any client-supplied `botId`.
 
-### Invariants Enforced:
-1. **Monotonic Sequences:** `sequenceNumber` starts at 1 and increments by exactly 1 on every event emitted within a session.
-2. **Execution Mode Rigidity:** Chat events always carry `executionMode: 'chat'`; Agent events always carry `executionMode: 'agent'`. Modes are never mixed on the same stream.
-3. **Authoritative IDs:** `botId`, `conversationId`, and `requestId` are stamped by the Main process from SQLite and trusted session parameters, never from renderer payload overrides.
+### 2.3 Strict Agent Event Contract (`src/shared/agents.ts`)
+`AgentStreamEventBase` now **requires** at the type level (with zero optional exceptions):
+- `agentRunId: string`
+- `botId: string`
+- `conversationId: string`
+- `executionMode: 'agent'`
+- `stage: StreamLifecycleStage` (resolved deterministically in `AgentStreamManager.resolveStage`)
+- `sequenceNumber: number` (starts at `1`, increments by `1` per event)
+- `timestamp: number`
+
+`AgentStreamManager.startStream(...)` requires a non-empty `botId: string` (supplied authoritatively by `agent-handlers.ts` from SQLite `botRepository.getByIdOnly(payload.botId)` and verified against `conversation.botId === bot.id`).
+
+### 2.4 Terminal & Post-Terminal Guards
+- Both `ConversationStreamManager` and `AgentStreamManager` track `hasEmittedTerminal: boolean` per session.
+- Once a terminal event (`finish` / `error` for Chat; `agent_run_completed` / `agent_run_failed` / `agent_run_cancelled` for Agent) is emitted, `hasEmittedTerminal` is set to `true`, rejecting any duplicate terminal events or late deltas.
+- Fallback uncaught error handlers in `ConversationStreamManager.emitFallbackErrorAndCleanup` stamp full correlation metadata (`requestId`, `conversationId`, `botId`, `executionMode`, `sequenceNumber`, `timestamp`, `stage: 'failed'`).
 
 ---
 
-## 4. Transport & Isolation Boundary
+## 3. Complete Scenario-by-Scenario Test Mapping (All 46 Required Scenarios + 6 Audit Additions)
 
-Streaming data does not use raw IPC broadcasting (`webContents.send`). Instead, it uses direct Electron `MessageChannelMain` instances:
+| Scenario | Requirement | Test file and test name | Actual result |
+|---:|---|---|---|
+| 1 | Provider yields incremental text chunks | `src/main/services/streaming-lifecycle.test.ts` — `1. Provider yields incremental text chunks correctly` | **PASS** |
+| 2 | Empty text deltas handled cleanly without crashing | `src/main/services/streaming-lifecycle.test.ts` — `2. Empty text deltas are ignored or handled cleanly without crashing` | **PASS** |
+| 3 | Stream completion emits final token usage and finish reason | `src/main/services/streaming-lifecycle.test.ts` — `3. Stream completion emits final token usage and finish reason` | **PASS** |
+| 4 | Provider errors during streaming surface with structured codes | `src/main/services/streaming-lifecycle.test.ts` — `4. Provider errors during streaming surface with structured codes` | **PASS** |
+| 5 | AbortSignal aborts provider stream immediately | `src/main/services/streaming-lifecycle.test.ts` — `5. AbortSignal aborts provider stream immediately` | **PASS** |
+| 6 | Multi-chunk responses accumulate exact complete text | `src/main/services/streaming-lifecycle.test.ts` — `6. Multi-chunk responses accumulate to the exact complete text without missing or duplicated characters` | **PASS** |
+| 7 | Token usage reporting matches provider / handles missing usage | `src/main/services/streaming-lifecycle.test.ts` — `7. Token usage reporting matches provider data when available, handles missing usage gracefully` | **PASS** |
+| 8 | Chat lifecycle enters `preparing` stage on start | `src/main/services/streaming-lifecycle.test.ts` — `8-12. preparing -> streaming -> finalizing -> completed with citations and metadata` | **PASS** |
+| 9 | Chat lifecycle transitions to `streaming` on first delta | `src/main/services/streaming-lifecycle.test.ts` — `8-12. preparing -> streaming -> finalizing -> completed with citations and metadata` | **PASS** |
+| 10 | Chat lifecycle transitions to `finalizing` before persistence | `src/main/services/streaming-lifecycle.test.ts` — `8-12. preparing -> streaming -> finalizing -> completed with citations and metadata` | **PASS** |
+| 11 | Chat lifecycle emits `completed` finish event | `src/main/services/streaming-lifecycle.test.ts` — `8-12. preparing -> streaming -> finalizing -> completed with citations and metadata` | **PASS** |
+| 12 | Citations and metadata attached only on `completed` finish | `src/main/services/streaming-lifecycle.test.ts` — `8-12. preparing -> streaming -> finalizing -> completed with citations and metadata` | **PASS** |
+| 13 | Error during preparation surfaces before streaming begins | `src/main/services/streaming-lifecycle.test.ts` — `13. Error during preparation surfaces before streaming begins` | **PASS** |
+| 14 | Error during streaming terminates turn cleanly with error event | `src/main/services/streaming-lifecycle.test.ts` — `14. Error during streaming terminates turn cleanly with error event` | **PASS** |
+| 15 | Error during finalizing (persistence failure) surfaces safely | `src/main/services/streaming-lifecycle.test.ts` — `15. Error during finalizing (persistence failure) surfaces safely` | **PASS** |
+| 16 | Idle state restores after completion or error | `src/main/services/streaming-lifecycle.test.ts` — `16. Idle state restores after completion or error` | **PASS** |
+| 17 | Agent task dispatch emits `agent_run_started` | `src/main/services/streaming-lifecycle.test.ts` — `17-24. Agent task dispatch, iterations, tool calls, approval, completion, and failure` | **PASS** |
+| 18 | Agent iteration emits `agent_iteration_started` | `src/main/services/streaming-lifecycle.test.ts` — `17-24. Agent task dispatch, iterations, tool calls, approval, completion, and failure` | **PASS** |
+| 19 | Agent tool start emits `tool_call_started` | `src/main/services/streaming-lifecycle.test.ts` — `17-24. Agent task dispatch, iterations, tool calls, approval, completion, and failure` | **PASS** |
+| 20 | Agent tool completion emits `tool_call_completed` | `src/main/services/streaming-lifecycle.test.ts` — `17-24. Agent task dispatch, iterations, tool calls, approval, completion, and failure` | **PASS** |
+| 21 | Agent approval gate emits `approval_requested` | `src/main/services/streaming-lifecycle.test.ts` — `17-24. Agent task dispatch, iterations, tool calls, approval, completion, and failure` | **PASS** |
+| 22 | Agent approval decision emits `approval_resolved` | `src/main/services/streaming-lifecycle.test.ts` — `17-24. Agent task dispatch, iterations, tool calls, approval, completion, and failure` | **PASS** |
+| 23 | Agent task completion emits `agent_run_completed` | `src/main/services/streaming-lifecycle.test.ts` — `17-24. Agent task dispatch, iterations, tool calls, approval, completion, and failure` | **PASS** |
+| 24 | Agent task failure emits `agent_run_failed` | `src/main/services/streaming-lifecycle.test.ts` — `17-24. Agent task dispatch, iterations, tool calls, approval, completion, and failure` | **PASS** |
+| 25 | Client cancellation during streaming halts provider immediately | `src/main/services/streaming-lifecycle.test.ts` — `25. Client cancellation during streaming halts provider generation immediately` | **PASS** |
+| 26 | Client cancellation during agent run marks run cancelled | `src/main/services/streaming-lifecycle.test.ts` — `26. Client cancellation during agent run marks run cancelled` | **PASS** |
+| 27 | Cancellation is idempotent (duplicate cancels are safe no-ops) | `src/main/services/streaming-lifecycle.test.ts` — `27. Cancellation is idempotent (duplicate cancel requests are safe no-ops)` | **PASS** |
+| 28 | Late chunks arriving after cancellation are discarded | `src/main/services/streaming-lifecycle.test.ts` — `28. Late chunks arriving after cancellation are discarded and not persisted` | **PASS** |
+| 29 | Concurrent turn rejection on same conversation | `src/main/services/streaming-lifecycle.test.ts` — `29. Concurrent turn rejection (second request while first is active fails cleanly)` | **PASS** |
+| 30 | Rapid cancel-then-send sequence cleans up previous turn | `src/main/services/streaming-lifecycle.test.ts` — `30. Rapid cancel-then-send sequence cleans up previous turn before starting new turn` | **PASS** |
+| 31 | Completed chat turn persists user & assistant messages with citations | `src/main/services/streaming-lifecycle.test.ts` — `31. Fully completed chat turn persists user message and assistant message with citations` | **PASS** |
+| 32 | Cancelled chat turn with partial text persists `isPartial: true` | `src/main/services/streaming-lifecycle.test.ts` — `32. Cancelled chat turn with partial text persists user message and partial assistant message (isPartial: true)` | **PASS** |
+| 33 | Cancelled chat turn with no text persists user message only | `src/main/services/streaming-lifecycle.test.ts` — `33. Cancelled chat turn with no text persists user message only (no empty assistant message)` | **PASS** |
+| 34 | Failed chat turn with partial text persists partial with `status: 'failed'` | `src/main/services/streaming-lifecycle.test.ts` — `34. Failed chat turn with partial text persists partial message with status "failed"` | **PASS** |
+| 35 | Retrying after cancelled turn deletes partial and generates fresh response | `src/main/services/streaming-lifecycle.test.ts` — `35. Retrying after cancelled turn deletes/replaces partial message and generates fresh response without duplicates` | **PASS** |
+| 36 | Partial assistant message has no validated claims or false citations | `src/main/services/streaming-lifecycle.test.ts` — `36. Partial assistant message has no validated claims or false citations` | **PASS** |
+| 37 | Application restart / refresh loads partial message from SQLite | `src/main/services/streaming-lifecycle.test.ts` — `37. Application restart or page refresh loads partial message correctly from SQLite` | **PASS** |
+| 38 | `MessagePortMain` transfer succeeds for send message stream | `src/main/services/streaming-lifecycle.test.ts` — `38. MessagePortMain transfer succeeds for send message stream` | **PASS** |
+| 39 | `MessagePortMain` transfer succeeds for retry stream | `src/main/services/streaming-lifecycle.test.ts` — `39. MessagePortMain transfer succeeds for retry stream` | **PASS** |
+| 40 | `MessagePortMain` transfer succeeds for agent task stream | `src/main/services/streaming-lifecycle.test.ts` — `40. MessagePortMain transfer succeeds for agent task stream` | **PASS** |
+| 41 | Window close aborts active streams and cleans up ports | `src/main/services/streaming-lifecycle.test.ts` — `41. Window close or navigation aborts active streams and cleans up ports` | **PASS** |
+| 42 | Renderer unmount cancels active turn and ignores late events | `src/renderer/src/hooks/useConversationTurn.test.tsx` — `8. ignores late events...` & `9. cleans up active generation on component unmount` | **PASS** |
+| 43 | Switching Bot / conversation detaches UI & drops stale events | `src/renderer/src/hooks/useConversationTurn.test.tsx` — `10. Scenario 43: switching conversationId resets local streaming state and stage to idle`; `src/renderer/src/hooks/useAgentTaskEvents.test.tsx` — Bot isolation test | **PASS** |
+| 44 | Stream events carry authoritative `requestId`, `botId`, `conversationId`, `sequenceNumber` | `src/main/services/streaming-lifecycle.test.ts` — `44. Stream events carry authoritative requestId, botId, conversationId, and sequenceNumber` | **PASS** |
+| 45 | Renderer hook tracks lifecycle stages (`preparing` -> `streaming` -> `completed`) | `src/renderer/src/hooks/useConversationTurn.test.tsx` — `11. Scenario 45: tracks lifecycle stages accurately (preparing -> streaming -> completed)` | **PASS** |
+| 46 | Renderer hook `useAgentTaskEvents` reconciles streaming tool events with persisted records | `src/main/services/streaming-lifecycle.test.ts` — `46. ...` & `src/renderer/src/hooks/useAgentTaskEvents.test.tsx` | **PASS** |
 
-1. **Main Allocation:** `ConversationStreamManager` and `AgentStreamManager` instantiate `new MessageChannelMain()`.
-2. **One-Way Port Transfer:** `port2` is transferred to the verified `senderFrame` via `senderFrame.postMessage(channel, payload, [port2])`.
-3. **Preload Mediation:** The Preload script receives `port2`, attaches structured listeners, wraps events in typed dispatch callbacks, and exposes a clean promise-based API to the renderer.
-4. **Port Close Semantics:** When a terminal event (`finish`, `error`, `agent_run_completed`, `agent_run_failed`, `agent_run_cancelled`) is dispatched, the Main process closes `port1` after a brief flush window (20ms).
-5. **Frame Verification:** `validateIpcSender` ensures that only the authoritative `mainFrame` of an active `BrowserWindow` can initiate or receive stream ports.
-
----
-
-## 5. Cancellation Architecture & Resource Cleanup
-
-Cancellation is initiated through `cancelConversationTurn` or `cancelAgentTask`:
-
-1. **Idempotency:** Calling `cancelStream` multiple times is safe and returns `false` on subsequent invocations.
-2. **Immediate Abort Propagation:** The session's `AbortController` is aborted immediately. Outbound HTTPS requests to providers (OpenAI, Anthropic, Gemini) are terminated via Node's native `fetch` signal.
-3. **Late Chunk Suppression:** Any late chunks arriving from the provider generator after cancellation are dropped immediately:
-   ```typescript
-   for await (const event of turnStream) {
-     if (session.isCleanedUp || session.abortController.signal.aborted) {
-       break
-     }
-     // ...
-   }
-   ```
-4. **Window Unload & Navigation Cleanup:** When a `BrowserWindow` emits `'closed'` or navigates away, `abortWindowStreams` terminates all active streams associated with that window and cleans up port handles.
-
----
-
-## 6. Section 9: Partial Response Persistence & Recovery Architecture
-
-Step 12.7 implements the Section 9 specification for partial responses:
-
-### 1. Persistence Rules on Cancellation/Interruption:
-In `src/main/services/conversation-turn-service.ts`:
-- **When `accumulatedText.trim().length > 0`:**
-  `persistenceService.persistPartialAssistantMessage` writes an assistant message to SQLite with:
-  ```json
-  {
-    "metadata": {
-      "isPartial": true,
-      "status": "cancelled",
-      "interruptedReason": "Turn cancelled by client.",
-      "citations": [],
-      "validatedClaims": []
-    }
-  }
-  ```
-- **Zero-Hallucination Invariant:** A partial response has NOT passed grounding validation; therefore, citations and validated claims are explicitly empty `[]`.
-- **When `accumulatedText.trim().length === 0`:**
-  If the turn was cancelled before any text was generated, NO assistant message is created. The user message remains in the database so the user can easily retry.
-
-### 2. Deletion on Retry (De-duplication Invariant):
-In `src/main/services/conversation-turn-service.ts` (`retryLastUserMessage`):
-- When retrying, if the most recent message in the conversation is a partial assistant message (`metadata.isPartial === true` or `status: 'cancelled' | 'failed' | 'interrupted'`), the service targets the preceding user message and deletes the partial assistant message using `messageRepo.delete(partialMessage.id)`.
-- This ensures retrying generates a clean, single assistant response without leaving orphaned partial turns.
-
-### 3. Atomic Repository Deletion:
-In `src/main/database/repositories/message-repository.ts`:
-- Added `delete(messageId: string): boolean`.
-- Uses a transaction that atomically removes the message row and decrements the parent conversation segment's `message_count`.
+### Corrected Category Counts
+- **Category 1 (Scenarios 1–7, Provider streaming):** 7/7 scenarios verified in 7 tests (`streaming-lifecycle.test.ts`).
+- **Category 2 (Scenarios 8–16, Chat lifecycle):** 9/9 scenarios verified in 5 tests (`streaming-lifecycle.test.ts`: Scenarios 8–12 verified together in one end-to-end lifecycle test + Scenarios 13–16).
+- **Category 3 (Scenarios 17–24, Agent lifecycle):** 8/8 scenarios verified in 1 multi-step lifecycle test (`streaming-lifecycle.test.ts`).
+- **Category 4 (Scenarios 25–30, Cancellation & races):** 6/6 scenarios verified in 6 tests (`streaming-lifecycle.test.ts`).
+- **Category 5 (Scenarios 31–37, Persistence & recovery):** 7/7 scenarios verified in 7 tests (`streaming-lifecycle.test.ts`).
+- **Category 6 (Scenarios 38–46, IPC & Renderer lifecycle):** 9/9 scenarios verified across `streaming-lifecycle.test.ts` (6 tests), `useConversationTurn.test.tsx` (3 tests), and `useAgentTaskEvents.test.tsx` (1 test).
+- **Audit & Final Contract Additions (Tests 47–54 in `streaming-lifecycle.test.ts`):** 8 new dedicated tests covering duplicate terminal suppression, Agent post-cancel suppression, fallback error correlation, cooperative in-flight tool cancellation, non-abort-aware in-flight tool cancellation, in-place vs top-level navigation, mandatory Chat `botId` resolution & spoof rejection (Test 53), and mandatory Agent `botId` enforcement (Test 54).
 
 ---
 
-## 7. Stale Event Suppression & Window/Bot Isolation
+## 4. Provider Streaming Support Matrix
 
-Renderer hooks protect the user interface against race conditions when switching Bots or navigating:
-
-### 1. `useConversationTurn`:
-- Tracks `activeConversationIdRef`. When `conversationId` changes, `activeTurnState` is immediately reset to `idle`, `textDelta` is cleared, and active streams are cancelled.
-- If a stream event arrives whose `conversationId` does not match the active conversation, it is silently ignored.
-
-### 2. `useAgentTaskEvents`:
-- Accepts `options.botId`.
-- Maintains `botIdRef`. When switching to another Bot, all active tasks and tool events are cleared from UI state.
-- If an agent event arrives with `event.botId !== botIdRef.current`, it is discarded.
-
-### 3. `BotConversationsWorkspacePage`:
-- Configured with `onError: () => { void refreshConversation() }`.
-- When a turn is stopped or cancelled by the user, the conversation immediately reloads from SQLite to render the persisted partial message pill without requiring a page refresh.
+| Provider | Actual streaming implementation | Cancellation support | Non-streaming fallback | Verified test |
+|---|---|---|---|---|
+| **OpenAI** (`openai`) | Real incremental SSE streaming via `@ai-sdk/openai` (`openai.responses(modelId)`) + Vercel AI SDK `streamText()`, iterating `result.fullStream` (`text-delta`, `tool-call`, `finish`, `error`, `abort`). | `options.abortSignal` wired to internal `AbortController` + generation timeout; `abort` chunk mapped to `OPERATION_ABORTED` / `TIMEOUT`. | `OpenAIAdapter.generateText()` via `generateText()` | `src/main/providers/openai/openai-adapter.test.ts` |
+| **Anthropic** (`anthropic`) | Real incremental SSE streaming via `@ai-sdk/anthropic` (`anthropic.messages(modelId)`) + Vercel AI SDK `streamText()`, iterating `result.fullStream` (`text-delta`, `tool-call`, `finish`, `error`, `abort`). | `options.abortSignal` wired to internal `AbortController` + generation timeout; `abort` chunk mapped to `OPERATION_ABORTED` / `TIMEOUT`. | `AnthropicAdapter.generateText()` via `generateText()` | `src/main/providers/anthropic/anthropic-adapter.test.ts` |
+| **Google Gemini** (`google`) | Real incremental SSE streaming via `@ai-sdk/google` (`google(resolvedModelId)`) + Vercel AI SDK `streamText()`, iterating `result.fullStream` (`text-delta`, `tool-call`, `finish`, `error`, `abort`). | `options.abortSignal` wired to internal `AbortController` + generation timeout; `abort` chunk mapped to `OPERATION_ABORTED` / `TIMEOUT`. | `GoogleAdapter.generateText()` via `generateText()` | `src/main/providers/google/google-adapter.test.ts` |
+| **xAI / OpenRouter** | **Not yet implemented** in `SUPPORTED_PROVIDER_IDS` (`['openai', 'anthropic', 'google']`) or `src/main/providers/`. | N/A | N/A | N/A |
 
 ---
 
-## 8. UI/UX Progressive Disclosure & Badges
+## 5. Agent Cancellation Behavior Across All Execution States
 
-1. **Streaming Text:** Text deltas accumulate progressively into markdown paragraphs.
-2. **Partial Message Badge:** In `src/renderer/src/components/chat/ConversationMessage.tsx`:
-   - When `message.metadata?.isPartial === true`, a badge is rendered above the message content:
-     - `Cancelled`: Red/amber badge indicating user cancellation.
-     - `Interrupted`: Amber badge indicating system or network interruption.
-     - Tooltip displays `message.metadata.interruptedReason`.
-3. **Stopping Controls:** When generating, composer displays an active "Stop" square button. Clicking Stop triggers immediate cancellation.
+Inspected in `BoundedAgentRuntime` (`src/main/services/bounded-agent-runtime.ts`) and `AgentStreamManager` (`src/main/ipc/agent-stream-manager.ts`):
 
----
-
-## 9. Comprehensive Test Suite (All 46 Scenarios Verified)
-
-The comprehensive test suite in `src/main/services/streaming-lifecycle.test.ts` exercises all 46 required scenarios across 6 categories:
-
-| Category | Scenarios Covered | Verification Status |
-|:---|:---|:---:|
-| **Category 1: Provider Streaming** | Scenarios 1–7: Incremental chunks, empty delta handling, finish usage/reasons, structured error codes, AbortSignal termination, multi-chunk accumulation, token usage mapping. | **PASS (7/7)** |
-| **Category 2: Chat Lifecycle** | Scenarios 8–16: Preparing -> streaming -> finalizing -> completed, citations & metadata timing, preparation error surfacing, stream error termination, persistence failure surfacing, idle restoration. | **PASS (5/5)** |
-| **Category 3: Agent Lifecycle** | Scenarios 17–24: Task dispatch, iterations, tool call start/completion, approval request/resolution, task completion, failure emission, monotonic sequence numbering. | **PASS (1/1)** |
-| **Category 4: Cancellation & Races** | Scenarios 25–30: Client cancellation halting provider, agent run cancellation, cancellation idempotency, late chunk suppression, concurrent turn rejection, rapid cancel-then-send sequencing. | **PASS (6/6)** |
-| **Category 5: Persistence & Recovery** | Scenarios 31–37: Completed turn persistence, cancelled partial message persistence (`isPartial: true`), empty-text cancellation persistence, failed partial message persistence, retry partial deletion & deduplication, zero validated claims on partials, SQLite restart persistence. | **PASS (7/7)** |
-| **Category 6: IPC & Renderer Lifecycle** | Scenarios 38–46: Send stream port transfer, retry stream port transfer, agent stream port transfer, window close cleanup, authoritative event attributes (`requestId`, `botId`, `sequenceNumber`), renderer tool event reconciliation. | **PASS (6/6)** |
+1. **Before an Agent iteration begins:** `if (request.signal?.aborted)` marks `agent_runs.status = 'cancelled'` immediately without entering the loop.
+2. **While the model is generating a response:** `runAbortController.signal` is passed to `stepExecutor.executeStep(...)`. If aborted, `BoundedAgentRuntime` breaks out of the loop and marks the run `'cancelled'`.
+3. **While a tool call is waiting for approval:** `ApprovalController` cancels the pending approval; `BoundedAgentRuntime` marks `tool_event` as `'cancelled'` and the run as `'cancelled'`.
+4. **While a tool is executing (in-flight):**
+   - **Cooperative tools** (accepting `ctx.signal` and throwing `ToolError('ABORTED')`): caught by `BoundedAgentRuntime`, `tool_event` is marked `'cancelled'`, loop breaks, no further tools start, `agent_run` is marked `'cancelled'` (Test 50).
+   - **Non-abort-aware / synchronous tools** (finishing normally after `abort()` was called): `BoundedAgentRuntime` preserves the completed `tool_event` outcome (`markCompleted`), then checks `if (runAbortController.signal.aborted)` at the top of the `while` loop, breaks immediately without starting another iteration/tool, and marks the `agent_run` as `'cancelled'` (Test 51).
+5. **Immediately after a tool finishes / Between iterations:** Loop-top check `if (runAbortController.signal.aborted) break` prevents any next model step or tool call.
+6. **While final Agent answer is being finalized:** Even if `stepResult.type === 'final'` just returned, line 852 checks `if (runAbortController.signal.aborted)` **before** checking `finalResponse`, ensuring a cancelled run is never reported as `'completed'`.
+7. **Stream Manager Coordination:** `AgentStreamManager.hasEmittedTerminal` ensures that once `cancelStream` emits `agent_run_cancelled`, any delayed `agent_run_cancelled`, `tool_call_completed`, or `agent_run_completed` from `BoundedAgentRuntime` during the 20ms flush window is suppressed (Test 48).
 
 ---
 
-## 10. Verification Evidence & Test Execution Results
+## 6. Terminal Event Delivery & Resource Cleanup
 
-### 1. TypeScript Strict Typecheck (`npm run typecheck`)
-```
-> local-first-ai-workspace@1.0.0 typecheck
-> npm run typecheck:node && npm run typecheck:web
-
-> local-first-ai-workspace@1.0.0 typecheck:node
-> tsc --noEmit -p tsconfig.node.json --composite false
-
-> local-first-ai-workspace@1.0.0 typecheck:web
-> tsc --noEmit -p tsconfig.web.json --composite false
-
-Result: Exit code 0 (Clean compilation across Node and Web projects)
-```
-
-### 2. ESLint & Code Formatting (`npm run lint`)
-```
-> local-first-ai-workspace@1.0.0 lint
-> eslint --cache .
-
-Result: Exit code 0 (0 errors, 1 preexisting react-hooks warning)
-```
-
-### 3. Full Vitest Test Suite (`npm run test`)
-```
-Test Files  214 passed (214)
-     Tests  3338 passed (3338)
-  Duration  72.52s
-Result: Exit code 0 (100% of test files and test cases passed)
-```
-
-### 4. Production Application Build (`npm run build`)
-```
-> local-first-ai-workspace@1.0.0 build
-> npm run typecheck && electron-vite build
-
-✓ 239 modules transformed (SSR/Main)
-✓ 109 modules transformed (SSR/Preload)
-✓ 2504 modules transformed (Client/Renderer)
-out/main/index.js           1,340.34 kB
-out/preload/index.js          267.13 kB
-out/renderer/index.html         0.61 kB
-out/renderer/assets/index.js 2,302.77 kB
-
-Result: Exit code 0 (Successful production bundle build)
-```
+- **`ConversationStreamManager`:** Emits the terminal `finish` or `error` event across `port1`, sets `session.hasEmittedTerminal = true`, and in `finally` invokes `cleanupSession(requestId)` (closing `port1` and deleting from `activeStreams`). Preload (`src/preload/index.ts`) resolves/rejects the turn promise upon receiving `finish`/`error` and closes `port2`.
+- **`AgentStreamManager`:** Emits the terminal event, sets `session.hasEmittedTerminal = true` immediately (preventing duplicate terminal events), and schedules `cleanupSession(agentRunId)` after a 20ms flush window (or immediately on `port1` `'close'` when Preload closes `port2`).
+- **Window Close & Shutdown:** `attachWindowLifecycle` listens to `'closed'`, `webContents` `'destroyed'`, and non-in-place `'did-start-navigation'` to abort active streams and close ports.
 
 ---
 
-## 11. Security & Local-First Invariants Verified
+## 7. Application-Shutdown & Interrupted-Stream Recovery
 
-1. **Main Process Authority:** The renderer never decides whether a response is completed, cancelled, or partial. All message records and metadata states are committed by Main services in SQLite.
-2. **Context Boundary Protection:** `botId` and `knowledgeBaseId` are resolved strictly from the authoritative database record; client request spoofing is rejected.
-3. **No Plaintext Credential Exposure:** Stream events carry zero credentials, API keys, or raw filesystem paths.
-4. **Sandboxed IPC:** Stream channels communicate strictly over isolated `MessagePortMain` ports.
-5. **No Hallucination Citations on Partials:** Partial assistant messages persist with empty citations `[]` and empty validated claims `[]`. Grounding validation only executes for completed responses.
+- **Agent Runs & Tool Events:** On startup, `StartupReconciliationService.reconcileInterruptedAgentTasks()` (`src/main/services/startup-reconciliation-service.ts`) queries SQLite for `agent_runs WHERE status IN ('running', 'awaiting_approval', 'pending')` and `tool_events WHERE status IN ('pending', 'running')`, transitioning them atomically to `'failed'` with `'Task was interrupted because the application exited before completion.'`.
+- **Chat Turns:** `ConversationTurnService` persists the user message **before** streaming begins and persists the assistant message **only** upon completion (with full citations/claims) or graceful cancellation/error (with `isPartial: true`). Therefore, an abrupt process crash during Chat streaming leaves zero half-written assistant messages falsely marked as completed; only the user message exists in SQLite, ready for Retry.
 
 ---
 
-## 12. Phase Gate Readiness Statement
+## 8. Navigation & Bot-Switch Behavior
 
-Phase 12 — Step 12.7 (Streaming Lifecycle) is **complete, verified, and ready for review**. All code changes remain unstaged in accordance with repository safety instructions. The workspace is fully stable and prepared for the next step in Phase 12.
+- **Bot Switch (`conversationId` or `botId` prop change without unmount):**
+  - `useConversationTurn` resets local hook state (`stage = 'idle'`, `streamingText = ''`, `activeRequestIdRef.current = null`) and ignores late events whose `requestId !== activeRequestIdRef.current`. It does **not** cancel an in-flight request in Main on `conversationId` change alone.
+  - `useAgentTaskEvents` resets local task state and filters out events where `event.botId !== botIdRef.current`. Background Agent runs continue in Main and can be recovered when switching back via `getRun` / `listToolEvents`.
+- **Component Unmount (navigating away from Chat view):** `useConversationTurn`'s unmount effect calls `api.cancelGeneration(currentReqId)` to cancel the active Chat stream.
+- **Top-Level Navigation vs In-Place Hash Navigation:** `ConversationStreamManager` ignores `did-start-navigation` when `isInPlace === true` (SPA hash route transitions) and aborts all window streams when `isInPlace !== true` (Test 52).
+
+---
+
+## 9. Unrelated-File Formatting & Modified Files Audit
+
+- **Broad `npx eslint --fix .` audit:** During initial Step 12.7 verification, ESLint reported 23 Prettier warnings exclusively in 6 Step 12.7 files (`conversation-bridge.test.ts`, `conversation-persistence-service.test.ts`, `conversation-turn-service.ts`, `streaming-lifecycle.test.ts`, `ConversationMessage.tsx`, `conversations.ts`). Zero unrelated files were modified by `npx eslint --fix .`. Subsequent linting used targeted file paths only.
+- **Pre-existing unstaged files preserved:** `src/main/documents/` changes (from post-Phase-11 document validation work) and Steps 12.1–12.6 changes remain untouched in the working tree.
+- **Step 12.7 Files Created / Modified:**
+  - Created: `src/main/services/streaming-lifecycle.test.ts`, `docs/phase-12/step-12.7-implementation-report.md`
+  - Modified: `src/shared/conversations.ts`, `src/shared/agents.ts`, `src/main/database/repositories/message-repository.ts`, `src/main/services/conversation-persistence-service.ts`, `src/main/services/conversation-persistence-service.test.ts`, `src/main/services/conversation-turn-service.ts`, `src/main/services/conversation-turn-service.test.ts`, `src/main/services/phase-7-e2e-rag-security.test.ts`, `src/main/ipc/conversation-stream-manager.ts`, `src/main/ipc/agent-stream-manager.ts`, `src/main/ipc/conversation-handlers.ts`, `src/main/ipc/agent-handlers.ts`, `src/main/ipc/conversation-bridge.test.ts`, `src/main/ipc/agent-bridge.test.ts`, `src/preload/index.ts`, `src/renderer/src/hooks/useConversationTurn.ts`, `src/renderer/src/hooks/useConversationTurn.test.tsx`, `src/renderer/src/hooks/useAgentTaskEvents.ts`, `src/renderer/src/hooks/useAgentTaskEvents.test.tsx`, `src/renderer/src/pages/workspace/BotConversationsWorkspacePage.tsx`, `src/renderer/src/pages/workspace/BotConversationsWorkspacePage.test.tsx`, `src/renderer/src/components/chat/ConversationMessage.tsx`.
+
+---
+
+## 10. Final Verification Results
+
+| Check | Command | Exit Code | Exact Result |
+|:---|:---|:---:|:---|
+| **TypeScript Typecheck** | `npm run typecheck` | `0` | Node + Web `tsc --noEmit` clean (0 errors) |
+| **ESLint** | `npm run lint` | `0` | 0 errors (1 pre-existing `react-hooks/exhaustive-deps` warning in `BotConfigurationForm.tsx`) |
+| **Full Test Suite** | `npm run test` | `0` | **214 test files passed (214/214)**, **3,346 tests passed (3,346/3,346)** |
+| **Production Build** | `npm run build` | `0` | Main (`1,342.15 kB`), Preload (`267.13 kB`), Renderer (`2,302.77 kB`) built cleanly |
+
+### Baseline Comparison
+- **Step 12.6 baseline:** 213 test files, 3,300 tests.
+- **Step 12.7 audited baseline:** 214 test files, 3,344 tests.
+- **Step 12.7 final (after mandatory `botId` contract):** 214 test files, 3,346 tests (+2 tests in `streaming-lifecycle.test.ts`: Tests 53 and 54; +46 total tests over Step 12.6).
+
+---
+
+## 11. Remaining Limitations
+
+1. **xAI & OpenRouter:** Not yet implemented in `SUPPORTED_PROVIDER_IDS` or `src/main/providers/`; only OpenAI, Anthropic, and Google Gemini are active.
+2. **Non-abort-aware tools:** If a synchronous or third-party tool ignores `AbortSignal`, cancellation waits for that single in-flight tool call to return (up to `toolTimeoutMs`) before marking the run `'cancelled'` and halting further iterations.
+3. **Abrupt crash mid-Chat stream:** Because partial Chat text is buffered in Main memory until `finish` or graceful cancellation/error, an abrupt SIGKILL mid-stream preserves the user message for Retry but does not recover unpersisted memory deltas.

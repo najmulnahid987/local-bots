@@ -475,7 +475,7 @@ export interface PublicStageChangeEvent {
   readonly type: 'stage_change'
   readonly stage: StreamLifecycleStage
   readonly requestId: string
-  readonly botId?: string
+  readonly botId: string
   readonly conversationId: string
   readonly executionMode: ExecutionMode
   readonly sequenceNumber: number
@@ -486,7 +486,7 @@ export interface PublicTextDeltaEvent {
   readonly type: 'text_delta'
   readonly textDelta: string
   readonly requestId: string
-  readonly botId?: string
+  readonly botId: string
   readonly conversationId: string
   readonly executionMode: ExecutionMode
   readonly sequenceNumber: number
@@ -503,7 +503,7 @@ export interface PublicFinishEvent {
   readonly message: MessageDto
   readonly userMessage?: MessageDto
   readonly requestId: string
-  readonly botId?: string
+  readonly botId: string
   readonly conversationId: string
   readonly executionMode: ExecutionMode
   readonly sequenceNumber: number
@@ -520,7 +520,7 @@ export interface PublicErrorEvent {
   }
   readonly partialMessage?: MessageDto
   readonly requestId: string
-  readonly botId?: string
+  readonly botId: string
   readonly conversationId: string
   readonly executionMode: ExecutionMode
   readonly sequenceNumber: number

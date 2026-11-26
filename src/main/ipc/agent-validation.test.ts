@@ -319,37 +319,60 @@ describe('Agent IPC Validation & Sanitization (Phase 8 Step 8.9)', () => {
   // ==========================================================================
 
   describe('agentStreamEventSchema', () => {
+    const baseAgentMeta = {
+      agentRunId: randomUUID(),
+      conversationId: randomUUID(),
+      botId: randomUUID(),
+      executionMode: 'agent' as const,
+      timestamp: Date.now()
+    }
+
     it('1. validates agent_run_started event', () => {
       const evt = {
+        ...baseAgentMeta,
         type: 'agent_run_started',
-        agentRunId: randomUUID(),
-        conversationId: randomUUID(),
+        stage: 'preparing' as const,
         sequenceNumber: 1,
-        timestamp: Date.now(),
-        botId: randomUUID(),
         selectedModel: 'gpt-4o'
       }
       expect(agentStreamEventSchema.parse(evt)).toEqual(evt)
     })
 
-    it('2. validates agent_iteration_started event', () => {
-      const evt = {
+    it('2. validates agent_iteration_started, agent_stage_change, and agent_text_delta events', () => {
+      const iterEvt = {
+        ...baseAgentMeta,
         type: 'agent_iteration_started',
-        agentRunId: randomUUID(),
+        stage: 'streaming' as const,
         sequenceNumber: 2,
-        timestamp: Date.now(),
         iteration: 1,
         maxIterations: 5
       }
-      expect(agentStreamEventSchema.parse(evt)).toEqual(evt)
+      expect(agentStreamEventSchema.parse(iterEvt)).toEqual(iterEvt)
+
+      const stageEvt = {
+        ...baseAgentMeta,
+        type: 'agent_stage_change',
+        stage: 'streaming' as const,
+        sequenceNumber: 2
+      }
+      expect(agentStreamEventSchema.parse(stageEvt)).toEqual(stageEvt)
+
+      const deltaEvt = {
+        ...baseAgentMeta,
+        type: 'agent_text_delta',
+        stage: 'streaming' as const,
+        sequenceNumber: 3,
+        textDelta: 'Drafting...'
+      }
+      expect(agentStreamEventSchema.parse(deltaEvt)).toEqual(deltaEvt)
     })
 
     it('3. validates tool_call_started, completed, and failed events', () => {
       const started = {
+        ...baseAgentMeta,
         type: 'tool_call_started',
-        agentRunId: randomUUID(),
+        stage: 'streaming' as const,
         sequenceNumber: 3,
-        timestamp: Date.now(),
         toolEventId: randomUUID(),
         toolName: 'search_knowledge_base',
         argumentsSummary: '{"query":"revenue"}'
@@ -357,10 +380,10 @@ describe('Agent IPC Validation & Sanitization (Phase 8 Step 8.9)', () => {
       expect(agentStreamEventSchema.parse(started)).toEqual(started)
 
       const completed = {
+        ...baseAgentMeta,
         type: 'tool_call_completed',
-        agentRunId: randomUUID(),
+        stage: 'streaming' as const,
         sequenceNumber: 4,
-        timestamp: Date.now(),
         toolEventId: randomUUID(),
         toolName: 'search_knowledge_base',
         resultSummary: 'Found 3 chunks'
@@ -368,10 +391,10 @@ describe('Agent IPC Validation & Sanitization (Phase 8 Step 8.9)', () => {
       expect(agentStreamEventSchema.parse(completed)).toEqual(completed)
 
       const failed = {
+        ...baseAgentMeta,
         type: 'tool_call_failed',
-        agentRunId: randomUUID(),
+        stage: 'streaming' as const,
         sequenceNumber: 5,
-        timestamp: Date.now(),
         toolEventId: randomUUID(),
         toolName: 'read_workspace_file',
         errorMessage: 'File not found'
@@ -381,10 +404,10 @@ describe('Agent IPC Validation & Sanitization (Phase 8 Step 8.9)', () => {
 
     it('4. validates approval_requested and approval_resolved events', () => {
       const requested = {
+        ...baseAgentMeta,
         type: 'approval_requested',
-        agentRunId: randomUUID(),
+        stage: 'streaming' as const,
         sequenceNumber: 6,
-        timestamp: Date.now(),
         approvalRequestId: randomUUID(),
         title: 'Quarterly Summary',
         contentPreview: '# Quarterly Summary\nRevenue grew by 15%...',
@@ -394,10 +417,10 @@ describe('Agent IPC Validation & Sanitization (Phase 8 Step 8.9)', () => {
       expect(agentStreamEventSchema.parse(requested)).toEqual(requested)
 
       const resolved = {
+        ...baseAgentMeta,
         type: 'approval_resolved',
-        agentRunId: randomUUID(),
+        stage: 'streaming' as const,
         sequenceNumber: 7,
-        timestamp: Date.now(),
         approvalRequestId: randomUUID(),
         status: 'approved'
       }
@@ -406,10 +429,10 @@ describe('Agent IPC Validation & Sanitization (Phase 8 Step 8.9)', () => {
 
     it('5. validates agent_run_completed, failed, and cancelled events', () => {
       const completed = {
+        ...baseAgentMeta,
         type: 'agent_run_completed',
-        agentRunId: randomUUID(),
+        stage: 'completed' as const,
         sequenceNumber: 8,
-        timestamp: Date.now(),
         finalResponse: 'The analysis concluded with positive margins [1].',
         iterations: 2,
         toolEventsCount: 2,
@@ -419,10 +442,10 @@ describe('Agent IPC Validation & Sanitization (Phase 8 Step 8.9)', () => {
       expect(agentStreamEventSchema.parse(completed)).toEqual(completed)
 
       const failed = {
+        ...baseAgentMeta,
         type: 'agent_run_failed',
-        agentRunId: randomUUID(),
+        stage: 'failed' as const,
         sequenceNumber: 9,
-        timestamp: Date.now(),
         error: {
           code: 'TOOL_TIMEOUT',
           message: 'Tool execution timed out',
@@ -432,22 +455,35 @@ describe('Agent IPC Validation & Sanitization (Phase 8 Step 8.9)', () => {
       expect(agentStreamEventSchema.parse(failed)).toEqual(failed)
 
       const cancelled = {
+        ...baseAgentMeta,
         type: 'agent_run_cancelled',
-        agentRunId: randomUUID(),
+        stage: 'cancelled' as const,
         sequenceNumber: 10,
-        timestamp: Date.now(),
         reason: 'Cancelled by user.'
       }
       expect(agentStreamEventSchema.parse(cancelled)).toEqual(cancelled)
     })
 
-    it('6. rejects unknown event type', () => {
+    it('6. rejects unknown event type and missing authoritative botId', () => {
       expect(() =>
         agentStreamEventSchema.parse({
           type: 'unknown_event_type',
           agentRunId: randomUUID(),
           sequenceNumber: 1,
           timestamp: Date.now()
+        })
+      ).toThrow()
+
+      expect(() =>
+        agentStreamEventSchema.parse({
+          type: 'agent_run_cancelled',
+          agentRunId: randomUUID(),
+          conversationId: randomUUID(),
+          executionMode: 'agent',
+          stage: 'cancelled',
+          sequenceNumber: 1,
+          timestamp: Date.now(),
+          reason: 'Missing botId'
         })
       ).toThrow()
     })

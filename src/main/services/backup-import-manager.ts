@@ -23,9 +23,14 @@ import {
   exportBotMemoryDtoSchema,
   exportKnowledgeSourceDtoSchema,
   exportConversationBundleDtoSchema,
+  exportAgentRunsFileSchema,
+  exportToolEventsFileSchema,
+  type ExportAgentRunDto,
+  type ExportToolEventDto,
   executeImportRequestSchema,
   cancelImportRequestSchema
 } from '../../shared/export-archive'
+import { toDbAgentRunStatus } from '../../shared/agents'
 import { z } from 'zod'
 import { resolveBotResponsePolicy } from '../../shared/bots'
 import { KnowledgeBaseRepository } from '../database/repositories/knowledge-base-repository'
@@ -87,7 +92,82 @@ interface StagedImportSession {
   readonly stagedDocuments: Map<string, StagedDocumentFile>
   readonly stagedExtractedDocuments?: Map<string, string>
   readonly stagedPreservationReports?: Map<string, string>
+  readonly agentRunsData: ExportAgentRunDto[]
+  readonly toolEventsData: ExportToolEventDto[]
   readonly createdAt: number
+}
+
+function remapCitationEntry(
+  entry: unknown,
+  sourceIdMap: ReadonlyMap<string, string>,
+  finalKnowledgeBaseId: string
+): unknown {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    return entry
+  }
+  const obj = { ...(entry as Record<string, unknown>) }
+  if (typeof obj.sourceId === 'string' && sourceIdMap.has(obj.sourceId)) {
+    obj.sourceId = sourceIdMap.get(obj.sourceId)
+  }
+  if (typeof obj.knowledgeBaseId === 'string') {
+    obj.knowledgeBaseId = finalKnowledgeBaseId
+  }
+  return obj
+}
+
+function remapMessageMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+  sourceIdMap: ReadonlyMap<string, string>,
+  finalKnowledgeBaseId: string,
+  agentRunIdMap: ReadonlyMap<string, string>
+): Record<string, unknown> {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return {}
+  }
+
+  const cloned: Record<string, unknown> = { ...metadata }
+
+  if (typeof cloned.agentRunId === 'string' && agentRunIdMap.has(cloned.agentRunId)) {
+    cloned.agentRunId = agentRunIdMap.get(cloned.agentRunId)
+  }
+
+  if (Array.isArray(cloned.citations)) {
+    cloned.citations = cloned.citations.map((c) =>
+      remapCitationEntry(c, sourceIdMap, finalKnowledgeBaseId)
+    )
+  }
+
+  if (Array.isArray(cloned.claims)) {
+    cloned.claims = cloned.claims.map((claim) => {
+      if (!claim || typeof claim !== 'object' || Array.isArray(claim)) {
+        return claim
+      }
+      const nextClaim = { ...(claim as Record<string, unknown>) }
+      if (Array.isArray(nextClaim.sourceIds)) {
+        nextClaim.sourceIds = nextClaim.sourceIds.map((sid) =>
+          typeof sid === 'string' && sourceIdMap.has(sid) ? sourceIdMap.get(sid) : sid
+        )
+      }
+      if (Array.isArray(nextClaim.citations)) {
+        nextClaim.citations = nextClaim.citations.map((c) =>
+          remapCitationEntry(c, sourceIdMap, finalKnowledgeBaseId)
+        )
+      }
+      if (Array.isArray(nextClaim.evidenceReferences)) {
+        nextClaim.evidenceReferences = nextClaim.evidenceReferences.map((ev) =>
+          remapCitationEntry(ev, sourceIdMap, finalKnowledgeBaseId)
+        )
+      }
+      if (Array.isArray(nextClaim.supportingEvidence)) {
+        nextClaim.supportingEvidence = nextClaim.supportingEvidence.map((ev) =>
+          remapCitationEntry(ev, sourceIdMap, finalKnowledgeBaseId)
+        )
+      }
+      return nextClaim
+    })
+  }
+
+  return cloned
 }
 
 const MAX_ARCHIVE_FILE_SIZE = 500 * 1024 * 1024 // 500 MB
@@ -265,6 +345,13 @@ export class BackupImportManager {
         .array(exportConversationBundleDtoSchema)
         .parse(JSON.parse(bundle.conversationsRaw))
 
+      const agentRunsData = bundle.agentRunsRaw
+        ? exportAgentRunsFileSchema.parse(JSON.parse(bundle.agentRunsRaw)).agentRuns
+        : []
+      const toolEventsData = bundle.toolEventsRaw
+        ? exportToolEventsFileSchema.parse(JSON.parse(bundle.toolEventsRaw)).toolEvents
+        : []
+
       // 5. Verify checksums of all declared files in manifest
       for (const declaredFile of manifest.files) {
         const entryPath = path.join(stagingDir, declaredFile.path)
@@ -296,7 +383,9 @@ export class BackupImportManager {
         botsData,
         memoriesData,
         sourcesData,
-        conversationBundles
+        conversationBundles,
+        agentRunsData,
+        toolEventsData
       ]
 
       for (const obj of metadataToScan) {
@@ -339,6 +428,8 @@ export class BackupImportManager {
         stagedDocuments,
         stagedExtractedDocuments: bundle.stagedExtractedDocuments,
         stagedPreservationReports: bundle.stagedPreservationReports,
+        agentRunsData,
+        toolEventsData,
         createdAt: Date.now()
       }
       this.sessions.set(sessionId, session)
@@ -675,13 +766,13 @@ export class BackupImportManager {
           }
         }
 
-        // 4. Insert Knowledge Sources (initial status 'queued', indexed_at NULL)
+        // 4. Insert Knowledge Sources (preserve failed status; queue non-failed for reindexing)
         const insertSourceStmt = this.db.prepare(`
           INSERT INTO knowledge_sources (
             id, knowledge_base_id, file_name, original_file_name, relative_file_path,
             file_type, mime_type, file_size, content_hash, indexing_status,
             error_message, created_at, updated_at, indexed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, NULL)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
 
         const insertExtractedDocStmt = this.db.prepare(`
@@ -698,6 +789,7 @@ export class BackupImportManager {
 
         for (const source of session.sourcesData) {
           const newSourceId = sourceIdMap.get(source.id)!
+          const isFailedSource = source.indexingStatus === 'failed'
           insertSourceStmt.run(
             newSourceId,
             finalKnowledgeBaseId,
@@ -708,8 +800,11 @@ export class BackupImportManager {
             source.mimeType,
             source.fileSizeBytes,
             source.contentHash,
+            isFailedSource ? 'failed' : 'queued',
+            isFailedSource ? (source.errorMessage ?? 'Indexing failed prior to backup') : null,
             now,
-            now
+            now,
+            isFailedSource ? (source.indexedAt ?? null) : null
           )
 
           // Restore extracted document if bundled
@@ -793,6 +888,11 @@ export class BackupImportManager {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
 
+        const agentRunIdMap = new Map<string, string>()
+        for (const run of session.agentRunsData) {
+          agentRunIdMap.set(run.id, randomUUID())
+        }
+
         // Insert consolidated conversations for bots with conversation bundles
         for (const [oldBotId, bundles] of bundlesByBot.entries()) {
           const newBotId = botIdMap.get(oldBotId)
@@ -815,42 +915,77 @@ export class BackupImportManager {
             canonicalBundle.conversation.archivedAt ?? null
           )
 
-          // Insert each bundle as a conversation_segment
-          bundles.forEach((bundle, segmentIndex) => {
-            const segmentId = randomUUID()
-            const msgTimestamps = bundle.messages
-              .map((m) => m.createdAt)
-              .filter((t): t is number => typeof t === 'number' && t > 0)
-            const firstMsgAt = msgTimestamps.length > 0 ? Math.min(...msgTimestamps) : null
-            const lastMsgAt = msgTimestamps.length > 0 ? Math.max(...msgTimestamps) : null
+          // Restore preserved segments if present, or synthesize one segment per legacy bundle
+          let nextSegmentOrder = 0
+          for (const bundle of bundles) {
+            const segmentIdMap = new Map<string, string>()
+            let fallbackSegmentId: string
 
-            insertSegmentStmt.run(
-              segmentId,
-              canonicalConvId,
-              bundle.conversation.id,
-              bundle.conversation.title || 'Conversation Segment',
-              segmentIndex,
-              firstMsgAt,
-              lastMsgAt,
-              bundle.messages.length,
-              bundle.conversation.createdAt || now,
-              bundle.conversation.archivedAt ?? null
-            )
+            if (bundle.segments && bundle.segments.length > 0) {
+              const sortedSegments = [...bundle.segments].sort(
+                (a, b) => a.segmentOrder - b.segmentOrder || a.createdAt - b.createdAt
+              )
+              for (const seg of sortedSegments) {
+                const newSegId = randomUUID()
+                segmentIdMap.set(seg.id, newSegId)
+                insertSegmentStmt.run(
+                  newSegId,
+                  canonicalConvId,
+                  seg.originalConversationId,
+                  seg.title || 'Conversation Segment',
+                  nextSegmentOrder++,
+                  seg.firstMessageCreatedAt,
+                  seg.lastMessageCreatedAt,
+                  seg.messageCount,
+                  seg.createdAt || now,
+                  seg.archivedAt ?? null
+                )
+              }
+              fallbackSegmentId = segmentIdMap.get(sortedSegments[0].id)!
+            } else {
+              fallbackSegmentId = randomUUID()
+              const msgTimestamps = bundle.messages
+                .map((m) => m.createdAt)
+                .filter((t): t is number => typeof t === 'number' && t > 0)
+              const firstMsgAt = msgTimestamps.length > 0 ? Math.min(...msgTimestamps) : null
+              const lastMsgAt = msgTimestamps.length > 0 ? Math.max(...msgTimestamps) : null
+
+              insertSegmentStmt.run(
+                fallbackSegmentId,
+                canonicalConvId,
+                bundle.conversation.id,
+                bundle.conversation.title || 'Conversation Segment',
+                nextSegmentOrder++,
+                firstMsgAt,
+                lastMsgAt,
+                bundle.messages.length,
+                bundle.conversation.createdAt || now,
+                bundle.conversation.archivedAt ?? null
+              )
+            }
 
             for (const msg of bundle.messages) {
+              const resolvedSegmentId =
+                (msg.segmentId && segmentIdMap.get(msg.segmentId)) || fallbackSegmentId
+              const remappedMetadata = remapMessageMetadata(
+                msg.metadata,
+                sourceIdMap,
+                finalKnowledgeBaseId,
+                agentRunIdMap
+              )
               insertMsgStmt.run(
                 randomUUID(),
                 canonicalConvId,
-                segmentId,
+                resolvedSegmentId,
                 msg.role,
                 msg.content,
                 msg.contentFormat ?? 'markdown',
-                JSON.stringify(msg.metadata ?? {}),
-                JSON.stringify({}),
+                JSON.stringify(remappedMetadata),
+                JSON.stringify(msg.tokenUsage ?? {}),
                 msg.createdAt || now
               )
             }
-          })
+          }
         }
 
         // Insert canonical conversation and initial segment for bots with 0 conversation bundles
@@ -883,6 +1018,64 @@ export class BackupImportManager {
             )
           }
         }
+
+        // 7. Restore historical Agent Runs and Tool Events (audit history only; never re-executed)
+        if (session.agentRunsData.length > 0) {
+          const insertAgentRunStmt = this.db.prepare(`
+            INSERT INTO agent_runs (
+              id, bot_id, conversation_id, knowledge_base_id, status, selected_model,
+              iteration_count, error_summary, started_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `)
+
+          for (const run of session.agentRunsData) {
+            const newBotId = botIdMap.get(run.botId)
+            if (!newBotId) continue
+            const newRunId = agentRunIdMap.get(run.id)!
+            const newConvId = run.conversationId
+              ? (conversationIdMap.get(run.conversationId) ?? null)
+              : null
+            insertAgentRunStmt.run(
+              newRunId,
+              newBotId,
+              newConvId,
+              finalKnowledgeBaseId,
+              toDbAgentRunStatus(run.status),
+              run.selectedModel,
+              run.iterationCount,
+              run.errorSummary,
+              run.startedAt,
+              run.completedAt
+            )
+          }
+        }
+
+        if (session.toolEventsData.length > 0) {
+          const insertToolEventStmt = this.db.prepare(`
+            INSERT INTO tool_events (
+              id, agent_run_id, sequence_number, tool_name, status, approval_status,
+              arguments_summary, result_summary, error_message, started_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `)
+
+          for (const ev of session.toolEventsData) {
+            const newRunId = agentRunIdMap.get(ev.agentRunId)
+            if (!newRunId) continue
+            insertToolEventStmt.run(
+              randomUUID(),
+              newRunId,
+              ev.sequenceNumber,
+              ev.toolName,
+              ev.status,
+              ev.approvalStatus,
+              ev.argumentsSummary,
+              ev.resultSummary,
+              ev.errorMessage,
+              ev.startedAt,
+              ev.completedAt
+            )
+          }
+        }
       })
 
       dbTx()
@@ -896,6 +1089,9 @@ export class BackupImportManager {
       this.importRecoveryService?.transition(session.sessionId, 'indexing')
       if (this.documentLifecycleService) {
         for (const source of session.sourcesData) {
+          if (source.indexingStatus === 'failed') {
+            continue
+          }
           const newSourceId = sourceIdMap.get(source.id)!
           try {
             if (

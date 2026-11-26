@@ -777,6 +777,7 @@ describe('Renderer: BotConversationsWorkspacePage Unified Single Conversation (P
         onEvent?.({
           type: 'error',
           requestId: 'req-1',
+          botId: activeBotId,
           conversationId: canonicalConv1.id,
           executionMode: 'chat',
           sequenceNumber: 1,
@@ -939,6 +940,7 @@ describe('Renderer: BotConversationsWorkspacePage Unified Single Conversation (P
     streamCallback!({
       type: 'text_delta',
       requestId: 'req-2',
+      botId: activeBotId,
       conversationId: canonicalConv1.id,
       executionMode: 'chat',
       sequenceNumber: 1,
@@ -970,6 +972,7 @@ describe('Renderer: BotConversationsWorkspacePage Unified Single Conversation (P
       onEvent?.({
         type: 'error',
         requestId: 'req-3',
+        botId: activeBotId,
         conversationId: canonicalConv1.id,
         executionMode: 'chat',
         sequenceNumber: 1,
@@ -1009,6 +1012,7 @@ describe('Renderer: BotConversationsWorkspacePage Unified Single Conversation (P
         onEvent?.({
           type: 'text_delta',
           requestId: 'req-4',
+          botId: activeBotId,
           conversationId: canonicalConv1.id,
           executionMode: 'chat',
           sequenceNumber: 1,
@@ -1052,6 +1056,7 @@ describe('Renderer: BotConversationsWorkspacePage Unified Single Conversation (P
       onEvent?.({
         type: 'error',
         requestId: 'req-5',
+        botId: activeBotId,
         conversationId: canonicalConv1.id,
         executionMode: 'chat',
         sequenceNumber: 1,

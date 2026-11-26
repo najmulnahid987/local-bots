@@ -1290,7 +1290,14 @@ describe('Agent IPC Bridge & Preload Integration (Phase 8 Step 8.9)', () => {
   describe('Suite 7: Real-Time MessageChannel Streaming', () => {
     it('1. transfers port2 to senderFrame on stream start', () => {
       const senderFrame = mockWebContents1.mainFrame
-      const stream = streamManager.startStream(mockWindow1, senderFrame, randomUUID(), conv1Id)
+      const stream = streamManager.startStream(
+        mockWindow1,
+        senderFrame,
+        randomUUID(),
+        conv1Id,
+        undefined,
+        bot1Id
+      )
 
       expect(senderFrame.postMessage).toHaveBeenCalledWith(
         AGENT_IPC_CHANNELS.STREAM_PORT,
@@ -1317,7 +1324,9 @@ describe('Agent IPC Bridge & Preload Integration (Phase 8 Step 8.9)', () => {
         mockWindow1,
         mockWebContents1.mainFrame,
         runId,
-        conv1Id
+        conv1Id,
+        undefined,
+        bot1Id
       )
 
       stream.emitEvent({
@@ -1336,6 +1345,8 @@ describe('Agent IPC Bridge & Preload Integration (Phase 8 Step 8.9)', () => {
       expect(receivedEvents[1].sequenceNumber).toBe(2)
       expect(receivedEvents[0].type).toBe('agent_run_started')
       expect(receivedEvents[1].type).toBe('agent_iteration_started')
+      expect(receivedEvents[0].botId).toBe(bot1Id)
+      expect(receivedEvents[1].botId).toBe(bot1Id)
 
       stream.close()
     })
@@ -1351,7 +1362,9 @@ describe('Agent IPC Bridge & Preload Integration (Phase 8 Step 8.9)', () => {
         mockWindow1,
         mockWebContents1.mainFrame,
         runId,
-        conv1Id
+        conv1Id,
+        undefined,
+        bot1Id
       )
 
       stream.emitEvent({
@@ -1371,8 +1384,22 @@ describe('Agent IPC Bridge & Preload Integration (Phase 8 Step 8.9)', () => {
       const runId1 = randomUUID()
       const runId2 = randomUUID()
 
-      streamManager.startStream(mockWindow1, mockWebContents1.mainFrame, runId1, conv1Id)
-      streamManager.startStream(mockWindow1, mockWebContents1.mainFrame, runId2, conv1Id)
+      streamManager.startStream(
+        mockWindow1,
+        mockWebContents1.mainFrame,
+        runId1,
+        conv1Id,
+        undefined,
+        bot1Id
+      )
+      streamManager.startStream(
+        mockWindow1,
+        mockWebContents1.mainFrame,
+        runId2,
+        conv1Id,
+        undefined,
+        bot1Id
+      )
 
       expect(streamManager.getActiveStreamCount(mockWindow1)).toBe(2)
 
