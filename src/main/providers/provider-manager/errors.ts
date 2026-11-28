@@ -42,7 +42,10 @@ export function sanitizeErrorMessage(message: string): string {
   }
 
   return message
-    .replace(/(sk-proj-|sk-ant-|AIzaSy|sk-)[a-zA-Z0-9_\-+/=]{10,}/gi, '[REDACTED_KEY]')
+    .replace(
+      /(sk-or-v1-|sk-or-|sk-proj-|sk-ant-|AIzaSy|gsk_|pplx-|sk-)[a-zA-Z0-9_\-+/=]{10,}/gi,
+      '[REDACTED_KEY]'
+    )
     .replace(
       /cred_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
       '[REDACTED_REF]'

@@ -12,7 +12,7 @@ export const DEFAULT_CONNECTION_TEST_TIMEOUT_MS = 15000
 /**
  * Default timeout for text generation in milliseconds.
  */
-export const DEFAULT_GENERATION_TIMEOUT_MS = 60000
+export const DEFAULT_GENERATION_TIMEOUT_MS = 120000
 
 /**
  * Options for configuring the OpenAIAdapter instance.

@@ -2,6 +2,7 @@ import type { MessageDto } from '../../shared/conversations'
 import type { BotRagRetrievalResult } from './bot-rag-service'
 import { RagPromptBuilder, type RagPromptResult, type BotPromptConfig } from './rag-prompt-builder'
 import type { BotMemoryContextSelectionResult } from './bot-memory-service'
+import { estimateTokenCount } from '../documents/chunking/semantic-chunker'
 
 // ============================================================================
 // Service Constants & Limits
@@ -211,22 +212,113 @@ export class ConversationContextManager {
     // 6. Group historical messages into atomic conversation turns
     const turns = groupMessagesIntoTurns(input.history)
 
-    // 7. Deterministic turn selection loop (oldest turns removed first if over budget)
-    let selectedTurns = turns
-    let promptResult: RagPromptResult | null = null
-    let totalEstimatedInputTokens = 0
-    let startTurnIndex = 0
-    let activeMemoryContext = input.memoryContext
+    // 7. Compute invariant base prompt cost ONCE (0 historical turns) before O(T) turn budgeting
+    const trimmedQuestion = typeof input.question === 'string' ? input.question.trim() : ''
+    const activeMemoryContext = input.memoryContext
     let memoryOmittedDueToContextLimit = false
 
-    while (startTurnIndex <= turns.length) {
-      selectedTurns = turns.slice(startTurnIndex)
-      const candidateMessages = selectedTurns.flatMap((t) => t.messages)
+    let basePromptResult: RagPromptResult
+    try {
+      basePromptResult = RagPromptBuilder.build({
+        bot: input.bot,
+        history: [],
+        question: input.question,
+        retrievalResult: input.retrievalResult,
+        memoryContext: activeMemoryContext
+      })
+    } catch (err) {
+      throw new ConversationContextManagerError(
+        `Failed to construct candidate prompt: ${err instanceof Error ? err.message : String(err)}`,
+        'INVALID_INPUT'
+      )
+    }
 
+    // basePromptResult.messages has [system, finalUserMessage] (2 messages)
+    const baseTokensWithOverhead =
+      basePromptResult.tokenEstimates.totalEstimatedTokens +
+      basePromptResult.messages.length * messageOverheadPerMsg
+
+    // Precompute per-turn token + framing overhead once in O(N) instead of rebuilding O(T^2) times.
+    // Match RagPromptBuilder trailing duplicate-user-question suppression when non-empty history is kept.
+    const lastTurn = turns.length > 0 ? turns[turns.length - 1] : undefined
+    const lastTurnLastMsg =
+      lastTurn && lastTurn.messages.length > 0
+        ? lastTurn.messages[lastTurn.messages.length - 1]
+        : undefined
+    const dropsTrailingDuplicate = Boolean(
+      lastTurnLastMsg &&
+      lastTurnLastMsg.role === 'user' &&
+      lastTurnLastMsg.content.trim() === trimmedQuestion
+    )
+
+    const turnCosts: number[] = new Array(turns.length)
+    let totalHistoryCost = 0
+
+    for (let tIdx = 0; tIdx < turns.length; tIdx++) {
+      const turn = turns[tIdx]
+      let turnCost = 0
+      const isLastTurn = tIdx === turns.length - 1
+      for (let mIdx = 0; mIdx < turn.messages.length; mIdx++) {
+        if (isLastTurn && dropsTrailingDuplicate && mIdx === turn.messages.length - 1) {
+          continue
+        }
+        const msg = turn.messages[mIdx]
+        let transformedContent: string
+        if (msg.role === 'system') {
+          transformedContent = `[Historical System Note]: ${msg.content}`
+        } else if (msg.role === 'tool') {
+          transformedContent = `[Historical Tool Output]: ${msg.content}`
+        } else {
+          transformedContent = msg.content
+        }
+        turnCost += estimateTokenCount(transformedContent) + messageOverheadPerMsg
+      }
+      turnCosts[tIdx] = turnCost
+      totalHistoryCost += turnCost
+    }
+
+    // Single linear scan to drop oldest turns until remaining history + base fits within budget
+    let startTurnIndex = 0
+    let remainingHistoryCost = totalHistoryCost
+    while (
+      startTurnIndex < turns.length &&
+      baseTokensWithOverhead + remainingHistoryCost > availableInputTokens
+    ) {
+      remainingHistoryCost -= turnCosts[startTurnIndex]
+      startTurnIndex++
+    }
+
+    const selectedTurns = startTurnIndex === 0 ? turns : turns.slice(startTurnIndex)
+    const selectedHistory: MessageDto[] =
+      selectedTurns.length === 0 ? [] : selectedTurns.flatMap((t) => t.messages)
+
+    let promptResult: RagPromptResult
+    if (selectedHistory.length === 0) {
+      if (baseTokensWithOverhead > availableInputTokens && activeMemoryContext) {
+        // Omit memory context to protect mandatory system prompt, KB evidence, and question
+        memoryOmittedDueToContextLimit = true
+        try {
+          promptResult = RagPromptBuilder.build({
+            bot: input.bot,
+            history: [],
+            question: input.question,
+            retrievalResult: input.retrievalResult,
+            memoryContext: undefined
+          })
+        } catch (err) {
+          throw new ConversationContextManagerError(
+            `Failed to construct candidate prompt: ${err instanceof Error ? err.message : String(err)}`,
+            'INVALID_INPUT'
+          )
+        }
+      } else {
+        promptResult = basePromptResult
+      }
+    } else {
       try {
         promptResult = RagPromptBuilder.build({
           bot: input.bot,
-          history: candidateMessages,
+          history: selectedHistory,
           question: input.question,
           retrievalResult: input.retrievalResult,
           memoryContext: activeMemoryContext
@@ -237,40 +329,20 @@ export class ConversationContextManager {
           'INVALID_INPUT'
         )
       }
-
-      // Calculate total input tokens including message framing overhead
-      const framingOverhead = promptResult.messages.length * messageOverheadPerMsg
-      totalEstimatedInputTokens = promptResult.tokenEstimates.totalEstimatedTokens + framingOverhead
-
-      if (totalEstimatedInputTokens <= availableInputTokens) {
-        // Fits within budget!
-        break
-      }
-
-      // If over budget and there are turns to remove, trim the oldest complete turn
-      if (startTurnIndex < turns.length) {
-        startTurnIndex++
-      } else if (activeMemoryContext) {
-        // Even with 0 historical turns, prompt exceeds budget.
-        // Omit memory context to protect mandatory system prompt, KB evidence, and question.
-        activeMemoryContext = undefined
-        memoryOmittedDueToContextLimit = true
-        // Re-evaluate with 0 historical turns and no memory context
-      } else {
-        // Even with 0 historical turns and no memory, mandatory prompt exceeds budget
-        break
-      }
     }
 
+    const framingOverhead = promptResult.messages.length * messageOverheadPerMsg
+    const totalEstimatedInputTokens =
+      promptResult.tokenEstimates.totalEstimatedTokens + framingOverhead
+
     // 8. If mandatory prompt alone exceeds available budget, reject with typed overflow error
-    if (!promptResult || totalEstimatedInputTokens > availableInputTokens) {
+    if (totalEstimatedInputTokens > availableInputTokens) {
       throw new ConversationContextManagerError(
         `Mandatory prompt components (${totalEstimatedInputTokens} estimated tokens) exceed the available input token budget (${availableInputTokens} tokens).`,
         'CONTEXT_LENGTH_EXCEEDED'
       )
     }
 
-    const selectedHistory = selectedTurns.flatMap((t) => t.messages)
     const includedMessageCount = selectedHistory.length
     const excludedMessageCount = input.history.length - includedMessageCount
     const historyTrimmingOccurred = excludedMessageCount > 0

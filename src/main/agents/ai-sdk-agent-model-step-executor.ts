@@ -6,10 +6,14 @@
 import type { BotRepository } from '../database/repositories/bot-repository'
 import type { ProviderConnectionRepository } from '../database/repositories/provider-connection-repository'
 import type { CredentialVault } from '../security/credential-vault'
-import { providerRegistry } from '../providers/provider-registry'
+import { providerRegistry, type ProviderRegistry } from '../providers/provider-registry'
 import { OpenAIAdapter } from '../providers/openai/openai-adapter'
 import { AnthropicAdapter } from '../providers/anthropic/anthropic-adapter'
 import { GoogleAdapter } from '../providers/google/google-adapter'
+import { GroqAdapter } from '../providers/groq/groq-adapter'
+import { OpenRouterAdapter } from '../providers/openrouter/openrouter-adapter'
+import { PerplexityAdapter } from '../providers/perplexity/perplexity-adapter'
+import { sanitizeErrorMessage } from '../providers/provider-manager/errors'
 import type { ProviderAdapter, ProviderId, ToolDefinition } from '../providers/types'
 import {
   type AgentModelStepExecutor,
@@ -51,9 +55,13 @@ export interface AiSdkAgentModelStepExecutorDependencies {
   readonly botRepository: BotRepository
   readonly connectionRepository: ProviderConnectionRepository
   readonly credentialVault: CredentialVault
+  readonly registry?: ProviderRegistry
   readonly openAiAdapter?: OpenAIAdapter
   readonly anthropicAdapter?: AnthropicAdapter
   readonly googleAdapter?: GoogleAdapter
+  readonly groqAdapter?: GroqAdapter
+  readonly openRouterAdapter?: OpenRouterAdapter
+  readonly perplexityAdapter?: PerplexityAdapter
   readonly adapterResolver?: (providerId: ProviderId) => ProviderAdapter
 }
 
@@ -62,7 +70,7 @@ export interface AiSdkAgentModelStepExecutorDependencies {
 // ============================================================================
 
 /**
- * Concrete AgentModelStepExecutor that binds registered AI providers (OpenAI, Anthropic, Google)
+ * Concrete AgentModelStepExecutor that binds registered AI providers (OpenAI, Anthropic, Google, Groq, OpenRouter)
  * to the provider-independent BoundedAgentRuntime.
  *
  * Enforces strict security boundaries:
@@ -76,9 +84,8 @@ export class AiSdkAgentModelStepExecutor implements AgentModelStepExecutor {
   private readonly botRepo: BotRepository
   private readonly connectionRepo: ProviderConnectionRepository
   private readonly vault: CredentialVault
-  private readonly openAiAdapter: OpenAIAdapter
-  private readonly anthropicAdapter: AnthropicAdapter
-  private readonly googleAdapter: GoogleAdapter
+  private readonly registry: ProviderRegistry
+  private readonly adapters: Record<ProviderId, ProviderAdapter>
   private readonly customResolver?: (providerId: ProviderId) => ProviderAdapter
 
   constructor(deps: AiSdkAgentModelStepExecutorDependencies) {
@@ -91,9 +98,15 @@ export class AiSdkAgentModelStepExecutor implements AgentModelStepExecutor {
     this.botRepo = deps.botRepository
     this.connectionRepo = deps.connectionRepository
     this.vault = deps.credentialVault
-    this.openAiAdapter = deps.openAiAdapter ?? new OpenAIAdapter()
-    this.anthropicAdapter = deps.anthropicAdapter ?? new AnthropicAdapter()
-    this.googleAdapter = deps.googleAdapter ?? new GoogleAdapter()
+    this.registry = deps.registry ?? providerRegistry
+    this.adapters = {
+      openai: deps.openAiAdapter ?? new OpenAIAdapter(),
+      anthropic: deps.anthropicAdapter ?? new AnthropicAdapter(),
+      google: deps.googleAdapter ?? new GoogleAdapter(),
+      groq: deps.groqAdapter ?? new GroqAdapter(),
+      openrouter: deps.openRouterAdapter ?? new OpenRouterAdapter(),
+      perplexity: deps.perplexityAdapter ?? new PerplexityAdapter()
+    }
     this.customResolver = deps.adapterResolver
   }
 
@@ -158,7 +171,7 @@ export class AiSdkAgentModelStepExecutor implements AgentModelStepExecutor {
     }
 
     // 4. Validate Model & Native Tool Capability
-    const modelDescriptor = providerRegistry.getModel(providerId, targetModelId)
+    const modelDescriptor = this.registry.getModel(providerId, targetModelId, connection.id)
     if (!modelDescriptor || modelDescriptor.providerId !== providerId) {
       throw new BoundedAgentRuntimeError(
         `Model '${targetModelId}' is not an authorized model for provider '${providerId}'.`,
@@ -204,6 +217,7 @@ export class AiSdkAgentModelStepExecutor implements AgentModelStepExecutor {
     try {
       generationResult = await adapter.generateText(apiKey, {
         modelId: targetModelId,
+        connectionId: connection.id,
         systemPrompt,
         messages,
         tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
@@ -227,7 +241,7 @@ export class AiSdkAgentModelStepExecutor implements AgentModelStepExecutor {
 
       const rawMsg = err instanceof Error ? err.message : String(err)
       // Strip potential key fragments or multi-line stack traces
-      const sanitizedMsg = rawMsg.split(/\r?\n/)[0].trim()
+      const sanitizedMsg = sanitizeErrorMessage(rawMsg.split(/\r?\n/)[0].trim())
       throw new BoundedAgentRuntimeError(
         `Provider generation failed: ${sanitizedMsg}`,
         'STEP_EXECUTOR_FAILED',
@@ -272,15 +286,10 @@ export class AiSdkAgentModelStepExecutor implements AgentModelStepExecutor {
       return this.customResolver(providerId)
     }
 
-    switch (providerId) {
-      case 'openai':
-        return this.openAiAdapter
-      case 'anthropic':
-        return this.anthropicAdapter
-      case 'google':
-        return this.googleAdapter
-      default:
-        throw new Error(`Unsupported provider ID '${providerId}'.`)
+    const adapter = this.adapters[providerId]
+    if (!adapter) {
+      throw new Error(`Unsupported provider ID '${providerId}'.`)
     }
+    return adapter
   }
 }

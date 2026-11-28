@@ -26,7 +26,17 @@ import { ProviderRegistry, providerRegistry } from '../provider-registry'
 import { OpenAIAdapter } from '../openai'
 import { AnthropicAdapter } from '../anthropic'
 import { GoogleAdapter } from '../google'
-import { ProviderAdapterError, type ModelDescriptor } from '../types'
+import { GroqAdapter } from '../groq'
+import { OpenRouterAdapter } from '../openrouter'
+import { PerplexityAdapter } from '../perplexity'
+import {
+  CURRENT_APPLICATION_CAPABILITIES,
+  computeEffectiveCapabilities,
+  ProviderAdapterError,
+  type ModelDescriptor
+} from '../types'
+
+const DEFAULT_DISCOVERY_CACHE_TTL_MS = 15 * 60 * 1000
 
 /**
  * Main-process centralized service for managing provider connections, credentials,
@@ -34,7 +44,7 @@ import { ProviderAdapterError, type ModelDescriptor } from '../types'
  *
  * Invariants:
  * 1. Runs exclusively in the Electron Main process.
- * 2. Uses fixed, official provider adapters (OpenAI, Anthropic, Google).
+ * 2. Uses fixed, official provider adapters (OpenAI, Anthropic, Google, Groq, OpenRouter).
  * 3. Never returns plaintext API keys, ciphertexts, or credential_ref pointers to callers.
  * 4. Resolves credentials just-in-time and retains them only for the active call frame.
  * 5. Coordinates cross-resource consistency between CredentialVault and SQLite.
@@ -49,6 +59,7 @@ export class ProviderManagerService {
   private isReconciling = false
   private readonly activeMutationLocks = new Set<string>()
   private readonly connectionModelCache = new Map<string, readonly string[]>()
+  private readonly inFlightModelDiscovery = new Map<string, Promise<readonly ModelDescriptor[]>>()
 
   constructor(options: ProviderManagerServiceOptions) {
     this.vault = options.credentialVault
@@ -58,7 +69,10 @@ export class ProviderManagerService {
     this.adapters = {
       openai: options.adapters?.openai ?? new OpenAIAdapter(),
       anthropic: options.adapters?.anthropic ?? new AnthropicAdapter(),
-      google: options.adapters?.google ?? new GoogleAdapter()
+      google: options.adapters?.google ?? new GoogleAdapter(),
+      groq: options.adapters?.groq ?? new GroqAdapter(),
+      openrouter: options.adapters?.openrouter ?? new OpenRouterAdapter(),
+      perplexity: options.adapters?.perplexity ?? new PerplexityAdapter()
     }
   }
 
@@ -260,9 +274,12 @@ export class ProviderManagerService {
         credentialRef,
         status: 'active'
       })
-      if (testResult.availableModels && testResult.availableModels.length > 0) {
-        this.connectionModelCache.set(record.id, testResult.availableModels)
-      }
+      this.recordDiscoveredModels(
+        record.id,
+        providerId,
+        testResult.availableModels,
+        testResult.discoveredModels
+      )
       return this.mapToSummary(record)
     } catch (err: unknown) {
       // Compensatory cleanup: remove newly created credential file if DB insert fails
@@ -300,7 +317,7 @@ export class ProviderManagerService {
       )
     }
 
-    const modelDescriptor = this.registry.getModel(providerId, targetModelId)
+    const modelDescriptor = this.registry.getModel(providerId, targetModelId, connectionId)
     if (!modelDescriptor || modelDescriptor.providerId !== providerId) {
       throw new ProviderManagerError(
         `Model '${targetModelId}' is not authorized for provider '${providerId}'.`,
@@ -329,9 +346,12 @@ export class ProviderManagerService {
     // Transient network/rate limit failure -> retain current status
     if (testResult.success) {
       this.connectionRepo.updateStatus(connectionId, 'active')
-      if (testResult.availableModels && testResult.availableModels.length > 0) {
-        this.connectionModelCache.set(connectionId, testResult.availableModels)
-      }
+      this.recordDiscoveredModels(
+        connectionId,
+        providerId,
+        testResult.availableModels,
+        testResult.discoveredModels
+      )
     } else {
       const code = testResult.error?.code
       if (
@@ -409,7 +429,7 @@ export class ProviderManagerService {
         )
       }
 
-      const modelDescriptor = this.registry.getModel(providerId, targetModelId)
+      const modelDescriptor = this.registry.getModel(providerId, targetModelId, connectionId)
       if (!modelDescriptor || modelDescriptor.providerId !== providerId) {
         throw new ProviderManagerError(
           `Model '${targetModelId}' is not authorized for provider '${providerId}'.`,
@@ -441,9 +461,14 @@ export class ProviderManagerService {
 
       // 3. Update status to active
       const updated = this.connectionRepo.updateStatus(connectionId, 'active')
-      if (testResult.availableModels && testResult.availableModels.length > 0) {
-        this.connectionModelCache.set(connectionId, testResult.availableModels)
-      }
+      this.connectionModelCache.delete(connectionId)
+      this.registry.clearDiscoveredModels(connectionId)
+      this.recordDiscoveredModels(
+        connectionId,
+        providerId,
+        testResult.availableModels,
+        testResult.discoveredModels
+      )
       return this.mapToSummary(updated)
     })
   }
@@ -494,6 +519,7 @@ export class ProviderManagerService {
       }
 
       this.connectionModelCache.delete(connectionId)
+      this.registry.clearDiscoveredModels(connectionId)
       return {
         success: true,
         connectionId,
@@ -527,7 +553,7 @@ export class ProviderManagerService {
     }
 
     const providerId = connection.providerId as ProviderId
-    const model = this.registry.getModel(providerId, modelId)
+    const model = this.registry.getModel(providerId, modelId, connectionId)
     if (!model || model.providerId !== providerId) {
       throw new ProviderManagerError(
         `Model '${modelId}' is not authorized for provider '${providerId}'.`,
@@ -550,7 +576,7 @@ export class ProviderManagerService {
     }
 
     const adapter = this.getAdapter(providerId)
-    return adapter.generateText(apiKey, { ...options, modelId })
+    return adapter.generateText(apiKey, { ...options, modelId, connectionId })
   }
 
   /**
@@ -588,7 +614,7 @@ export class ProviderManagerService {
     }
 
     const providerId = connection.providerId as ProviderId
-    const model = this.registry.getModel(providerId, modelId)
+    const model = this.registry.getModel(providerId, modelId, connectionId)
     if (!model || model.providerId !== providerId) {
       yield {
         type: 'error',
@@ -632,7 +658,7 @@ export class ProviderManagerService {
     }
 
     const adapter = this.getAdapter(providerId)
-    yield* adapter.streamText(apiKey, { ...options, modelId })
+    yield* adapter.streamText(apiKey, { ...options, modelId, connectionId })
   }
 
   /**
@@ -690,6 +716,14 @@ export class ProviderManagerService {
     }
   }
 
+  /**
+   * Resolves the registered adapter for a given supported provider ID.
+   * Exposed for shared execution paths (e.g., Agent step executor).
+   */
+  public resolveAdapter(providerId: ProviderId): ProviderAdapter {
+    return this.getAdapter(providerId)
+  }
+
   private getAdapter(providerId: ProviderId): ProviderAdapter {
     const adapter = this.adapters[providerId]
     if (!adapter) {
@@ -701,9 +735,69 @@ export class ProviderManagerService {
     return adapter
   }
 
+  private buildConservativeDiscoveredDescriptor(
+    providerId: ProviderId,
+    id: string
+  ): ModelDescriptor {
+    const cleanName = id
+      .split('/')
+      .pop()!
+      .split(/[-_]+/)
+      .filter((s) => s.length > 0)
+      .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+      .join(' ')
+
+    const providerCapabilities = {
+      streaming: true,
+      tools: false,
+      imageInput: false,
+      structuredOutput: false
+    } as const
+    const applicationCapabilities = CURRENT_APPLICATION_CAPABILITIES
+    const capabilities = computeEffectiveCapabilities(providerCapabilities, applicationCapabilities)
+
+    return {
+      id,
+      providerId,
+      displayName: cleanName || id,
+      description: `Active model discovered from ${providerId} API`,
+      availability: 'stable',
+      contextWindow: { inputTokens: 32_768, outputTokens: 8_192 },
+      capabilities,
+      providerCapabilities,
+      applicationCapabilities,
+      docUrl: ''
+    }
+  }
+
+  private recordDiscoveredModels(
+    connectionId: string,
+    providerId: ProviderId,
+    availableModels?: readonly string[],
+    discoveredDescriptors?: ReadonlyArray<ModelDescriptor>
+  ): void {
+    if (discoveredDescriptors && discoveredDescriptors.length > 0) {
+      this.connectionModelCache.set(
+        connectionId,
+        discoveredDescriptors.map((m) => m.id)
+      )
+      this.registry.setDiscoveredModels(connectionId, providerId, discoveredDescriptors)
+      return
+    }
+
+    if (availableModels && availableModels.length > 0) {
+      this.connectionModelCache.set(connectionId, availableModels)
+      const descriptors = availableModels.map((id) => {
+        const existing = this.registry.getModel(providerId, id)
+        return existing ?? this.buildConservativeDiscoveredDescriptor(providerId, id)
+      })
+      this.registry.setDiscoveredModels(connectionId, providerId, descriptors)
+    }
+  }
+
   /**
    * Returns models confirmed to be available for a specific provider connection.
-   * If cached, returns cached models. Otherwise, queries the adapter and caches.
+   * Reuses fresh persisted/cached metadata, coalesces concurrent fetches, and refreshes via adapter when stale/missing.
    */
   public async getAvailableModels(connectionId: string): Promise<readonly ModelDescriptor[]> {
     const connection = this.connectionRepo.getById(connectionId)
@@ -714,69 +808,80 @@ export class ProviderManagerService {
       )
     }
 
-    const providerId = connection.providerId as ProviderId
-    let modelIds = this.connectionModelCache.get(connectionId)
+    const existingPromise = this.inFlightModelDiscovery.get(connectionId)
+    if (existingPromise) {
+      return existingPromise
+    }
 
-    if (!modelIds || modelIds.length === 0) {
-      try {
-        const apiKey = await this.vault.retrieve(connection.credentialRef)
-        const adapter = this.getAdapter(providerId)
-        if (typeof adapter.discoverAvailableModels === 'function') {
-          const discovered = await adapter.discoverAvailableModels(apiKey)
-          if (discovered && discovered.length > 0) {
-            modelIds = discovered
-            this.connectionModelCache.set(connectionId, modelIds)
+    const run = (async (): Promise<readonly ModelDescriptor[]> => {
+      const providerId = connection.providerId as ProviderId
+      let modelIds = this.connectionModelCache.get(connectionId)
+      const persistedModels = this.registry.getDiscoveredModels(connectionId, providerId)
+      const isStale = this.registry.isDiscoveredModelsStale(
+        connectionId,
+        DEFAULT_DISCOVERY_CACHE_TTL_MS
+      )
+
+      if ((!modelIds || modelIds.length === 0) && persistedModels.length > 0 && !isStale) {
+        modelIds = persistedModels.map((m) => m.id)
+        this.connectionModelCache.set(connectionId, modelIds)
+        return persistedModels
+      }
+
+      if (!modelIds || modelIds.length === 0 || isStale) {
+        try {
+          const apiKey = await this.vault.retrieve(connection.credentialRef)
+          const adapter = this.getAdapter(providerId)
+          if (typeof adapter.discoverModelMetadata === 'function') {
+            const descriptors = await adapter.discoverModelMetadata(apiKey)
+            if (descriptors && descriptors.length > 0) {
+              this.recordDiscoveredModels(
+                connectionId,
+                providerId,
+                descriptors.map((m) => m.id),
+                descriptors
+              )
+              return descriptors
+            }
+          } else if (typeof adapter.discoverAvailableModels === 'function') {
+            const discovered = await adapter.discoverAvailableModels(apiKey)
+            if (discovered && discovered.length > 0) {
+              this.recordDiscoveredModels(connectionId, providerId, discovered)
+              modelIds = discovered
+            }
+          }
+        } catch {
+          // Fallback to persisted discovered cache & static catalog
+        }
+      }
+
+      if (persistedModels.length > 0 && (!modelIds || modelIds.length === 0)) {
+        return persistedModels
+      }
+
+      const catalogAndDiscovered = this.registry.getModels(providerId, connectionId)
+      if (modelIds && modelIds.length > 0) {
+        const allowedSet = new Set(modelIds)
+        const matched = catalogAndDiscovered.filter((m) => allowedSet.has(m.id))
+        const matchedIds = new Set(matched.map((m) => m.id))
+        const extraModels: ModelDescriptor[] = []
+        for (const id of modelIds) {
+          if (!matchedIds.has(id)) {
+            extraModels.push(this.buildConservativeDiscoveredDescriptor(providerId, id))
           }
         }
-      } catch {
-        // Fallback to catalog
+        return [...matched, ...extraModels]
       }
-    }
 
-    const catalogModels = this.registry.getModels(providerId)
-    if (modelIds && modelIds.length > 0) {
-      const allowedSet = new Set(modelIds)
-      const matched = catalogModels.filter((m) => allowedSet.has(m.id))
-      const matchedIds = new Set(matched.map((m) => m.id))
-      const extraModels: ModelDescriptor[] = []
-      for (const id of modelIds) {
-        if (!matchedIds.has(id)) {
-          const cleanName = id
-            .split('-')
-            .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-            .join(' ')
-          extraModels.push({
-            id,
-            providerId,
-            displayName: cleanName,
-            description: `Active model discovered from ${providerId} API`,
-            availability: 'stable',
-            capabilities: {
-              streaming: true,
-              tools: true,
-              imageInput: false,
-              structuredOutput: true
-            },
-            providerCapabilities: {
-              streaming: true,
-              tools: true,
-              imageInput: false,
-              structuredOutput: true
-            },
-            applicationCapabilities: {
-              streaming: true,
-              tools: true,
-              imageInput: false,
-              structuredOutput: true
-            },
-            docUrl: ''
-          })
-        }
-      }
-      return [...matched, ...extraModels]
-    }
+      return catalogAndDiscovered.filter((m) => m.availability !== 'deprecated')
+    })()
 
-    return catalogModels.filter((m) => m.availability !== 'deprecated')
+    this.inFlightModelDiscovery.set(connectionId, run)
+    try {
+      return await run
+    } finally {
+      this.inFlightModelDiscovery.delete(connectionId)
+    }
   }
 
   private mapToSummary(connection: ProviderConnection): ProviderConnectionSummary {
@@ -787,7 +892,11 @@ export class ProviderManagerService {
         : true)
     )
 
-    const available = this.connectionModelCache.get(connection.id)
+    const cached = this.connectionModelCache.get(connection.id)
+    const persisted =
+      cached && cached.length > 0
+        ? cached
+        : this.registry.getDiscoveredModels(connection.id, connection.providerId).map((m) => m.id)
 
     return {
       id: connection.id,
@@ -797,7 +906,7 @@ export class ProviderManagerService {
       hasCredential: fileExists,
       createdAt: connection.createdAt,
       updatedAt: connection.updatedAt,
-      availableModels: available && available.length > 0 ? available : undefined
+      availableModels: persisted && persisted.length > 0 ? persisted : undefined
     }
   }
 

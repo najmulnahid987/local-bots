@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { FIRST_WAVE_PROVIDERS } from '../../shared/providers'
+import { ENABLED_PROVIDERS } from '../../shared/providers'
 import { sanitizeErrorMessage } from '../providers/provider-manager/errors'
 
 export const UUID_SCHEMA = z.string().uuid({ message: 'Must be a valid UUID' })
@@ -15,14 +15,19 @@ export const LABEL_SCHEMA = z
   .min(1, { message: 'Connection label cannot be empty' })
   .max(100, { message: 'Connection label exceeds maximum length (100 characters)' })
 
+const SAFE_MODEL_ID_REGEX = /^[a-zA-Z0-9._:/-]+$/
+
 export const MODEL_ID_SCHEMA = z
   .string()
   .trim()
   .min(1, { message: 'Model ID cannot be empty' })
-  .max(100, { message: 'Model ID exceeds maximum length (100 characters)' })
+  .max(200, { message: 'Model ID cannot exceed maximum length (200 characters)' })
+  .refine((val) => SAFE_MODEL_ID_REGEX.test(val) && !val.includes('..'), {
+    message: 'Model ID contains invalid characters.'
+  })
 
-export const PROVIDER_ID_SCHEMA = z.enum(FIRST_WAVE_PROVIDERS, {
-  message: `Invalid provider. Supported providers: ${FIRST_WAVE_PROVIDERS.join(', ')}`
+export const PROVIDER_ID_SCHEMA = z.enum(ENABLED_PROVIDERS, {
+  message: `Invalid provider. Supported providers: ${ENABLED_PROVIDERS.join(', ')}`
 })
 
 export const CHAT_MESSAGE_SCHEMA = z

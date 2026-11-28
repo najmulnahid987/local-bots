@@ -96,6 +96,54 @@ export function ProviderPrivacyInformation(): ReactElement {
               Terms <ExternalLink size={12} className="inline-icon" aria-hidden="true" />
             </a>
           </li>
+          <li className="privacy-vendor-item">
+            <strong>Groq:</strong> API requests travel directly over HTTPS to Groq LPU endpoints.
+            Groq does not train on API customer prompts or responses by default under commercial API
+            data terms.
+            <a
+              href="https://console.groq.com/docs/your-data"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="privacy-external-link"
+              aria-label="Groq Data Privacy Documentation (opens in new tab)"
+            >
+              Data Terms <ExternalLink size={12} className="inline-icon" aria-hidden="true" />
+            </a>
+          </li>
+          <li className="privacy-vendor-item">
+            <strong>OpenRouter:</strong> Local Bots connects directly to OpenRouter over HTTPS, but{' '}
+            <strong>OpenRouter acts as an intermediary router</strong> that forwards prompts to
+            selected underlying inference providers under your OpenRouter account, privacy, and
+            provider-routing settings (unlike direct OpenAI, Anthropic, Google, or Groq keys). ZDR
+            filtering narrows endpoints where available and is not an absolute zero-retention
+            guarantee across all settings.
+            <a
+              href="https://openrouter.ai/privacy"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="privacy-external-link"
+              aria-label="OpenRouter Privacy Policy (opens in new tab)"
+            >
+              Privacy Policy <ExternalLink size={12} className="inline-icon" aria-hidden="true" />
+            </a>
+          </li>
+          <li className="privacy-vendor-item">
+            <strong>Perplexity:</strong> Prompts and retrieved context travel directly over HTTPS to{' '}
+            <code>api.perplexity.ai</code> under your Perplexity API terms. When using Agent API
+            presets or third-party model identifiers, Perplexity may route requests to third-party
+            model providers. Local Bots sets <code>store: false</code> where supported, which
+            disables later server response retrieval but does <strong>not</strong> guarantee zero
+            data retention across Perplexity or routed model vendors.
+            <a
+              href="https://www.perplexity.ai/hub/legal/privacy-policy"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="privacy-external-link"
+              aria-label="Perplexity Privacy Policy (opens in new tab)"
+            >
+              Privacy Policy <ExternalLink size={12} className="inline-icon" aria-hidden="true" />
+            </a>
+          </li>
         </ul>
       </div>
     </div>

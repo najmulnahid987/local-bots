@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import {
   type ProviderConnection,
+  type DatabaseProviderId,
   type CreateProviderConnectionInput,
   type ProviderConnectionStatus,
   type CredentialRef,
@@ -16,7 +17,7 @@ import {
 
 interface ProviderConnectionRow {
   id: string
-  provider_id: 'openai' | 'anthropic' | 'google' | 'xai' | 'openrouter'
+  provider_id: DatabaseProviderId
   label: string
   credential_ref: string
   status: 'active' | 'revoked' | 'error'

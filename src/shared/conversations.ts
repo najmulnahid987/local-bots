@@ -269,13 +269,45 @@ export interface MessageToolCallDto {
 }
 
 /**
+ * Validated external web source returned by web-grounded AI providers (e.g. Perplexity).
+ * Strictly distinct from Knowledge Base CitationDto records and local KB provenance.
+ */
+export interface WebSourceDto {
+  readonly id: string
+  readonly title: string
+  readonly url: string
+  readonly snippet?: string
+  readonly publishedDate?: string
+  readonly lastUpdated?: string
+  readonly sourceType?: 'web' | 'search'
+  readonly originLabel?: string
+}
+
+/**
+ * Optional provider-reported financial cost breakdown metadata (e.g., Perplexity Agent API).
+ */
+export interface ProviderCostBreakdownDto {
+  readonly inputTokensCost?: number | null
+  readonly outputTokensCost?: number | null
+  readonly totalCost?: number | null
+  readonly toolCallsCost?: number | null
+  readonly currency?: string | null
+}
+
+/**
  * Execution and performance metadata for assistant responses.
  */
 export interface GenerationMetadataDto {
   readonly finishReason?: string
   readonly durationMs?: number
   readonly firstTokenMs?: number
+  readonly prepareMs?: number
+  readonly retrievalMs?: number
+  readonly contextSelectionMs?: number
+  readonly finalizationMs?: number
+  readonly tokensPerSecond?: number
   readonly temperature?: number
+  readonly cost?: ProviderCostBreakdownDto
 }
 
 /**
@@ -353,6 +385,7 @@ export interface MessageMetadataDto {
   readonly providerId?: ProviderId
   readonly modelId?: string
   readonly citations?: readonly CitationDto[]
+  readonly webSources?: readonly WebSourceDto[]
   readonly toolCalls?: readonly MessageToolCallDto[]
   readonly generation?: GenerationMetadataDto
   readonly agentRunId?: string
@@ -760,6 +793,50 @@ export const messageToolCallSchema = z
   })
   .strict()
 
+export function isSafeHttpUrl(rawUrl: string): boolean {
+  if (!rawUrl || typeof rawUrl !== 'string') {
+    return false
+  }
+  const trimmed = rawUrl.trim()
+  if (trimmed.length === 0 || trimmed.length > 2048) {
+    return false
+  }
+  try {
+    const parsed = new URL(trimmed)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+export const webSourceDtoSchema = z
+  .object({
+    id: z.string().trim().min(1).max(200),
+    title: z.string().trim().min(1).max(500),
+    url: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2048)
+      .refine(isSafeHttpUrl, { message: 'Web source URL must use http or https protocol.' }),
+    snippet: z.string().max(4000).optional(),
+    publishedDate: z.string().max(100).optional(),
+    lastUpdated: z.string().max(100).optional(),
+    sourceType: z.enum(['web', 'search']).optional(),
+    originLabel: z.string().max(100).optional()
+  })
+  .strict()
+
+export const providerCostBreakdownSchema = z
+  .object({
+    inputTokensCost: z.number().nonnegative().nullable().optional(),
+    outputTokensCost: z.number().nonnegative().nullable().optional(),
+    totalCost: z.number().nonnegative().nullable().optional(),
+    toolCallsCost: z.number().nonnegative().nullable().optional(),
+    currency: z.string().trim().min(1).max(16).nullable().optional()
+  })
+  .strict()
+
 /**
  * Validates assistant generation metadata.
  */
@@ -768,7 +845,13 @@ export const generationMetadataSchema = z
     finishReason: z.string().max(50).optional(),
     durationMs: z.number().int().nonnegative().optional(),
     firstTokenMs: z.number().int().nonnegative().optional(),
-    temperature: z.number().min(0).max(2).optional()
+    prepareMs: z.number().int().nonnegative().optional(),
+    retrievalMs: z.number().int().nonnegative().optional(),
+    contextSelectionMs: z.number().int().nonnegative().optional(),
+    finalizationMs: z.number().int().nonnegative().optional(),
+    tokensPerSecond: z.number().nonnegative().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    cost: providerCostBreakdownSchema.optional()
   })
   .strict()
 
@@ -824,6 +907,7 @@ export const messageMetadataSchema = z
     providerId: z.enum(SUPPORTED_PROVIDERS).optional(),
     modelId: z.string().trim().min(1).max(100).optional(),
     citations: z.array(citationDtoSchema).optional(),
+    webSources: z.array(webSourceDtoSchema).max(100).optional(),
     toolCalls: z.array(messageToolCallSchema).optional(),
     generation: generationMetadataSchema.optional(),
     agentRunId: z.string().uuid().optional(),

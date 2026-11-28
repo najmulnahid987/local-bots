@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { AnthropicAdapter } from './anthropic-adapter'
-import { ProviderAdapterError } from './errors'
+import { ProviderAdapterError, sanitizeAnthropicError } from './errors'
 import { ANTHROPIC_OFFICIAL_BASE_URL, ANTHROPIC_DEFAULT_VERSION } from './types'
 import { type GenerateTextOptions } from '../types'
 
@@ -845,5 +845,106 @@ describe('AnthropicAdapter (Phase 3 Step 3.5)', () => {
     expect(result.finishReason).toBe('tool_calls')
     expect(result.usage.promptTokens).toBe(45)
     expect(result.usage.completionTokens).toBe(15)
+  })
+
+  // 35. Unwraps AI_RetryError lastError statusCode (529 & 429) instead of returning UNKNOWN_ERROR
+  it('35. unwraps AI_RetryError lastError statusCode (529 & 429) instead of returning UNKNOWN_ERROR', () => {
+    const retry529 = Object.assign(new Error('Failed after 3 attempts.'), {
+      name: 'AI_RetryError',
+      reason: 'maxRetriesExceeded',
+      lastError: Object.assign(new Error('Anthropic is overloaded'), {
+        name: 'AI_APICallError',
+        statusCode: 529
+      })
+    })
+    const err529 = sanitizeAnthropicError(retry529)
+    expect(err529.code).toBe('SERVER_ERROR')
+    expect(err529.statusCode).toBe(529)
+    expect(err529.retryable).toBe(true)
+    expect(err529.message).toContain('overloaded')
+
+    const retry429 = Object.assign(new Error('Failed after 3 attempts.'), {
+      name: 'AI_RetryError',
+      reason: 'maxRetriesExceeded',
+      errors: [
+        Object.assign(new Error('Rate limit exceeded'), {
+          name: 'AI_APICallError',
+          statusCode: 429
+        })
+      ]
+    })
+    const err429 = sanitizeAnthropicError(retry429)
+    expect(err429.code).toBe('RATE_LIMITED')
+    expect(err429.statusCode).toBe(429)
+    expect(err429.retryable).toBe(true)
+
+    const retryQuota = Object.assign(new Error('Failed after 2 attempts.'), {
+      name: 'AI_RetryError',
+      lastError: Object.assign(
+        new Error('Your credit balance is too low to access the Claude API.'),
+        {
+          name: 'AI_APICallError',
+          statusCode: 429
+        }
+      )
+    })
+    const errQuota = sanitizeAnthropicError(retryQuota)
+    expect(errQuota.code).toBe('QUOTA_EXCEEDED')
+    expect(errQuota.statusCode).toBe(429)
+    expect(errQuota.retryable).toBe(false)
+  })
+
+  // 36. Classifies Undici/Fetch socket errors in err.cause as NETWORK_ERROR
+  it('36. classifies Undici/Fetch socket errors in err.cause as NETWORK_ERROR', () => {
+    const socketErr = Object.assign(new TypeError('fetch failed'), {
+      cause: {
+        name: 'SocketError',
+        code: 'ECONNRESET',
+        message: 'other side closed'
+      }
+    })
+    const sanitized = sanitizeAnthropicError(socketErr)
+    expect(sanitized.code).toBe('NETWORK_ERROR')
+    expect(sanitized.retryable).toBe(true)
+  })
+
+  // 37. Merges consecutive text turns and ignores empty text messages in convertMessages to satisfy Anthropic role alternation
+  it('37. merges consecutive text turns and ignores empty text messages in convertMessages to satisfy Anthropic role alternation', async () => {
+    let capturedBody: Record<string, unknown> = {}
+    const customFetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.body && typeof init.body === 'string') {
+        capturedBody = JSON.parse(init.body) as Record<string, unknown>
+      }
+      return makeAnthropicMessageResponse('Merged response')
+    }) as unknown as typeof fetch
+
+    const adapter = new AnthropicAdapter({ customFetch })
+    await adapter.generateText(dummyApiKey, {
+      modelId: 'claude-sonnet-5-5',
+      messages: [
+        { role: 'user', content: 'Turn 1 part A' },
+        { role: 'user', content: 'Turn 1 part B' },
+        { role: 'assistant', content: '   ' },
+        { role: 'user', content: 'Turn 2' }
+      ]
+    })
+
+    const messages = capturedBody.messages as Array<{ role: string; content: unknown }>
+    expect(messages).toBeDefined()
+    expect(messages.length).toBe(1)
+    expect(messages[0].role).toBe('user')
+    expect(messages[0].content).toEqual([
+      { type: 'text', text: 'Turn 1 part A\n\nTurn 1 part B\n\nTurn 2' }
+    ])
+  })
+
+  // 38. Classifies AI_NoOutputGeneratedError as SERVER_ERROR
+  it('38. classifies AI_NoOutputGeneratedError as retryable SERVER_ERROR', () => {
+    const noOutput = Object.assign(new Error('No output generated'), {
+      name: 'AI_NoOutputGeneratedError'
+    })
+    const sanitized = sanitizeAnthropicError(noOutput)
+    expect(sanitized.code).toBe('SERVER_ERROR')
+    expect(sanitized.retryable).toBe(true)
   })
 })

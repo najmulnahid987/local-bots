@@ -1,4 +1,4 @@
-import { ReactElement, useState, useMemo, ReactNode } from 'react'
+import { ReactElement, useState, useMemo, memo, ReactNode } from 'react'
 import { Copy, Check, AlertCircle } from 'lucide-react'
 import Prism from 'prismjs'
 
@@ -16,6 +16,7 @@ import 'prismjs/components/prism-markdown'
 export interface CodeBlockProps {
   readonly code: string
   readonly language?: string
+  readonly isGenerating?: boolean
 }
 
 const LANGUAGE_ALIASES: Record<string, string> = {
@@ -61,7 +62,11 @@ function renderPrismTokens(tokens: (string | Prism.Token)[], keyPrefix = ''): Re
  * Fenced code block component with syntax highlighting and accessible copy button.
  * Enforces horizontal scrolling within its container to prevent breaking workspace layout.
  */
-export function CodeBlock({ code, language = '' }: CodeBlockProps): ReactElement {
+export const CodeBlock = memo(function CodeBlock({
+  code,
+  language = '',
+  isGenerating = false
+}: CodeBlockProps): ReactElement {
   const [copied, setCopied] = useState<boolean>(false)
   const [copyError, setCopyError] = useState<boolean>(false)
 
@@ -71,6 +76,10 @@ export function CodeBlock({ code, language = '' }: CodeBlockProps): ReactElement
   const displayLang = normalizedLang || 'text'
 
   const highlightedContent = useMemo(() => {
+    // Defer expensive Prism tokenization while content is actively streaming
+    if (isGenerating) {
+      return code
+    }
     if (grammar) {
       try {
         const tokens = Prism.tokenize(code, grammar)
@@ -82,7 +91,7 @@ export function CodeBlock({ code, language = '' }: CodeBlockProps): ReactElement
     }
     // Plain text fallback for missing or unknown language identifiers
     return code
-  }, [code, grammar])
+  }, [code, grammar, isGenerating])
 
   const handleCopy = async (): Promise<void> => {
     try {
@@ -192,4 +201,4 @@ export function CodeBlock({ code, language = '' }: CodeBlockProps): ReactElement
       </pre>
     </div>
   )
-}
+})

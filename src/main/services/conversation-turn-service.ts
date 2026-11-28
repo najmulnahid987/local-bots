@@ -1080,6 +1080,7 @@ export class ConversationTurnService {
     executionResult: ConversationExecutionResult,
     abortSignal?: AbortSignal
   ): Promise<ConversationExecutionResult> {
+    const finalizationStartMs = performance.now()
     const responsePolicy = preparedTurn.responsePolicy ?? DEFAULT_BOT_RESPONSE_POLICY
     const validation = await GroundingValidator.validateResponse({
       assistantText: executionResult.assistantText,
@@ -1092,18 +1093,22 @@ export class ConversationTurnService {
       claimVerifier: this.claimVerifier,
       abortSignal
     })
+    const finalizationMs = Math.max(0, Math.round(performance.now() - finalizationStartMs))
 
     if (responsePolicy === 'strict_kb_only' && !validation.isValid) {
       return {
         ...executionResult,
         assistantText: validation.sanitizedContent,
-        validatedClaims: []
+        validatedClaims: [],
+        webSources: undefined,
+        finalizationMs
       }
     }
 
     return {
       ...executionResult,
-      validatedClaims: validation.claims
+      validatedClaims: validation.claims,
+      finalizationMs
     }
   }
 

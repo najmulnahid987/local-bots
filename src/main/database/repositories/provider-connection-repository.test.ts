@@ -102,11 +102,11 @@ describe('ProviderConnectionRepository (Phase 3 Step 3.2)', () => {
       })
     ).toThrow(ValidationError)
 
-    // xAI and OpenRouter are deferred to post-Phase 3 at application level
+    // xAI remains deferred at application level
     expect(() =>
       repo.create({
-        providerId: 'openrouter' as unknown as ProviderId,
-        label: 'OpenRouter',
+        providerId: 'xai' as unknown as ProviderId,
+        label: 'xAI',
         credentialRef: credRef
       })
     ).toThrow(ValidationError)

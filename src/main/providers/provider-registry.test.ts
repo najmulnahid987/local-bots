@@ -28,8 +28,18 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     expect(providerIds).toContain('openai')
     expect(providerIds).toContain('anthropic')
     expect(providerIds).toContain('google')
-    expect(providers.length).toBe(3)
-    expect(SUPPORTED_PROVIDER_IDS).toEqual(['openai', 'anthropic', 'google'])
+    expect(providerIds).toContain('groq')
+    expect(providerIds).toContain('openrouter')
+    expect(providerIds).toContain('perplexity')
+    expect(providers.length).toBe(6)
+    expect(SUPPORTED_PROVIDER_IDS).toEqual([
+      'openai',
+      'anthropic',
+      'google',
+      'groq',
+      'openrouter',
+      'perplexity'
+    ])
   })
 
   // Test 2: Provider descriptors contain required metadata
@@ -72,7 +82,8 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
   // Test 4: Unknown provider lookup is handled safely
   it('4. safely handles lookup of unknown or unsupported provider IDs', () => {
     expect(providerRegistry.getProvider('unsupported_vendor')).toBeNull()
-    expect(providerRegistry.getProvider('openrouter')).toBeNull()
+    expect(providerRegistry.getProvider('cohere')).toBeNull()
+    expect(providerRegistry.getProvider('xai')).toBeNull()
     expect(providerRegistry.getProvider('')).toBeNull()
     expect(providerRegistry.getProvider(null as unknown as string)).toBeNull()
 
@@ -142,7 +153,7 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
 
   // Test 8: Provider model lists contain only models belonging to that provider
   it('8. ensures getModels(providerId) returns exclusively models for that provider', () => {
-    const providers: ProviderId[] = ['openai', 'anthropic', 'google']
+    const providers: ProviderId[] = ['openai', 'anthropic', 'google', 'groq', 'openrouter']
 
     for (const p of providers) {
       const models = providerRegistry.getModels(p)
@@ -346,8 +357,8 @@ describe('Provider and Model Registry (Phase 3 Step 3.3)', () => {
     // Zod schema parsing rejects unsupported provider IDs
     expect(() =>
       createProviderConnectionSchema.parse({
-        providerId: 'openrouter',
-        label: 'OpenRouter Key',
+        providerId: 'cohere',
+        label: 'Cohere Key',
         credentialRef: `cred_${randomUUID()}`
       })
     ).toThrow()

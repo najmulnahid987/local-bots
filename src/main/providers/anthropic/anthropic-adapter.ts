@@ -192,8 +192,8 @@ export class AnthropicAdapter implements ProviderAdapter {
    * Generates a single text response using Anthropic Messages API.
    */
   async generateText(apiKey: string, options: GenerateTextOptions): Promise<GenerateTextResult> {
-    // 1. Model resolution and validation
-    const model = providerRegistry.getModel('anthropic', options.modelId)
+    // 1. Model resolution and validation (supports connection-scoped discovered models)
+    const model = providerRegistry.getModel('anthropic', options.modelId, options.connectionId)
     if (!model || model.providerId !== 'anthropic') {
       throw new ProviderAdapterError({
         code: 'MODEL_NOT_FOUND',
@@ -268,7 +268,13 @@ export class AnthropicAdapter implements ProviderAdapter {
         usage
       }
     } catch (err) {
-      throw new ProviderAdapterError(sanitizeAnthropicError(err))
+      const effectiveError =
+        controller.signal.aborted &&
+        !options.abortSignal?.aborted &&
+        controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : err
+      throw new ProviderAdapterError(sanitizeAnthropicError(effectiveError))
     } finally {
       clearTimeout(timeoutId)
     }
@@ -278,8 +284,8 @@ export class AnthropicAdapter implements ProviderAdapter {
    * Generates a streaming text response using Anthropic Messages API.
    */
   async *streamText(apiKey: string, options: GenerateTextOptions): AsyncIterable<StreamTextChunk> {
-    // 1. Model resolution and validation
-    const model = providerRegistry.getModel('anthropic', options.modelId)
+    // 1. Model resolution and validation (supports connection-scoped discovered models)
+    const model = providerRegistry.getModel('anthropic', options.modelId, options.connectionId)
     if (!model || model.providerId !== 'anthropic') {
       yield {
         type: 'error',
@@ -347,6 +353,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       }
     }
 
+    let hasYieldedText = false
     try {
       const result = streamText({
         model: languageModel,
@@ -365,6 +372,9 @@ export class AnthropicAdapter implements ProviderAdapter {
 
       for await (const chunk of result.fullStream) {
         if (chunk.type === 'text-delta') {
+          if (chunk.text.length > 0) {
+            hasYieldedText = true
+          }
           yield {
             type: 'text-delta',
             textDelta: chunk.text
@@ -378,6 +388,29 @@ export class AnthropicAdapter implements ProviderAdapter {
             }
           }
         } else if (chunk.type === 'finish') {
+          if (chunk.finishReason === 'content-filter' && !hasYieldedText) {
+            yield {
+              type: 'error',
+              error: {
+                code: 'INVALID_REQUEST',
+                message: 'Anthropic blocked this response due to content safety filters.',
+                retryable: false
+              }
+            }
+            return
+          }
+          if (chunk.finishReason === 'error' && !hasYieldedText) {
+            yield {
+              type: 'error',
+              error: {
+                code: 'SERVER_ERROR',
+                message:
+                  'Anthropic encountered a generation error before completing the response. Please retry.',
+                retryable: true
+              }
+            }
+            return
+          }
           const usage: TokenUsage = {
             promptTokens: chunk.totalUsage.inputTokens ?? 0,
             completionTokens: chunk.totalUsage.outputTokens ?? 0,
@@ -388,11 +421,13 @@ export class AnthropicAdapter implements ProviderAdapter {
             finishReason: this.mapFinishReason(chunk.finishReason),
             usage
           }
+          return
         } else if (chunk.type === 'error') {
           yield {
             type: 'error',
             error: sanitizeAnthropicError(chunk.error)
           }
+          return
         } else if (chunk.type === 'abort') {
           const rawReason =
             (chunk as { reason?: unknown }).reason ??
@@ -421,12 +456,19 @@ export class AnthropicAdapter implements ProviderAdapter {
               retryable: isTimeout
             }
           }
+          return
         }
       }
     } catch (err) {
+      const effectiveError =
+        controller.signal.aborted &&
+        !options.abortSignal?.aborted &&
+        controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : err
       yield {
         type: 'error',
-        error: sanitizeAnthropicError(err)
+        error: sanitizeAnthropicError(effectiveError)
       }
     } finally {
       clearTimeout(timeoutId)
@@ -438,7 +480,7 @@ export class AnthropicAdapter implements ProviderAdapter {
    */
   private assertSupportedCapabilities(options: GenerateTextOptions): void {
     if (options.tools && options.tools.length > 0) {
-      const model = providerRegistry.getModel('anthropic', options.modelId)
+      const model = providerRegistry.getModel('anthropic', options.modelId, options.connectionId)
       if (!model?.providerCapabilities?.tools) {
         throw new ProviderAdapterError({
           code: 'UNSUPPORTED_CAPABILITY',
@@ -486,6 +528,15 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     const messages: ModelMessage[] = []
 
+    const pushMergedTextMessage = (role: 'user' | 'assistant', text: string): void => {
+      const last = messages[messages.length - 1]
+      if (last && last.role === role && typeof last.content === 'string') {
+        last.content = `${last.content}\n\n${text}`
+        return
+      }
+      messages.push({ role, content: text })
+    }
+
     for (const msg of options.messages) {
       if (msg.role === 'system') {
         const text = typeof msg.content === 'string' ? msg.content : this.extractText(msg.content)
@@ -494,7 +545,9 @@ export class AnthropicAdapter implements ProviderAdapter {
         }
       } else if (msg.role === 'user') {
         const text = typeof msg.content === 'string' ? msg.content : this.extractText(msg.content)
-        messages.push({ role: 'user', content: text })
+        if (text.trim().length > 0) {
+          pushMergedTextMessage('user', text)
+        }
       } else if (msg.role === 'assistant') {
         const text = typeof msg.content === 'string' ? msg.content : this.extractText(msg.content)
         if (msg.toolCalls && msg.toolCalls.length > 0) {
@@ -514,8 +567,8 @@ export class AnthropicAdapter implements ProviderAdapter {
             })
           }
           messages.push({ role: 'assistant', content: parts } as ModelMessage)
-        } else {
-          messages.push({ role: 'assistant', content: text })
+        } else if (text.trim().length > 0) {
+          pushMergedTextMessage('assistant', text)
         }
       } else if (msg.role === 'tool') {
         const text = typeof msg.content === 'string' ? msg.content : this.extractText(msg.content)

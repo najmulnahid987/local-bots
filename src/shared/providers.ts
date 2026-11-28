@@ -4,11 +4,47 @@
  * Safe for import in Preload and Renderer codebases.
  */
 
-export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'google', 'xai', 'openrouter'] as const
+export const SUPPORTED_PROVIDERS = [
+  'openai',
+  'anthropic',
+  'google',
+  'groq',
+  'xai',
+  'openrouter',
+  'perplexity'
+] as const
 export type ProviderId = (typeof SUPPORTED_PROVIDERS)[number]
 
-export const FIRST_WAVE_PROVIDERS = ['openai', 'anthropic', 'google'] as const
-export type FirstWaveProviderId = (typeof FIRST_WAVE_PROVIDERS)[number]
+export const ENABLED_PROVIDERS = [
+  'openai',
+  'anthropic',
+  'google',
+  'groq',
+  'openrouter',
+  'perplexity'
+] as const
+export type EnabledProviderId = (typeof ENABLED_PROVIDERS)[number]
+
+/** @deprecated Prefer ENABLED_PROVIDERS for active runtime providers. */
+export const FIRST_WAVE_PROVIDERS = ENABLED_PROVIDERS
+export type FirstWaveProviderId = EnabledProviderId
+
+export const OPENROUTER_ROUTING_SORTS = ['default', 'price', 'latency', 'throughput'] as const
+export type OpenRouterRoutingSort = (typeof OPENROUTER_ROUTING_SORTS)[number]
+
+export interface OpenRouterRoutingPreferences {
+  readonly sort?: OpenRouterRoutingSort
+  readonly allowFallbacks?: boolean
+  readonly zdr?: boolean
+}
+
+export interface ModelPricingDto {
+  readonly promptPerTokenUsd?: string
+  readonly completionPerTokenUsd?: string
+  readonly requestUsd?: string
+  readonly imageUsd?: string
+  readonly isFree?: boolean
+}
 
 export const PROVIDER_CONNECTION_STATUSES = ['active', 'revoked', 'error'] as const
 export type ProviderConnectionStatus = (typeof PROVIDER_CONNECTION_STATUSES)[number]
@@ -21,6 +57,7 @@ export interface ProviderNativeCapabilities {
   readonly tools: boolean
   readonly imageInput: boolean
   readonly structuredOutput: boolean
+  readonly reasoning?: boolean
 }
 
 /**
@@ -83,10 +120,16 @@ export interface ModelDescriptorDto {
   readonly displayName: string
   readonly description: string
   readonly availability: string
+  readonly canonicalSlug?: string
   readonly contextWindow?: {
     readonly inputTokens: number
     readonly outputTokens: number
   }
+  readonly inputModalities?: readonly string[]
+  readonly outputModalities?: readonly string[]
+  readonly supportedParameters?: readonly string[]
+  readonly pricing?: ModelPricingDto
+  readonly metadataSource?: 'catalog' | 'user_models' | 'public_catalog'
   readonly providerCapabilities?: ProviderNativeCapabilities
   readonly applicationCapabilities?: ApplicationCapabilities
   readonly capabilities: ModelCapabilityDto

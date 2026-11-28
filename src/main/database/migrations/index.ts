@@ -12,6 +12,8 @@ import csvPersistenceSupportSql from './010_csv_persistence_support.sql?raw'
 import createDocumentValidationSql from './011_create_document_validation.sql?raw'
 import singleConversationPerBotSql from './012_single_conversation_per_bot.sql?raw'
 import botResponsePoliciesSql from './013_bot_response_policies.sql?raw'
+import addGroqProviderSql from './014_add_groq_provider.sql?raw'
+import addPerplexityProviderSql from './015_add_perplexity_provider.sql?raw'
 
 export * from './types'
 export * from './runner'
@@ -103,5 +105,17 @@ export const migrations: readonly Migration[] = [
     version: 13,
     name: 'bot_response_policies',
     sql: botResponsePoliciesSql
+  },
+  {
+    version: 14,
+    name: 'add_groq_provider',
+    sql: addGroqProviderSql,
+    disableForeignKeysForTableRebuild: true
+  },
+  {
+    version: 15,
+    name: 'add_perplexity_provider',
+    sql: addPerplexityProviderSql,
+    disableForeignKeysForTableRebuild: true
   }
 ]

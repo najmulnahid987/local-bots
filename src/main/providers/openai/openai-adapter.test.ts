@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { OpenAIAdapter } from './openai-adapter'
-import { ProviderAdapterError } from './errors'
+import { ProviderAdapterError, sanitizeOpenAIError } from './errors'
 import { OPENAI_OFFICIAL_BASE_URL } from './types'
 import { type GenerateTextOptions } from '../types'
 
@@ -665,5 +665,103 @@ describe('OpenAIAdapter (Phase 3 Step 3.4)', () => {
     expect(result.finishReason).toBe('tool_calls')
     expect(result.usage.promptTokens).toBe(25)
     expect(result.usage.completionTokens).toBe(10)
+  })
+
+  // 27. Unwraps AI_RetryError lastError statusCode (503 & 429) and insufficient quota
+  it('27. unwraps AI_RetryError lastError statusCode (503 & 429) instead of returning UNKNOWN_ERROR', () => {
+    const retry503 = Object.assign(new Error('Failed after 3 attempts.'), {
+      name: 'AI_RetryError',
+      reason: 'maxRetriesExceeded',
+      lastError: Object.assign(new Error('OpenAI server is temporarily unavailable'), {
+        name: 'AI_APICallError',
+        statusCode: 503
+      })
+    })
+    const err503 = sanitizeOpenAIError(retry503)
+    expect(err503.code).toBe('SERVER_ERROR')
+    expect(err503.statusCode).toBe(503)
+    expect(err503.retryable).toBe(true)
+
+    const retry429 = Object.assign(new Error('Failed after 3 attempts.'), {
+      name: 'AI_RetryError',
+      reason: 'maxRetriesExceeded',
+      errors: [
+        Object.assign(new Error('Rate limit reached for requests'), {
+          name: 'AI_APICallError',
+          statusCode: 429
+        })
+      ]
+    })
+    const err429 = sanitizeOpenAIError(retry429)
+    expect(err429.code).toBe('RATE_LIMITED')
+    expect(err429.statusCode).toBe(429)
+    expect(err429.retryable).toBe(true)
+
+    const retryQuota = Object.assign(new Error('Failed after 2 attempts.'), {
+      name: 'AI_RetryError',
+      lastError: Object.assign(
+        new Error('You exceeded your current quota, please check your plan and billing details.'),
+        {
+          name: 'AI_APICallError',
+          statusCode: 429
+        }
+      )
+    })
+    const errQuota = sanitizeOpenAIError(retryQuota)
+    expect(errQuota.code).toBe('QUOTA_EXCEEDED')
+    expect(errQuota.statusCode).toBe(429)
+    expect(errQuota.retryable).toBe(false)
+  })
+
+  // 28. Classifies Undici/Fetch socket errors in err.cause as NETWORK_ERROR
+  it('28. classifies Undici/Fetch socket errors in err.cause as NETWORK_ERROR', () => {
+    const socketErr = Object.assign(new TypeError('fetch failed'), {
+      cause: {
+        name: 'SocketError',
+        code: 'ECONNRESET',
+        message: 'other side closed'
+      }
+    })
+    const sanitized = sanitizeOpenAIError(socketErr)
+    expect(sanitized.code).toBe('NETWORK_ERROR')
+    expect(sanitized.retryable).toBe(true)
+  })
+
+  // 29. Merges consecutive text turns and ignores empty text messages in convertMessages
+  it('29. merges consecutive text turns and ignores empty text messages in convertMessages', async () => {
+    let capturedBody = ''
+    const customFetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = typeof init?.body === 'string' ? init.body : ''
+      return makeResponsesApiResponse('Merged response')
+    }) as unknown as typeof fetch
+
+    const adapter = new OpenAIAdapter({ customFetch })
+    await adapter.generateText(dummyApiKey, {
+      modelId: 'gpt-6-luna',
+      messages: [
+        { role: 'user', content: 'Turn 1 part A' },
+        { role: 'user', content: 'Turn 1 part B' },
+        { role: 'assistant', content: '   ' },
+        { role: 'user', content: 'Turn 2' }
+      ]
+    })
+
+    const parsed = JSON.parse(capturedBody) as { input: Array<{ role: string; content: unknown }> }
+    expect(parsed.input).toBeDefined()
+    const userMessages = parsed.input.filter((m) => m.role === 'user')
+    expect(userMessages.length).toBe(1)
+    expect(userMessages[0].content).toEqual([
+      { type: 'input_text', text: 'Turn 1 part A\n\nTurn 1 part B\n\nTurn 2' }
+    ])
+  })
+
+  // 30. Classifies AI_NoOutputGeneratedError as SERVER_ERROR
+  it('30. classifies AI_NoOutputGeneratedError as retryable SERVER_ERROR', () => {
+    const noOutput = Object.assign(new Error('No output generated'), {
+      name: 'AI_NoOutputGeneratedError'
+    })
+    const sanitized = sanitizeOpenAIError(noOutput)
+    expect(sanitized.code).toBe('SERVER_ERROR')
+    expect(sanitized.retryable).toBe(true)
   })
 })

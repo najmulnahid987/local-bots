@@ -3,12 +3,20 @@ import { ProviderManagerService } from '../providers/provider-manager/provider-m
 import { sanitizeErrorMessage } from '../providers/provider-manager/errors'
 import type {
   ChatMessage,
+  ProviderCostMetadata,
   ProviderError,
   ProviderErrorCode,
   ProviderId,
+  ProviderWebSource,
   TokenUsage
 } from '../providers/types'
-import type { CitationDto, ClaimProvenanceDto } from '../../shared/conversations'
+import {
+  webSourceDtoSchema,
+  type CitationDto,
+  type ClaimProvenanceDto,
+  type ProviderCostBreakdownDto,
+  type WebSourceDto
+} from '../../shared/conversations'
 
 // ============================================================================
 // Error Contracts
@@ -46,6 +54,7 @@ export interface FinishEvent {
   readonly usage?: TokenUsage
   readonly totalTextLength: number
   readonly durationMs: number
+  readonly firstTokenMs?: number
 }
 
 export interface ErrorEvent {
@@ -68,6 +77,8 @@ export interface ConversationExecutionResult {
   readonly usage?: TokenUsage
   readonly finishReason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'abort' | 'other'
   readonly durationMs: number
+  readonly firstTokenMs?: number
+  readonly finalizationMs?: number
   readonly providerId: ProviderId
   readonly modelId: string
   readonly botId: string
@@ -75,6 +86,8 @@ export interface ConversationExecutionResult {
   readonly citationCandidates: readonly CitationDto[]
   readonly citationMap: ReadonlyMap<number, CitationDto>
   readonly validatedClaims?: readonly ClaimProvenanceDto[]
+  readonly webSources?: readonly WebSourceDto[]
+  readonly providerCost?: ProviderCostBreakdownDto
 }
 
 export interface StreamExecutionOptions {
@@ -241,13 +254,27 @@ export class ConversationExecutionService {
       options.abortSignal.addEventListener('abort', onCallerAbort, { once: true })
     }
 
-    const startTime = Date.now()
+    const startTimeMs = performance.now()
+    let providerDispatchMs: number | undefined
+    let firstTokenMs: number | undefined
     let accumulatedText = ''
     let finishEventEmitted = false
     let finalUsage: TokenUsage | undefined
     let finalFinishReason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'abort' | 'other' =
       'stop'
     let hasTerminatedWithError = false
+    const webSourcesByUrl = new Map<string, WebSourceDto>()
+    let finalProviderCost: ProviderCostMetadata | undefined
+
+    const recordWebSource = (raw: ProviderWebSource): void => {
+      const parsed = webSourceDtoSchema.safeParse(raw)
+      if (!parsed.success) {
+        return
+      }
+      if (!webSourcesByUrl.has(parsed.data.url)) {
+        webSourcesByUrl.set(parsed.data.url, parsed.data)
+      }
+    }
 
     try {
       // 3. Map chronological messages for provider SDK format
@@ -258,6 +285,7 @@ export class ConversationExecutionService {
       }))
 
       // 4. Dispatch stream to ProviderManagerService
+      providerDispatchMs = performance.now()
       const rawStream = this.providerManagerService.streamText(
         preparedTurn.providerConnectionId,
         preparedTurn.modelId,
@@ -291,11 +319,20 @@ export class ConversationExecutionService {
         }
 
         if (chunk.type === 'text-delta') {
+          if (
+            firstTokenMs === undefined &&
+            chunk.textDelta.length > 0 &&
+            providerDispatchMs !== undefined
+          ) {
+            firstTokenMs = Math.max(0, Math.round(performance.now() - providerDispatchMs))
+          }
           accumulatedText += chunk.textDelta
           yield {
             type: 'text_delta',
             textDelta: chunk.textDelta
           }
+        } else if (chunk.type === 'source') {
+          recordWebSource(chunk.source)
         } else if (chunk.type === 'finish') {
           // If the finish chunk reports an abort, treat it strictly as cancellation, not success
           if (chunk.finishReason === 'abort' || internalController.signal.aborted) {
@@ -316,17 +353,27 @@ export class ConversationExecutionService {
             return
           }
 
+          if (Array.isArray(chunk.webSources)) {
+            for (const src of chunk.webSources) {
+              recordWebSource(src)
+            }
+          }
+          if (chunk.providerCost) {
+            finalProviderCost = chunk.providerCost
+          }
+
           finishEventEmitted = true
           finalFinishReason = chunk.finishReason
           finalUsage = chunk.usage
-          const durationMs = Date.now() - startTime
+          const durationMs = Math.max(0, Math.round(performance.now() - startTimeMs))
 
           yield {
             type: 'finish',
             finishReason: chunk.finishReason,
             usage: chunk.usage,
             totalTextLength: accumulatedText.length,
-            durationMs
+            durationMs,
+            ...(firstTokenMs !== undefined ? { firstTokenMs } : {})
           }
         } else if (chunk.type === 'error') {
           hasTerminatedWithError = true
@@ -365,30 +412,35 @@ export class ConversationExecutionService {
         } else {
           // Stream ended cleanly without finish event
           finishEventEmitted = true
-          const durationMs = Date.now() - startTime
+          const durationMs = Math.max(0, Math.round(performance.now() - startTimeMs))
           yield {
             type: 'finish',
             finishReason: finalFinishReason,
             usage: finalUsage,
             totalTextLength: accumulatedText.length,
-            durationMs
+            durationMs,
+            ...(firstTokenMs !== undefined ? { firstTokenMs } : {})
           }
         }
       }
 
       // 6. Resolve final completed result upon success
       if (finishEventEmitted && !hasTerminatedWithError) {
+        const collectedWebSources = Array.from(webSourcesByUrl.values())
         resolveResult({
           assistantText: accumulatedText,
           usage: finalUsage,
           finishReason: finalFinishReason,
-          durationMs: Date.now() - startTime,
+          durationMs: Math.max(0, Math.round(performance.now() - startTimeMs)),
+          ...(firstTokenMs !== undefined ? { firstTokenMs } : {}),
           providerId: preparedTurn.providerId,
           modelId: preparedTurn.modelId,
           botId: preparedTurn.botId,
           conversationId: preparedTurn.conversationId,
           citationCandidates: preparedTurn.citationCandidates,
-          citationMap: preparedTurn.citationMap
+          citationMap: preparedTurn.citationMap,
+          ...(collectedWebSources.length > 0 ? { webSources: collectedWebSources } : {}),
+          ...(finalProviderCost ? { providerCost: finalProviderCost } : {})
         })
       }
     } catch (err: unknown) {

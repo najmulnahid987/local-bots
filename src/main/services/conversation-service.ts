@@ -137,6 +137,11 @@ export interface PreparedConversationTurn {
   readonly excludedMessageCount: number
   readonly historyTrimmingOccurred: boolean
   readonly memoryContext?: BotMemoryContextSelectionResult
+  readonly timings?: {
+    readonly prepareMs: number
+    readonly retrievalMs: number
+    readonly contextSelectionMs: number
+  }
 }
 
 // ============================================================================
@@ -270,6 +275,7 @@ export class ConversationService {
    * 9. Produces a typed PreparedConversationTurn without side effects (no DB writes, no provider calls).
    */
   public prepareTurn(sessionId: SessionId, request: PrepareTurnRequest): PreparedConversationTurn {
+    const prepareStartMs = performance.now()
     // 1. Session and input validation
     if (
       sessionId === undefined ||
@@ -323,7 +329,9 @@ export class ConversationService {
 
     // 8. Execute Bot-scoped RAG retrieval
     const responsePolicy = bot.responsePolicy ?? DEFAULT_BOT_RESPONSE_POLICY
+    const retrievalStartMs = performance.now()
     const retrievalResult = this.executeBotRagRetrieval(bot.id, validatedRequest, responsePolicy)
+    const retrievalMs = Math.max(0, Math.round(performance.now() - retrievalStartMs))
     const groundingMode = resolvePreparedGroundingMode(responsePolicy, retrievalResult)
 
     // 8.5. Retrieve Bot memory context
@@ -352,6 +360,7 @@ export class ConversationService {
     }
 
     // 9. Assemble prompt and budget context window
+    const contextStartMs = performance.now()
     const contextResult = this.budgetConversationContext(
       bot,
       history,
@@ -361,6 +370,8 @@ export class ConversationService {
       reservedOutputTokens,
       memoryContext
     )
+    const contextSelectionMs = Math.max(0, Math.round(performance.now() - contextStartMs))
+    const prepareMs = Math.max(0, Math.round(performance.now() - prepareStartMs))
 
     // 10. Construct immutable PreparedConversationTurn
     return Object.freeze({
@@ -386,7 +397,12 @@ export class ConversationService {
       includedMessageCount: contextResult.includedMessageCount,
       excludedMessageCount: contextResult.excludedMessageCount,
       historyTrimmingOccurred: contextResult.historyTrimmingOccurred,
-      memoryContext
+      memoryContext,
+      timings: Object.freeze({
+        prepareMs,
+        retrievalMs,
+        contextSelectionMs
+      })
     })
   }
 

@@ -31,6 +31,9 @@ function getProviderDisplayName(providerId: string, catalog: ProviderCatalogDto 
   if (providerId === 'openai') return 'OpenAI'
   if (providerId === 'anthropic') return 'Anthropic'
   if (providerId === 'google') return 'Google Gemini'
+  if (providerId === 'groq') return 'Groq'
+  if (providerId === 'openrouter') return 'OpenRouter'
+  if (providerId === 'perplexity') return 'Perplexity'
   return providerId
 }
 

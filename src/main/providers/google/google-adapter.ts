@@ -253,8 +253,8 @@ export class GoogleAdapter implements ProviderAdapter {
    * Generates a single text response using Google Gemini generateContent API.
    */
   async generateText(apiKey: string, options: GenerateTextOptions): Promise<GenerateTextResult> {
-    // 1. Model resolution and validation
-    const model = providerRegistry.getModel('google', options.modelId)
+    // 1. Model resolution and validation (supports connection-scoped discovered models)
+    const model = providerRegistry.getModel('google', options.modelId, options.connectionId)
     if (!model || model.providerId !== 'google') {
       throw new ProviderAdapterError({
         code: 'MODEL_NOT_FOUND',
@@ -325,7 +325,13 @@ export class GoogleAdapter implements ProviderAdapter {
         usage
       }
     } catch (err) {
-      throw new ProviderAdapterError(sanitizeGoogleError(err))
+      const effectiveError =
+        controller.signal.aborted &&
+        !options.abortSignal?.aborted &&
+        controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : err
+      throw new ProviderAdapterError(sanitizeGoogleError(effectiveError))
     } finally {
       clearTimeout(timeoutId)
     }
@@ -335,8 +341,8 @@ export class GoogleAdapter implements ProviderAdapter {
    * Generates a streaming text response using Google Gemini streamGenerateContent API.
    */
   async *streamText(apiKey: string, options: GenerateTextOptions): AsyncIterable<StreamTextChunk> {
-    // 1. Model resolution and validation
-    const model = providerRegistry.getModel('google', options.modelId)
+    // 1. Model resolution and validation (supports connection-scoped discovered models)
+    const model = providerRegistry.getModel('google', options.modelId, options.connectionId)
     if (!model || model.providerId !== 'google') {
       yield {
         type: 'error',
@@ -527,7 +533,7 @@ export class GoogleAdapter implements ProviderAdapter {
    */
   private assertSupportedCapabilities(options: GenerateTextOptions): void {
     if (options.tools && options.tools.length > 0) {
-      const model = providerRegistry.getModel('google', options.modelId)
+      const model = providerRegistry.getModel('google', options.modelId, options.connectionId)
       if (!model?.providerCapabilities?.tools) {
         throw new ProviderAdapterError({
           code: 'UNSUPPORTED_CAPABILITY',

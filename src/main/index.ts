@@ -396,6 +396,7 @@ app.whenReady().then(async () => {
     storageManager = new DocumentStorageManager({ userDataPath })
 
     vault = new CredentialVault({ vaultDir: join(userDataPath, 'credentials') })
+    providerRegistry.configurePersistence(join(userDataPath, 'discovered-models-cache.json'))
     providerManager = new ProviderManagerService({
       credentialVault: vault,
       connectionRepo,
@@ -684,7 +685,9 @@ app.whenReady().then(async () => {
     const stepExecutor = new AiSdkAgentModelStepExecutor({
       botRepository: botRepo,
       connectionRepository: connectionRepo,
-      credentialVault: vault
+      credentialVault: vault,
+      registry: providerRegistry,
+      adapterResolver: (providerId) => providerManager!.resolveAdapter(providerId)
     })
 
     const boundedAgentRuntime = new BoundedAgentRuntime({

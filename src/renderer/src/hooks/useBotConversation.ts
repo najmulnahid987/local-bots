@@ -26,6 +26,7 @@ export interface UseBotConversationState {
   readonly refresh: () => Promise<void>
   readonly clearConversation: () => Promise<ClearConversationResultDto | null>
   readonly appendMessage: (message: MessageDto) => void
+  readonly appendMessages: (messages: readonly MessageDto[]) => void
   readonly clearError: () => void
 }
 
@@ -39,7 +40,10 @@ function sanitizeConversationError(err: unknown): string {
   return rawMsg
     .replace(/[a-zA-Z]:\\[^;*?"<>|\r\n\s]+/g, '[REDACTED_PATH]')
     .replace(/(?:^|\s)(?:\/[a-zA-Z0-9_.-]+){2,}/g, ' [REDACTED_PATH]')
-    .replace(/(sk-proj-|sk-ant-|AIzaSy|sk-)[a-zA-Z0-9_\-+/=]{10,}/gi, '[REDACTED_KEY]')
+    .replace(
+      /(sk-or-v1-|sk-or-|sk-proj-|sk-ant-|AIzaSy|gsk_|pplx-|sk-)[a-zA-Z0-9_\-+/=]{10,}/gi,
+      '[REDACTED_KEY]'
+    )
     .replace(
       /cred_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
       '[REDACTED_REF]'
@@ -307,12 +311,35 @@ export function useBotConversation(options?: UseBotConversationOptions): UseBotC
     }
   }, [botId, conversation?.id, getEffectiveApi])
 
-  const appendMessage = useCallback((message: MessageDto): void => {
-    if (!mountedRef.current || message.conversationId !== activeConversationIdRef.current) {
+  const appendMessages = useCallback((incoming: readonly MessageDto[]): void => {
+    const activeConvId = activeConversationIdRef.current
+    if (!mountedRef.current || !activeConvId || incoming.length === 0) {
       return
     }
-    setMessages((prev) => orderMessagesRespectingSegments([...prev, message], segmentsRef.current))
+    const validIncoming = incoming.filter((m) => m.conversationId === activeConvId)
+    if (validIncoming.length === 0) {
+      return
+    }
+    setMessages((prev) => {
+      const seenIds = new Set(prev.map((m) => m.id))
+      const toAdd = validIncoming.filter((m) => {
+        if (seenIds.has(m.id)) return false
+        seenIds.add(m.id)
+        return true
+      })
+      if (toAdd.length === 0) {
+        return prev
+      }
+      return orderMessagesRespectingSegments([...prev, ...toAdd], segmentsRef.current)
+    })
   }, [])
+
+  const appendMessage = useCallback(
+    (message: MessageDto): void => {
+      appendMessages([message])
+    },
+    [appendMessages]
+  )
 
   const clearError = useCallback((): void => {
     setError(null)
@@ -329,6 +356,7 @@ export function useBotConversation(options?: UseBotConversationOptions): UseBotC
     refresh,
     clearConversation,
     appendMessage,
+    appendMessages,
     clearError
   }
 }

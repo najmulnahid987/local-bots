@@ -452,7 +452,7 @@ export class AgentTaskService {
     }
 
     const targetModelId = bot.modelId ?? connection.providerId
-    const modelMeta = providerRegistry.getModel(connection.providerId, targetModelId)
+    const modelMeta = providerRegistry.getModel(connection.providerId, targetModelId, connection.id)
     if (!modelMeta || modelMeta.providerCapabilities?.tools !== true) {
       throw new AgentTaskError(
         `Model '${targetModelId}' on provider '${connection.providerId}' does not support native tool calling.`,

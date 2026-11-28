@@ -12,6 +12,10 @@ const SECRET_PATTERNS: readonly SecretPattern[] = [
     regex: /(?:sk-proj-|sk-admin-|sk-none-)[a-zA-Z0-9_-]{20,}/
   },
   {
+    name: 'OpenRouter API Key',
+    regex: /\bsk-or-(?:v1-)?[a-zA-Z0-9_-]{20,}\b/
+  },
+  {
     name: 'OpenAI Legacy API Key',
     regex: /\bsk-[a-zA-Z0-9]{32,}\b/
   },
@@ -22,6 +26,14 @@ const SECRET_PATTERNS: readonly SecretPattern[] = [
   {
     name: 'Google Gemini API Key',
     regex: /\bAIzaSy[a-zA-Z0-9_-]{33}\b/
+  },
+  {
+    name: 'Groq API Key',
+    regex: /\bgsk_[a-zA-Z0-9_-]{20,}\b/
+  },
+  {
+    name: 'Perplexity API Key',
+    regex: /\bpplx-[a-zA-Z0-9_-]{20,}\b/
   },
   {
     name: 'Cryptographic Private Key',

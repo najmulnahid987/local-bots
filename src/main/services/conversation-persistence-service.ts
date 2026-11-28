@@ -2,12 +2,14 @@ import type Database from 'better-sqlite3'
 import {
   sendMessageRequestSchema,
   messageTokenUsageSchema,
+  webSourceDtoSchema,
   type SendMessageRequest,
   type MessageDto,
   type CitationDto,
   type MessageTokenUsageDto,
   type MessageMetadataDto,
-  type GenerationMetadataDto
+  type GenerationMetadataDto,
+  type WebSourceDto
 } from '../../shared/conversations'
 import type { PreparedConversationTurn } from './conversation-service'
 import type { ConversationExecutionResult } from './conversation-execution-service'
@@ -384,16 +386,66 @@ export class ConversationPersistenceService {
       }
     }
 
-    // 5. Construct generation and message metadata
+    // 4.8. Validate external web sources separately (never mixed into KB citations or claims)
+    const validatedWebSources: WebSourceDto[] = []
+    if (Array.isArray(executionResult.webSources)) {
+      const seenUrls = new Set<string>()
+      for (const candidate of executionResult.webSources) {
+        const parsedSource = webSourceDtoSchema.safeParse(candidate)
+        if (parsedSource.success && !seenUrls.has(parsedSource.data.url)) {
+          seenUrls.add(parsedSource.data.url)
+          validatedWebSources.push(parsedSource.data)
+        }
+      }
+    }
+
+    // 5. Construct generation and message metadata (with monotonic local telemetry)
+    let tokensPerSecond: number | undefined
+    if (
+      executionResult.firstTokenMs !== undefined &&
+      executionResult.usage &&
+      typeof executionResult.usage.completionTokens === 'number' &&
+      executionResult.usage.completionTokens > 0 &&
+      executionResult.durationMs > 0
+    ) {
+      const generationWindowMs =
+        executionResult.durationMs > executionResult.firstTokenMs
+          ? executionResult.durationMs - executionResult.firstTokenMs
+          : executionResult.durationMs
+      if (generationWindowMs > 0) {
+        tokensPerSecond =
+          Math.round((executionResult.usage.completionTokens / (generationWindowMs / 1000)) * 100) /
+          100
+      }
+    }
+
     const generation: GenerationMetadataDto = {
       finishReason: executionResult.finishReason,
-      durationMs: executionResult.durationMs >= 0 ? executionResult.durationMs : undefined
+      durationMs: executionResult.durationMs >= 0 ? executionResult.durationMs : undefined,
+      ...(executionResult.firstTokenMs !== undefined && executionResult.firstTokenMs >= 0
+        ? { firstTokenMs: executionResult.firstTokenMs }
+        : {}),
+      ...(preparedTurn.timings?.prepareMs !== undefined
+        ? { prepareMs: preparedTurn.timings.prepareMs }
+        : {}),
+      ...(preparedTurn.timings?.retrievalMs !== undefined
+        ? { retrievalMs: preparedTurn.timings.retrievalMs }
+        : {}),
+      ...(preparedTurn.timings?.contextSelectionMs !== undefined
+        ? { contextSelectionMs: preparedTurn.timings.contextSelectionMs }
+        : {}),
+      ...(executionResult.finalizationMs !== undefined && executionResult.finalizationMs >= 0
+        ? { finalizationMs: executionResult.finalizationMs }
+        : {}),
+      ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
+      ...(executionResult.providerCost ? { cost: executionResult.providerCost } : {})
     }
 
     const metadata: MessageMetadataDto = {
       providerId: preparedTurn.providerId,
       modelId: preparedTurn.modelId,
       citations: linkedCitations,
+      ...(validatedWebSources.length > 0 ? { webSources: validatedWebSources } : {}),
       generation,
       executionMode: 'chat',
       ...(effectiveGroundingMode ? { groundingMode: effectiveGroundingMode } : {}),

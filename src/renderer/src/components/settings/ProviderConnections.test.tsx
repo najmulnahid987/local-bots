@@ -836,4 +836,192 @@ describe('Renderer: Provider Management Settings UI (Phase 3 Step 3.8)', () => {
     expect(screen.getByText(/provider service unavailable/i)).toBeTruthy()
     expect(screen.getByText(/service bridge is not available in this window/i)).toBeTruthy()
   })
+
+  // 29. Groq provider connection rendering and add dialog selection without gsk_ key exposure
+  it('29. renders Groq connections, displays Groq privacy terms, and supports adding a Groq connection', async () => {
+    const groqCatalog: ProviderCatalogDto = {
+      providers: [
+        ...mockCatalog.providers,
+        {
+          id: 'groq',
+          displayName: 'Groq',
+          description: 'Groq LPU models',
+          docUrl: 'https://console.groq.com/docs/models',
+          isSupported: true,
+          defaultModelId: 'llama-3.3-70b-versatile'
+        }
+      ],
+      models: [
+        ...mockCatalog.models,
+        {
+          id: 'llama-3.3-70b-versatile',
+          providerId: 'groq',
+          displayName: 'Llama 3.3 70B Versatile (Groq)',
+          description: 'Groq fast 70B model',
+          availability: 'stable',
+          capabilities: {
+            streaming: true,
+            tools: true,
+            imageInput: false,
+            structuredOutput: false
+          },
+          docUrl: 'https://console.groq.com/docs/models'
+        }
+      ]
+    }
+
+    const groqConn: ProviderConnectionSummary = {
+      id: 'conn-groq-1',
+      providerId: 'groq',
+      label: 'Groq Primary',
+      status: 'active',
+      hasCredential: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      availableModels: ['llama-3.3-70b-versatile', 'groq/dynamic-chat-v1']
+    }
+
+    mockProviderApi.getCatalog.mockResolvedValueOnce(groqCatalog)
+    mockProviderApi.listConnections.mockResolvedValueOnce([groqConn])
+
+    const { container } = render(<ProviderConnectionsSection />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Groq Primary')).toBeTruthy()
+    })
+
+    expect(screen.getByText(/2 models/i)).toBeTruthy()
+    expect(screen.getByText(/Groq:/)).toBeTruthy()
+    expect(container.innerHTML).not.toContain('gsk_')
+
+    const onClose = vi.fn()
+    const onSuccess = vi.fn()
+    mockProviderApi.createConnection.mockResolvedValueOnce(groqConn)
+
+    render(
+      <AddProviderConnectionDialog
+        isOpen={true}
+        onClose={onClose}
+        onSuccess={onSuccess}
+        catalog={groqCatalog}
+      />
+    )
+
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'groq' } })
+    expect((screen.getByTestId('api-key-input') as HTMLInputElement).placeholder).toContain('gsk_')
+    fireEvent.change(screen.getByLabelText('Connection Label'), {
+      target: { value: 'My Groq Key' }
+    })
+    fireEvent.change(screen.getByTestId('api-key-input'), {
+      target: { value: 'gsk_ui_secret_test_key_1234567890abcdef' }
+    })
+
+    await act(async () => {
+      fireEvent.submit(screen.getByTestId('add-connection-dialog').querySelector('form')!)
+    })
+
+    expect(mockProviderApi.createConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'groq',
+        label: 'My Groq Key',
+        modelId: 'llama-3.3-70b-versatile'
+      })
+    )
+    expect((screen.getByTestId('api-key-input') as HTMLInputElement).value).toBe('')
+  })
+
+  // 30. OpenRouter provider connection rendering, sk-or-v1 hint, privacy intermediary notice, and zero key leaks
+  it('30. renders OpenRouter connections, discloses intermediary routing privacy policy, and handles sk-or-v1 setup', async () => {
+    const orCatalog: ProviderCatalogDto = {
+      providers: [
+        ...mockCatalog.providers,
+        {
+          id: 'openrouter',
+          displayName: 'OpenRouter',
+          description: 'OpenRouter unified routing API',
+          docUrl: 'https://openrouter.ai/models',
+          isSupported: true,
+          defaultModelId: 'openrouter/auto'
+        }
+      ],
+      models: [
+        ...mockCatalog.models,
+        {
+          id: 'openrouter/auto',
+          providerId: 'openrouter',
+          displayName: 'OpenRouter Auto Router',
+          description: 'Dynamic router',
+          availability: 'stable',
+          capabilities: {
+            streaming: true,
+            tools: false,
+            imageInput: false,
+            structuredOutput: false
+          },
+          docUrl: 'https://openrouter.ai/openrouter/auto'
+        }
+      ]
+    }
+
+    const orConn: ProviderConnectionSummary = {
+      id: 'conn-openrouter-1',
+      providerId: 'openrouter',
+      label: 'OpenRouter Workspace',
+      status: 'active',
+      hasCredential: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      availableModels: ['anthropic/claude-3.7-sonnet', 'meta-llama/llama-3.3-70b-instruct:free']
+    }
+
+    mockProviderApi.getCatalog.mockResolvedValueOnce(orCatalog)
+    mockProviderApi.listConnections.mockResolvedValueOnce([orConn])
+
+    const { container } = render(<ProviderConnectionsSection />)
+
+    await waitFor(() => {
+      expect(screen.getByText('OpenRouter Workspace')).toBeTruthy()
+    })
+
+    expect(screen.getByText(/intermediary router/i)).toBeTruthy()
+    expect(screen.getByText(/not an absolute zero-retention guarantee/i)).toBeTruthy()
+    expect(container.innerHTML).not.toContain('sk-or-v1-')
+
+    const onClose = vi.fn()
+    const onSuccess = vi.fn()
+    mockProviderApi.createConnection.mockResolvedValueOnce(orConn)
+
+    render(
+      <AddProviderConnectionDialog
+        isOpen={true}
+        onClose={onClose}
+        onSuccess={onSuccess}
+        catalog={orCatalog}
+      />
+    )
+
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'openrouter' } })
+    expect((screen.getByTestId('api-key-input') as HTMLInputElement).placeholder).toContain(
+      'sk-or-v1-'
+    )
+    fireEvent.change(screen.getByLabelText('Connection Label'), {
+      target: { value: 'My OpenRouter Key' }
+    })
+    fireEvent.change(screen.getByTestId('api-key-input'), {
+      target: { value: 'sk-or-v1-ui_test_key_1234567890abcdefghijklmnop' }
+    })
+
+    await act(async () => {
+      fireEvent.submit(screen.getByTestId('add-connection-dialog').querySelector('form')!)
+    })
+
+    expect(mockProviderApi.createConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'openrouter',
+        label: 'My OpenRouter Key',
+        modelId: 'openrouter/auto'
+      })
+    )
+    expect((screen.getByTestId('api-key-input') as HTMLInputElement).value).toBe('')
+  })
 })

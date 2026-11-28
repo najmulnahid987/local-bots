@@ -1,4 +1,4 @@
-import { ReactElement, useState } from 'react'
+import { ReactElement, useState, memo } from 'react'
 import {
   Bot,
   User,
@@ -8,15 +8,18 @@ import {
   ChevronDown,
   ChevronRight,
   Brain,
-  ShieldCheck
+  ShieldCheck,
+  Globe,
+  ExternalLink
 } from 'lucide-react'
-import type {
-  MessageDto,
-  CitationDto,
-  MessageToolCallDto,
-  MessageGroundingMode,
-  ClaimProvenance,
-  ClaimValidationStatus
+import {
+  isSafeHttpUrl,
+  type MessageDto,
+  type CitationDto,
+  type MessageToolCallDto,
+  type MessageGroundingMode,
+  type ClaimProvenance,
+  type ClaimValidationStatus
 } from '../../../../shared/conversations'
 import type { CanonicalBotTool } from '../../../../shared/agents'
 import { formatTimestamp } from '../../utils/formatters'
@@ -177,7 +180,7 @@ function extractWorkspaceEvidence(
   return evidence
 }
 
-export function ConversationMessage({
+export const ConversationMessage = memo(function ConversationMessage({
   message,
   botName = 'Assistant',
   onCitationClick,
@@ -189,6 +192,7 @@ export function ConversationMessage({
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
   const citations = message.metadata?.citations ?? []
+  const webSources = (message.metadata?.webSources ?? []).filter((ws) => isSafeHttpUrl(ws.url))
   const claims = message.metadata?.claims ?? []
   const toolCalls = message.metadata?.toolCalls ?? []
   const workspaceEvidence = extractWorkspaceEvidence(toolCalls)
@@ -534,6 +538,70 @@ export function ConversationMessage({
           </div>
         )}
 
+        {/* External Web Sources Section — Strictly separate from Knowledge Base Citations */}
+        {isAssistant && webSources.length > 0 && (
+          <div
+            className="chat-web-sources-section"
+            data-testid={`web-sources-${message.id}`}
+            style={{
+              marginTop: '10px',
+              paddingTop: '8px',
+              borderTop: '1px dashed #cbd5e1',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px'
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                fontSize: '11px',
+                fontWeight: 600,
+                color: '#0f766e'
+              }}
+            >
+              <Globe size={12} aria-hidden="true" />
+              <span>Web Sources (External Research — Not Local KB Evidence):</span>
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '6px'
+              }}
+            >
+              {webSources.map((src, idx) => (
+                <a
+                  key={src.id || `web-src-${idx}`}
+                  href={src.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="chat-web-source-chip"
+                  data-testid={`web-source-link-${message.id}-${idx}`}
+                  title={src.snippet ? `${src.title} — ${src.snippet}` : src.url}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    color: '#0f766e',
+                    backgroundColor: '#f0fdfa',
+                    border: '1px solid #99f6e4',
+                    textDecoration: 'none'
+                  }}
+                >
+                  <span>{src.title}</span>
+                  <ExternalLink size={10} aria-hidden="true" />
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Workspace Evidence Section — Distinct from Knowledge Base citations */}
         {isAssistant && workspaceEvidence.length > 0 && (
           <div
@@ -689,4 +757,4 @@ export function ConversationMessage({
       </div>
     </div>
   )
-}
+})

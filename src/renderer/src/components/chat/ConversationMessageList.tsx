@@ -1,5 +1,5 @@
-import { ReactElement, useEffect, useRef, useMemo } from 'react'
-import { Loader2, Bot, History } from 'lucide-react'
+import { ReactElement, useEffect, useRef, useMemo, useState, useCallback, memo } from 'react'
+import { Loader2, Bot, History, ArrowDown } from 'lucide-react'
 import {
   type MessageDto,
   type CitationDto,
@@ -25,6 +25,87 @@ export interface ConversationMessageListProps {
   readonly onSaveAsMemory?: (content: string) => void
 }
 
+const StreamingAssistantBubble = memo(function StreamingAssistantBubble({
+  botName,
+  streamingText
+}: {
+  readonly botName: string
+  readonly streamingText: string
+}): ReactElement {
+  return (
+    <div
+      className="chat-message-row chat-message-assistant"
+      data-testid="streaming-text-preview"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        marginBottom: '16px',
+        width: '100%'
+      }}
+    >
+      <div
+        className="chat-message-header"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          marginBottom: '4px',
+          fontSize: '11px',
+          fontWeight: 500,
+          color: 'var(--color-text-secondary, #64748b)'
+        }}
+      >
+        <Bot size={13} className="inline-icon text-accent" aria-hidden="true" />
+        <span style={{ fontWeight: 600, color: 'var(--color-text-primary, #0f172a)' }}>
+          {botName}
+        </span>
+        <span style={{ color: '#2563eb' }}>• Generating...</span>
+      </div>
+
+      <div
+        className="chat-bubble chat-bubble-assistant chat-bubble-streaming"
+        style={{
+          maxWidth: '85%',
+          padding: '12px 16px',
+          borderRadius: '14px 14px 14px 2px',
+          backgroundColor: '#ffffff',
+          color: 'var(--color-text-primary, #0f172a)',
+          border: '1px solid var(--color-border, #e2e8f0)',
+          boxShadow: '0 1px 3px rgba(15, 23, 42, 0.05)',
+          fontSize: '13.5px',
+          lineHeight: '1.55',
+          overflowWrap: 'break-word',
+          wordBreak: 'break-word',
+          position: 'relative'
+        }}
+      >
+        <div className="chat-bubble-content">
+          <MarkdownMessageContent
+            content={streamingText}
+            contentFormat="markdown"
+            citations={[]}
+            isGenerating={true}
+          />
+          <span
+            className="chat-cursor-blink"
+            style={{
+              display: 'inline-block',
+              width: '6px',
+              height: '14px',
+              backgroundColor: 'var(--color-accent, #2563eb)',
+              marginLeft: '4px',
+              verticalAlign: 'middle',
+              animation: 'pulse 1s infinite'
+            }}
+            aria-hidden="true"
+          />
+        </div>
+      </div>
+    </div>
+  )
+})
+
 export function ConversationMessageList({
   messages,
   segments = [],
@@ -42,6 +123,14 @@ export function ConversationMessageList({
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const isNearBottomRef = useRef<boolean>(true)
   const prevConvIdRef = useRef<string | null | undefined>(conversationId)
+  const scrollRafRef = useRef<number | null>(null)
+  const [userScrolledUp, setUserScrolledUp] = useState<boolean>(false)
+  const [prevConvStateId, setPrevConvStateId] = useState<string | null | undefined>(conversationId)
+
+  if (conversationId !== prevConvStateId) {
+    setPrevConvStateId(conversationId)
+    setUserScrolledUp(false)
+  }
 
   const timelineGroups = useMemo(
     () => groupMessagesBySegments(segments, messages),
@@ -49,33 +138,75 @@ export function ConversationMessageList({
   )
   const hasMultipleSegments = segments.length > 1
 
-  // Track user scroll position: if within 120px from bottom, consider near bottom
-  const handleScroll = (): void => {
+  const scrollToLatestImmediate = useCallback((): void => {
+    const el = containerRef.current
+    if (el) {
+      el.scrollTop = el.scrollHeight
+    }
+    if (typeof bottomRef.current?.scrollIntoView === 'function') {
+      bottomRef.current.scrollIntoView({ behavior: 'auto' })
+    }
+  }, [])
+
+  // Track user scroll position: if within 120px from bottom, auto-follow stays engaged
+  const handleScroll = useCallback((): void => {
     const el = containerRef.current
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    isNearBottomRef.current = distanceFromBottom < 120
-  }
+    const nearBottom = distanceFromBottom < 120
+    if (nearBottom !== isNearBottomRef.current) {
+      isNearBottomRef.current = nearBottom
+      setUserScrolledUp(!nearBottom)
+    }
+  }, [])
+
+  const handleJumpToLatest = useCallback((): void => {
+    isNearBottomRef.current = true
+    setUserScrolledUp(false)
+    if (typeof bottomRef.current?.scrollIntoView === 'function') {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' })
+    } else if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight
+    }
+  }, [])
 
   // Scroll to bottom when conversation changes
   useEffect(() => {
     if (conversationId !== prevConvIdRef.current) {
       prevConvIdRef.current = conversationId
       isNearBottomRef.current = true
-      if (typeof bottomRef.current?.scrollIntoView === 'function') {
-        bottomRef.current.scrollIntoView({ behavior: 'auto' })
-      }
+      scrollToLatestImmediate()
     }
-  }, [conversationId])
+  }, [conversationId, scrollToLatestImmediate])
 
-  // Scroll to bottom as streaming text grows, messages arrive, or active task updates
+  // Throttled auto-follow while near bottom; stops cleanly if user scrolled upward
   useEffect(() => {
-    if (isNearBottomRef.current) {
-      if (typeof bottomRef.current?.scrollIntoView === 'function') {
-        bottomRef.current.scrollIntoView({ behavior: 'smooth' })
+    if (!isNearBottomRef.current) {
+      return
+    }
+    if (scrollRafRef.current !== null) {
+      return
+    }
+    if (typeof requestAnimationFrame === 'function') {
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null
+        if (isNearBottomRef.current) {
+          scrollToLatestImmediate()
+        }
+      })
+    } else {
+      scrollToLatestImmediate()
+    }
+  }, [messages.length, segments.length, streamingText, activeTaskElement, scrollToLatestImmediate])
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(scrollRafRef.current)
+        scrollRafRef.current = null
       }
     }
-  }, [messages.length, segments.length, streamingText, activeTaskElement])
+  }, [])
 
   if (isLoading && messages.length === 0) {
     return (
@@ -218,76 +349,7 @@ export function ConversationMessageList({
 
       {/* Temporary Assistant Streaming Bubble (for normal chat generation) */}
       {streamingText ? (
-        <div
-          className="chat-message-row chat-message-assistant"
-          data-testid="streaming-text-preview"
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-start',
-            marginBottom: '16px',
-            width: '100%'
-          }}
-        >
-          <div
-            className="chat-message-header"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              marginBottom: '4px',
-              fontSize: '11px',
-              fontWeight: 500,
-              color: 'var(--color-text-secondary, #64748b)'
-            }}
-          >
-            <Bot size={13} className="inline-icon text-accent" aria-hidden="true" />
-            <span style={{ fontWeight: 600, color: 'var(--color-text-primary, #0f172a)' }}>
-              {botName}
-            </span>
-            <span style={{ color: '#2563eb' }}>• Generating...</span>
-          </div>
-
-          <div
-            className="chat-bubble chat-bubble-assistant chat-bubble-streaming"
-            style={{
-              maxWidth: '85%',
-              padding: '12px 16px',
-              borderRadius: '14px 14px 14px 2px',
-              backgroundColor: '#ffffff',
-              color: 'var(--color-text-primary, #0f172a)',
-              border: '1px solid var(--color-border, #e2e8f0)',
-              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.05)',
-              fontSize: '13.5px',
-              lineHeight: '1.55',
-              overflowWrap: 'break-word',
-              wordBreak: 'break-word',
-              position: 'relative'
-            }}
-          >
-            <div className="chat-bubble-content">
-              <MarkdownMessageContent
-                content={streamingText}
-                contentFormat="markdown"
-                citations={[]}
-                isGenerating={true}
-              />
-              <span
-                className="chat-cursor-blink"
-                style={{
-                  display: 'inline-block',
-                  width: '6px',
-                  height: '14px',
-                  backgroundColor: 'var(--color-accent, #2563eb)',
-                  marginLeft: '4px',
-                  verticalAlign: 'middle',
-                  animation: 'pulse 1s infinite'
-                }}
-                aria-hidden="true"
-              />
-            </div>
-          </div>
-        </div>
+        <StreamingAssistantBubble botName={botName} streamingText={streamingText} />
       ) : isGenerating ? (
         <div
           className="chat-message-row chat-message-assistant"
@@ -311,6 +373,47 @@ export function ConversationMessageList({
           <span>{botName} is thinking...</span>
         </div>
       ) : null}
+
+      {/* Accessible Jump-to-Latest control when user scrolls upward */}
+      {userScrolledUp && (
+        <div
+          style={{
+            position: 'sticky',
+            bottom: '12px',
+            display: 'flex',
+            justifyContent: 'center',
+            pointerEvents: 'none',
+            marginTop: '-32px',
+            zIndex: 5
+          }}
+        >
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            data-testid="scroll-to-bottom-btn"
+            aria-label="Scroll to latest message"
+            onClick={handleJumpToLatest}
+            style={{
+              pointerEvents: 'auto',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '5px 12px',
+              borderRadius: '999px',
+              backgroundColor: '#ffffff',
+              border: '1px solid #cbd5e1',
+              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.12)',
+              fontSize: '12px',
+              fontWeight: 500,
+              color: '#1e293b',
+              cursor: 'pointer'
+            }}
+          >
+            <ArrowDown size={13} aria-hidden="true" />
+            <span>{isGenerating ? 'Jump to latest' : 'Scroll to bottom'}</span>
+          </button>
+        </div>
+      )}
 
       {/* Auto-scroll target anchor */}
       <div ref={bottomRef} style={{ height: '1px', flexShrink: 0 }} aria-hidden="true" />

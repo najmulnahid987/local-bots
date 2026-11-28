@@ -1,6 +1,25 @@
-import { ReactElement, useState, useEffect, useMemo, FormEvent, ChangeEvent } from 'react'
+import { ReactElement, useState, useEffect, useMemo, useRef, FormEvent, ChangeEvent } from 'react'
 import { Loader2, AlertCircle, Wrench, BookOpen, Database } from 'lucide-react'
 import type { ToolPermission, BotResponsePolicy } from '../../../../shared/bots'
+
+function formatPerMillionPrice(rawPerToken?: string): string {
+  if (!rawPerToken || rawPerToken.trim().length === 0) return 'Unavailable'
+  const trimmed = rawPerToken.trim()
+  if (trimmed.startsWith('-')) return 'Variable'
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(trimmed)
+  if (!match) return 'Unavailable'
+  const intPart = match[1]
+  const fracPart = match[2] ?? ''
+  if (/^0+$/.test(intPart) && /^0*$/.test(fracPart)) return 'Free'
+  const shifted = fracPart.padEnd(6, '0')
+  const whole = `${intPart}${shifted.slice(0, 6)}`.replace(/^0+/, '') || '0'
+  const dec = shifted.slice(6, 10).padEnd(4, '0')
+  if (whole === '0') {
+    if (/^0+$/.test(dec)) return '<$0.0001/1M'
+    return `$0.${dec.replace(/0+$/, '').padEnd(2, '0')}/1M`
+  }
+  return `$${whole}.${dec.slice(0, 2)}/1M`
+}
 import {
   APPROVED_BOT_TOOLS,
   BOT_RESPONSE_POLICIES,
@@ -108,10 +127,32 @@ export function BotConfigurationForm({
 
     // 2. If connection summary already carried availableModels
     if (connection.availableModels && connection.availableModels.length > 0) {
-      const allowedSet = new Set(connection.availableModels)
-      const matched = allModels.filter((m) => allowedSet.has(m.id))
-      if (matched.length > 0) {
-        return matched
+      const providerModels = allModels.filter((m) => m.providerId === connection.providerId)
+      const byId = new Map(providerModels.map((m) => [m.id, m]))
+      const resolved: ModelDescriptorDto[] = []
+      for (const availableId of connection.availableModels) {
+        const known = byId.get(availableId)
+        if (known) {
+          resolved.push(known)
+        } else {
+          resolved.push({
+            id: availableId,
+            providerId: connection.providerId,
+            displayName: availableId,
+            description: `Active model discovered for ${connection.providerId}`,
+            availability: 'stable',
+            capabilities: {
+              streaming: true,
+              tools: false,
+              imageInput: false,
+              structuredOutput: false
+            },
+            docUrl: ''
+          })
+        }
+      }
+      if (resolved.length > 0) {
+        return resolved
       }
     }
 
@@ -127,7 +168,25 @@ export function BotConfigurationForm({
   }, [initialModelId, selectableModels])
 
   const [modelId, setModelId] = useState<string>(initialModel)
+  const [modelSearchQuery, setModelSearchQuery] = useState<string>('')
+  const fetchedConnectionsRef = useRef<Set<string>>(new Set())
   const [responsePolicy, setResponsePolicy] = useState<BotResponsePolicy>(initialResponsePolicy)
+
+  const filteredModels = useMemo(() => {
+    const q = modelSearchQuery.trim().toLowerCase()
+    if (!q) return selectableModels
+    return selectableModels.filter(
+      (m) =>
+        m.id === modelId ||
+        m.id.toLowerCase().includes(q) ||
+        m.displayName.toLowerCase().includes(q)
+    )
+  }, [selectableModels, modelSearchQuery, modelId])
+
+  const selectedModelMeta = useMemo(
+    () => selectableModels.find((m) => m.id === modelId),
+    [selectableModels, modelId]
+  )
   const [enabledTools, setEnabledTools] = useState<ToolPermission[]>(
     initialEnabledTools ?? [...DEFAULT_TOOLS]
   )
@@ -186,11 +245,11 @@ export function BotConfigurationForm({
       return
     }
 
-    if (discoveredModels[providerConnectionId]) {
+    if (fetchedConnectionsRef.current.has(providerConnectionId)) {
       return
     }
+    fetchedConnectionsRef.current.add(providerConnectionId)
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsDetectingModels(true)
     window.api.providers
       .getAvailableModels({ connectionId: providerConnectionId })
@@ -209,7 +268,7 @@ export function BotConfigurationForm({
         }
       })
       .catch(() => {
-        // Fallback to static catalog on error
+        fetchedConnectionsRef.current.delete(providerConnectionId)
       })
       .finally(() => {
         if (isCurrent) {
@@ -506,6 +565,19 @@ export function BotConfigurationForm({
           <label htmlFor="bot-model-select" className="form-label">
             Model Selection <span className="text-danger">*</span>
           </label>
+          {selectableModels.length > 6 && (
+            <input
+              type="search"
+              className="form-input"
+              style={{ marginBottom: '6px' }}
+              placeholder="Search models by name or author/slug..."
+              value={modelSearchQuery}
+              disabled={isSubmitting || isLoadingMetadata}
+              onChange={(e) => setModelSearchQuery(e.target.value)}
+              data-testid="bot-model-search-input"
+              aria-label="Filter models"
+            />
+          )}
           <select
             id="bot-model-select"
             data-testid="bot-model-select"
@@ -525,10 +597,10 @@ export function BotConfigurationForm({
             aria-invalid={Boolean(fieldErrors.modelId)}
             required
           >
-            {selectableModels.length === 0 ? (
+            {filteredModels.length === 0 ? (
               <option value="">No compatible models available</option>
             ) : (
-              selectableModels.map((m) => {
+              filteredModels.map((m) => {
                 const prov = catalog?.providers.find((p) => p.id === m.providerId)
                 return (
                   <option key={m.id} value={m.id}>
@@ -539,6 +611,25 @@ export function BotConfigurationForm({
               })
             )}
           </select>
+          {selectedModelMeta && (
+            <span className="form-helper" data-testid="selected-model-metadata">
+              {selectedModelMeta.contextWindow
+                ? `${Math.round(selectedModelMeta.contextWindow.inputTokens / 1000)}K ctx`
+                : 'Context unknown'}
+              {' · '}
+              {selectedModelMeta.providerCapabilities?.tools ? 'Tools supported' : 'Chat only'}
+              {selectedModelMeta.inputModalities && selectedModelMeta.inputModalities.length > 0
+                ? ` · Inputs: ${selectedModelMeta.inputModalities.join(', ')}`
+                : ''}
+              {selectedModelMeta.pricing
+                ? selectedModelMeta.pricing.isFree
+                  ? ' · Pricing: Free'
+                  : ` · Est. Pricing: ${formatPerMillionPrice(selectedModelMeta.pricing.promptPerTokenUsd)} in / ${formatPerMillionPrice(selectedModelMeta.pricing.completionPerTokenUsd)} out`
+                : selectedModelMeta.providerId === 'openrouter'
+                  ? ' · Pricing unavailable'
+                  : ''}
+            </span>
+          )}
           <span className="form-helper">
             {isDetectingModels
               ? 'Detecting active models for this API key...'

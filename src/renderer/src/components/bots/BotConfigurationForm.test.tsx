@@ -420,4 +420,192 @@ describe('Renderer: BotConfigurationForm (Phase 6 Step 6.5)', () => {
       })
     )
   })
+
+  it('13. supports Groq connections and displays dynamically discovered Groq models from connection summary', async () => {
+    const groqCatalog: ProviderCatalogDto = {
+      providers: [
+        ...mockCatalog.providers,
+        {
+          id: 'groq',
+          displayName: 'Groq',
+          description: 'Groq LPU models',
+          docUrl: 'https://console.groq.com/docs/models',
+          isSupported: true,
+          defaultModelId: 'llama-3.3-70b-versatile'
+        }
+      ],
+      models: [
+        ...mockCatalog.models,
+        {
+          id: 'llama-3.3-70b-versatile',
+          providerId: 'groq',
+          displayName: 'Llama 3.3 70B Versatile',
+          description: 'Groq model',
+          availability: 'stable',
+          capabilities: {
+            streaming: true,
+            tools: true,
+            imageInput: false,
+            structuredOutput: false
+          },
+          docUrl: ''
+        }
+      ]
+    }
+
+    const groqConnection: ProviderConnectionSummary = {
+      id: 'conn-groq-dynamic',
+      providerId: 'groq',
+      label: 'Groq Workspace Key',
+      status: 'active',
+      hasCredential: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      availableModels: ['llama-3.3-70b-versatile', 'groq/custom-discovered-90b']
+    }
+
+    const handleSubmit = vi.fn()
+    render(
+      <BotConfigurationForm
+        initialValues={{
+          name: 'Groq Dynamic UI Bot',
+          providerConnectionId: 'conn-groq-dynamic',
+          modelId: 'groq/custom-discovered-90b'
+        }}
+        onSubmit={handleSubmit}
+        onCancel={vi.fn()}
+        catalog={groqCatalog}
+        connections={[groqConnection]}
+      />
+    )
+
+    const modelSelect = screen.getByTestId('bot-model-select') as HTMLSelectElement
+    const optionValues = Array.from(modelSelect.options).map((o) => o.value)
+    expect(optionValues).toContain('llama-3.3-70b-versatile')
+    expect(optionValues).toContain('groq/custom-discovered-90b')
+    expect(modelSelect.value).toBe('groq/custom-discovered-90b')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('bot-form-submit-btn'))
+    })
+
+    expect(handleSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Groq Dynamic UI Bot',
+        providerConnectionId: 'conn-groq-dynamic',
+        modelId: 'groq/custom-discovered-90b'
+      })
+    )
+  })
+
+  it('14. renders searchable model filter and OpenRouter pricing/context/tools metadata for large discovered catalogs', async () => {
+    const openrouterConn: ProviderConnectionSummary = {
+      id: 'conn-openrouter-ui',
+      providerId: 'openrouter',
+      label: 'OpenRouter Key',
+      status: 'active',
+      hasCredential: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }
+
+    const discoveredCatalog = Array.from({ length: 8 }, (_, idx) => ({
+      id: idx === 7 ? 'anthropic/claude-3.7-sonnet:thinking' : `vendor-${idx}/model-${idx}:free`,
+      providerId: 'openrouter' as const,
+      displayName: idx === 7 ? 'Claude 3.7 Sonnet Thinking' : `Vendor Model ${idx}`,
+      description: 'OpenRouter model',
+      availability: 'stable',
+      contextWindow: { inputTokens: idx === 7 ? 200000 : 32000, outputTokens: 8192 },
+      inputModalities: idx === 7 ? ['text', 'image'] : ['text'],
+      pricing:
+        idx === 7
+          ? { promptPerTokenUsd: '0.000003', completionPerTokenUsd: '0.000015', isFree: false }
+          : { promptPerTokenUsd: '0', completionPerTokenUsd: '0', isFree: true },
+      providerCapabilities: {
+        streaming: true,
+        tools: idx === 7,
+        imageInput: idx === 7,
+        structuredOutput: idx === 7
+      },
+      capabilities: { streaming: true, tools: false, imageInput: false, structuredOutput: false },
+      docUrl: ''
+    }))
+
+    const orCatalog: ProviderCatalogDto = {
+      providers: [
+        ...mockCatalog.providers,
+        {
+          id: 'openrouter',
+          displayName: 'OpenRouter',
+          description: 'OpenRouter routing',
+          docUrl: 'https://openrouter.ai/models',
+          isSupported: true,
+          defaultModelId: 'openrouter/auto'
+        }
+      ],
+      models: [
+        ...mockCatalog.models,
+        {
+          id: 'openrouter/auto',
+          providerId: 'openrouter',
+          displayName: 'OpenRouter Auto Router',
+          description: 'Router',
+          availability: 'stable',
+          capabilities: {
+            streaming: true,
+            tools: false,
+            imageInput: false,
+            structuredOutput: false
+          },
+          docUrl: ''
+        }
+      ]
+    }
+
+    ;(window as unknown as { api: unknown }).api = {
+      providers: {
+        getAvailableModels: vi.fn().mockResolvedValue(discoveredCatalog)
+      }
+    }
+
+    const handleSubmit = vi.fn()
+    await act(async () => {
+      render(
+        <BotConfigurationForm
+          initialValues={{
+            name: 'OpenRouter Search Bot',
+            providerConnectionId: 'conn-openrouter-ui',
+            modelId: 'anthropic/claude-3.7-sonnet:thinking'
+          }}
+          onSubmit={handleSubmit}
+          onCancel={vi.fn()}
+          catalog={orCatalog}
+          connections={[openrouterConn]}
+        />
+      )
+    })
+
+    const searchInput = screen.getByTestId('bot-model-search-input') as HTMLInputElement
+    expect(searchInput).toBeTruthy()
+    expect(screen.getByTestId('selected-model-metadata').textContent).toContain('200K ctx')
+    expect(screen.getByTestId('selected-model-metadata').textContent).toContain('Tools supported')
+    expect(screen.getByTestId('selected-model-metadata').textContent).toContain('$3.00/1M in')
+
+    fireEvent.change(searchInput, { target: { value: 'vendor-2' } })
+    const modelSelect = screen.getByTestId('bot-model-select') as HTMLSelectElement
+    const visibleValues = Array.from(modelSelect.options).map((o) => o.value)
+    expect(visibleValues).toContain('vendor-2/model-2:free')
+    // Selected model remains safely preserved while filtering
+    expect(visibleValues).toContain('anthropic/claude-3.7-sonnet:thinking')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('bot-form-submit-btn'))
+    })
+    expect(handleSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerConnectionId: 'conn-openrouter-ui',
+        modelId: 'anthropic/claude-3.7-sonnet:thinking'
+      })
+    )
+  })
 })

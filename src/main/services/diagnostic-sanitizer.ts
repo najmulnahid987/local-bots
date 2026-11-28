@@ -14,6 +14,12 @@ const REDACTION_PATTERNS: readonly RedactionPattern[] = [
     regex: /(?:sk-proj-|sk-admin-|sk-none-)[a-zA-Z0-9_-]{20,}/g,
     replacement: '[REDACTED_API_KEY]'
   },
+  // OpenRouter API Key
+  {
+    name: 'OpenRouter Key',
+    regex: /\bsk-or-(?:v1-)?[a-zA-Z0-9_-]{20,}\b/g,
+    replacement: '[REDACTED_API_KEY]'
+  },
   // OpenAI Legacy Key
   {
     name: 'OpenAI Legacy Key',
@@ -30,6 +36,18 @@ const REDACTION_PATTERNS: readonly RedactionPattern[] = [
   {
     name: 'Google Gemini Key',
     regex: /\bAIzaSy[a-zA-Z0-9_-]{33}\b/g,
+    replacement: '[REDACTED_API_KEY]'
+  },
+  // Groq API Key
+  {
+    name: 'Groq Key',
+    regex: /\bgsk_[a-zA-Z0-9_-]{20,}\b/g,
+    replacement: '[REDACTED_API_KEY]'
+  },
+  // Perplexity API Key
+  {
+    name: 'Perplexity Key',
+    regex: /\bpplx-[a-zA-Z0-9_-]{20,}\b/g,
     replacement: '[REDACTED_API_KEY]'
   },
   // AWS Access Key

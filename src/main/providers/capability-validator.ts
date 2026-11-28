@@ -156,8 +156,8 @@ export function validateBotModelCompatibility(
       }
     }
 
-    // Check if the model is registered under this connection's provider
-    const model = registry.getModel(providerId, trimmedModelId)
+    // Check if the model is registered under this connection's provider (static catalog or discovered for this connection)
+    const model = registry.getModel(providerId, trimmedModelId, providerConnectionId)
     if (model) {
       return {
         valid: true,

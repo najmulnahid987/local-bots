@@ -139,6 +139,8 @@ export function TestProviderConnectionDialog({
             <span className="form-helper">
               Provider testing will issue a live request using model{' '}
               <code>{selectedModelId || 'default'}</code>.
+              {connection.providerId === 'perplexity' &&
+                ' Perplexity verification executes a minimal Agent API call with web tools disabled and may incur a small provider usage charge.'}
             </span>
           </div>
 

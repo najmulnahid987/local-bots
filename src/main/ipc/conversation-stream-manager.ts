@@ -25,6 +25,8 @@ import {
 import type { ConversationRepository } from '../database/repositories/conversation-repository'
 
 export const MAX_CONCURRENT_CONVERSATION_STREAMS_PER_WINDOW = 5
+export const DEFAULT_DELTA_BATCH_INTERVAL_MS = 16
+export const MAX_DELTA_BATCH_BUFFER_CHARS = 512
 
 export interface ConversationStreamSession {
   readonly requestId: string
@@ -39,6 +41,9 @@ export interface ConversationStreamSession {
   sequenceNumber: number
   isCleanedUp: boolean
   hasEmittedTerminal: boolean
+  pendingDelta: string
+  batchTimer?: ReturnType<typeof setTimeout>
+  hasEmittedFirstDelta: boolean
 }
 
 /**
@@ -77,6 +82,7 @@ export interface ConversationStreamManagerOptions {
   maxStreams?: number
   channelFactory?: MessageChannelFactory
   conversationRepo: ConversationRepository
+  deltaBatchIntervalMs?: number
 }
 
 /**
@@ -87,6 +93,7 @@ export class ConversationStreamManager {
   private readonly maxStreams: number
   private readonly channelFactory: MessageChannelFactory
   private readonly conversationRepo: ConversationRepository
+  private readonly deltaBatchIntervalMs: number
   private readonly activeStreams = new Map<string, ConversationStreamSession>()
   private readonly windowListeners = new WeakSet<BrowserWindowLike>()
 
@@ -96,6 +103,10 @@ export class ConversationStreamManager {
     }
     this.maxStreams = options.maxStreams ?? MAX_CONCURRENT_CONVERSATION_STREAMS_PER_WINDOW
     this.conversationRepo = options.conversationRepo
+    this.deltaBatchIntervalMs = Math.max(
+      0,
+      options.deltaBatchIntervalMs ?? DEFAULT_DELTA_BATCH_INTERVAL_MS
+    )
     this.channelFactory =
       options.channelFactory ??
       (() => {
@@ -176,7 +187,9 @@ export class ConversationStreamManager {
       stage: 'preparing',
       sequenceNumber: 1,
       isCleanedUp: false,
-      hasEmittedTerminal: false
+      hasEmittedTerminal: false,
+      pendingDelta: '',
+      hasEmittedFirstDelta: false
     }
 
     this.activeStreams.set(requestId, session)
@@ -273,7 +286,9 @@ export class ConversationStreamManager {
       stage: 'preparing',
       sequenceNumber: 1,
       isCleanedUp: false,
-      hasEmittedTerminal: false
+      hasEmittedTerminal: false,
+      pendingDelta: '',
+      hasEmittedFirstDelta: false
     }
 
     this.activeStreams.set(requestId, session)
@@ -389,6 +404,37 @@ export class ConversationStreamManager {
     }
   }
 
+  private flushPendingDelta(session: ConversationStreamSession): void {
+    if (session.batchTimer) {
+      clearTimeout(session.batchTimer)
+      session.batchTimer = undefined
+    }
+    if (
+      session.isCleanedUp ||
+      session.hasEmittedTerminal ||
+      session.abortController.signal.aborted ||
+      session.pendingDelta.length === 0
+    ) {
+      session.pendingDelta = ''
+      return
+    }
+
+    const batched = session.pendingDelta
+    session.pendingDelta = ''
+    const deltaEvent: PublicTextDeltaEvent = {
+      type: 'text_delta',
+      textDelta: batched,
+      requestId: session.requestId,
+      conversationId: session.conversationId,
+      botId: session.botId,
+      executionMode: 'chat',
+      sequenceNumber: session.sequenceNumber++,
+      timestamp: Date.now(),
+      stage: 'streaming'
+    }
+    session.port.postMessage(deltaEvent)
+  }
+
   /**
    * Consumes ConversationTurnStream and emits typed public events across MessagePortMain.
    */
@@ -422,19 +468,28 @@ export class ConversationStreamManager {
             port.postMessage(stageEvent)
           }
 
-          const deltaEvent: PublicTextDeltaEvent = {
-            type: 'text_delta',
-            textDelta: event.textDelta,
-            requestId,
-            conversationId,
-            botId: session.botId,
-            executionMode: 'chat',
-            sequenceNumber: session.sequenceNumber++,
-            timestamp: Date.now(),
-            stage: 'streaming'
+          if (event.textDelta.length === 0) {
+            continue
           }
-          port.postMessage(deltaEvent)
+
+          // Emit first token immediately for zero artificial TTFT delay; coalesce subsequent micro-deltas
+          if (!session.hasEmittedFirstDelta || this.deltaBatchIntervalMs === 0) {
+            session.hasEmittedFirstDelta = true
+            session.pendingDelta += event.textDelta
+            this.flushPendingDelta(session)
+            continue
+          }
+
+          session.pendingDelta += event.textDelta
+          if (session.pendingDelta.length >= MAX_DELTA_BATCH_BUFFER_CHARS) {
+            this.flushPendingDelta(session)
+          } else if (!session.batchTimer) {
+            session.batchTimer = setTimeout(() => {
+              this.flushPendingDelta(session)
+            }, this.deltaBatchIntervalMs)
+          }
         } else if (event.type === 'finish') {
+          this.flushPendingDelta(session)
           session.stage = 'finalizing'
           const finalizingEvent: PublicStageChangeEvent = {
             type: 'stage_change',
@@ -484,6 +539,15 @@ export class ConversationStreamManager {
         } else if (event.type === 'error') {
           const isCancelled =
             abortController.signal.aborted || event.error.code === 'OPERATION_ABORTED'
+          if (isCancelled) {
+            if (session.batchTimer) {
+              clearTimeout(session.batchTimer)
+              session.batchTimer = undefined
+            }
+            session.pendingDelta = ''
+          } else {
+            this.flushPendingDelta(session)
+          }
           session.stage = isCancelled ? 'cancelled' : 'failed'
           session.hasEmittedTerminal = true
 
@@ -556,6 +620,11 @@ export class ConversationStreamManager {
     }
 
     session.isCleanedUp = true
+    if (session.batchTimer) {
+      clearTimeout(session.batchTimer)
+      session.batchTimer = undefined
+    }
+    session.pendingDelta = ''
     this.activeStreams.delete(requestId)
 
     try {

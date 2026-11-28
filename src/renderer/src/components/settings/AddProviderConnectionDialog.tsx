@@ -202,6 +202,8 @@ export function AddProviderConnectionDialog({
               )}
               <span className="form-helper">
                 This model will be used to verify your credentials upon connection.
+                {selectedProviderId === 'perplexity' &&
+                  ' Perplexity verification executes a minimal Agent API request (with native tools disabled) and may incur a small usage charge.'}
               </span>
             </div>
 
@@ -232,7 +234,15 @@ export function AddProviderConnectionDialog({
                 id="api-key-input"
                 type="password"
                 className="form-input"
-                placeholder="Enter secret API key"
+                placeholder={
+                  selectedProviderId === 'groq'
+                    ? 'Enter Groq API key (gsk_...)'
+                    : selectedProviderId === 'openrouter'
+                      ? 'Enter OpenRouter API key (sk-or-v1-...)'
+                      : selectedProviderId === 'perplexity'
+                        ? 'Enter Perplexity API key (pplx-...)'
+                        : 'Enter secret API key'
+                }
                 value={apiKey}
                 disabled={isSubmitting}
                 onChange={(e) => setApiKey(e.target.value)}

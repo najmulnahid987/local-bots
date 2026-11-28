@@ -29,6 +29,7 @@ export interface UseConversationTurnState {
   readonly isCancelling: boolean
   readonly stage: StreamLifecycleStage
   readonly streamingText: string
+  readonly firstVisibleTextMs: number | null
   readonly activeRequestId: string | null
   readonly finishResult: ConversationTurnResultDto | null
   readonly error: TurnError | null
@@ -76,7 +77,10 @@ function sanitizeConversationError(err: unknown): TurnError {
   const sanitizedMsg = rawMsg
     .replace(/[a-zA-Z]:\\[^;*?"<>|\r\n\s]+/g, '[REDACTED_PATH]')
     .replace(/(?:^|\s)(?:\/[a-zA-Z0-9_.-]+){2,}/g, ' [REDACTED_PATH]')
-    .replace(/(sk-proj-|sk-ant-|AIzaSy|sk-)[a-zA-Z0-9_\-+/=]{10,}/gi, '[REDACTED_KEY]')
+    .replace(
+      /(sk-or-v1-|sk-or-|sk-proj-|sk-ant-|AIzaSy|gsk_|pplx-|sk-)[a-zA-Z0-9_\-+/=]{10,}/gi,
+      '[REDACTED_KEY]'
+    )
     .replace(
       /cred_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
       '[REDACTED_REF]'
@@ -121,6 +125,7 @@ export function useConversationTurn(
   const [isCancelling, setIsCancelling] = useState<boolean>(false)
   const [stage, setStage] = useState<StreamLifecycleStage>('idle')
   const [streamingText, setStreamingText] = useState<string>('')
+  const [firstVisibleTextMs, setFirstVisibleTextMs] = useState<number | null>(null)
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null)
   const [finishResult, setFinishResult] = useState<ConversationTurnResultDto | null>(null)
   const [error, setError] = useState<TurnError | null>(null)
@@ -128,6 +133,11 @@ export function useConversationTurn(
   const mountedRef = useRef<boolean>(true)
   const activeRequestIdRef = useRef<string | null>(null)
   const isGeneratingRef = useRef<boolean>(false)
+  const pendingDeltaRef = useRef<string>('')
+  const flushRafRef = useRef<number | null>(null)
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const turnStartPerfMsRef = useRef<number>(0)
+  const hasCommittedFirstVisibleRef = useRef<boolean>(false)
 
   const onFinishRef = useRef(onFinishOption)
   const onErrorRef = useRef(onErrorOption)
@@ -139,6 +149,65 @@ export function useConversationTurn(
   useEffect(() => {
     onErrorRef.current = onErrorOption
   }, [onErrorOption])
+
+  const cancelScheduledFlush = useCallback((): void => {
+    if (flushRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(flushRafRef.current)
+      flushRafRef.current = null
+    }
+    if (flushTimerRef.current !== null) {
+      clearTimeout(flushTimerRef.current)
+      flushTimerRef.current = null
+    }
+  }, [])
+
+  const flushBufferedDelta = useCallback(
+    (expectedRequestId: string): void => {
+      cancelScheduledFlush()
+      if (!mountedRef.current || activeRequestIdRef.current !== expectedRequestId) {
+        pendingDeltaRef.current = ''
+        return
+      }
+      const chunk = pendingDeltaRef.current
+      if (!chunk) {
+        return
+      }
+      pendingDeltaRef.current = ''
+      if (!hasCommittedFirstVisibleRef.current) {
+        hasCommittedFirstVisibleRef.current = true
+        setFirstVisibleTextMs(
+          Math.max(0, Math.round(performance.now() - turnStartPerfMsRef.current))
+        )
+      }
+      setStreamingText((prev) => prev + chunk)
+    },
+    [cancelScheduledFlush]
+  )
+
+  const scheduleDeltaFlush = useCallback(
+    (expectedRequestId: string): void => {
+      if (!hasCommittedFirstVisibleRef.current) {
+        // Commit first non-empty text token immediately for zero UI TTFT overhead
+        flushBufferedDelta(expectedRequestId)
+        return
+      }
+      if (flushRafRef.current !== null || flushTimerRef.current !== null) {
+        return
+      }
+      if (typeof requestAnimationFrame === 'function') {
+        flushRafRef.current = requestAnimationFrame(() => {
+          flushRafRef.current = null
+          flushBufferedDelta(expectedRequestId)
+        })
+      } else {
+        flushTimerRef.current = setTimeout(() => {
+          flushTimerRef.current = null
+          flushBufferedDelta(expectedRequestId)
+        }, 16)
+      }
+    },
+    [flushBufferedDelta]
+  )
 
   const getEffectiveApi = useCallback((): ConversationApi => {
     if (apiOption) {
@@ -162,23 +231,29 @@ export function useConversationTurn(
     if (conversationId !== prevConvIdRef.current) {
       prevConvIdRef.current = conversationId
       // If active generation belongs to another conversation, clear local active state
+      cancelScheduledFlush()
+      pendingDeltaRef.current = ''
+      hasCommittedFirstVisibleRef.current = false
       activeRequestIdRef.current = null
       isGeneratingRef.current = false
       setIsGenerating(false)
       setIsCancelling(false)
       setStage('idle')
       setStreamingText('')
+      setFirstVisibleTextMs(null)
       setActiveRequestId(null)
       setError(null)
       setFinishResult(null)
     }
-  }, [conversationId])
+  }, [conversationId, cancelScheduledFlush])
 
   // Component unmount cleanup
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      cancelScheduledFlush()
+      pendingDeltaRef.current = ''
       const currentReqId = activeRequestIdRef.current
       if (currentReqId && isGeneratingRef.current) {
         try {
@@ -189,14 +264,18 @@ export function useConversationTurn(
         }
       }
     }
-  }, [getEffectiveApi])
+  }, [getEffectiveApi, cancelScheduledFlush])
 
   const clearError = useCallback((): void => {
     setError(null)
   }, [])
 
   const resetTurn = useCallback((): void => {
+    cancelScheduledFlush()
+    pendingDeltaRef.current = ''
+    hasCommittedFirstVisibleRef.current = false
     setStreamingText('')
+    setFirstVisibleTextMs(null)
     setFinishResult(null)
     setError(null)
     setActiveRequestId(null)
@@ -205,7 +284,47 @@ export function useConversationTurn(
     setIsGenerating(false)
     setIsCancelling(false)
     setStage('idle')
-  }, [])
+  }, [cancelScheduledFlush])
+
+  const createStreamEventHandler = useCallback(
+    (requestId: string) =>
+      (event: PublicConversationTurnEvent): void => {
+        // Discard stale events from old requests or after unmount
+        if (!mountedRef.current || activeRequestIdRef.current !== requestId) {
+          return
+        }
+
+        if (event.type === 'stage_change') {
+          setStage(event.stage)
+        } else if (event.type === 'text_delta') {
+          setStage('streaming')
+          if (event.textDelta.length > 0) {
+            pendingDeltaRef.current += event.textDelta
+            scheduleDeltaFlush(requestId)
+          }
+        } else if (event.type === 'finish') {
+          cancelScheduledFlush()
+          pendingDeltaRef.current = ''
+          setStage('completed')
+        } else if (event.type === 'error') {
+          cancelScheduledFlush()
+          pendingDeltaRef.current = ''
+          const isCancelled = event.error.code === 'OPERATION_ABORTED'
+          setStage(isCancelled ? 'cancelled' : 'failed')
+          const turnError: TurnError = {
+            code: event.error.code,
+            message: event.error.message,
+            retryable: event.error.retryable,
+            partialMessage: event.partialMessage
+          }
+          setError(turnError)
+          setIsGenerating(false)
+          isGeneratingRef.current = false
+          onErrorRef.current?.(turnError)
+        }
+      },
+    [cancelScheduledFlush, scheduleDeltaFlush]
+  )
 
   const sendMessage = useCallback(
     async (
@@ -247,43 +366,21 @@ export function useConversationTurn(
       const requestId = generateUuid()
       activeRequestIdRef.current = requestId
       isGeneratingRef.current = true
+      cancelScheduledFlush()
+      pendingDeltaRef.current = ''
+      hasCommittedFirstVisibleRef.current = false
+      turnStartPerfMsRef.current = performance.now()
 
       setIsGenerating(true)
       setIsCancelling(false)
       setStage('preparing')
       setStreamingText('')
+      setFirstVisibleTextMs(null)
       setActiveRequestId(requestId)
       setError(null)
       setFinishResult(null)
 
-      const handleEvent = (event: PublicConversationTurnEvent): void => {
-        // Discard stale events from old requests or after unmount
-        if (!mountedRef.current || activeRequestIdRef.current !== requestId) {
-          return
-        }
-
-        if (event.type === 'stage_change') {
-          setStage(event.stage)
-        } else if (event.type === 'text_delta') {
-          setStage('streaming')
-          setStreamingText((prev) => prev + event.textDelta)
-        } else if (event.type === 'finish') {
-          setStage('completed')
-        } else if (event.type === 'error') {
-          const isCancelled = event.error.code === 'OPERATION_ABORTED'
-          setStage(isCancelled ? 'cancelled' : 'failed')
-          const turnError: TurnError = {
-            code: event.error.code,
-            message: event.error.message,
-            retryable: event.error.retryable,
-            partialMessage: event.partialMessage
-          }
-          setError(turnError)
-          setIsGenerating(false)
-          isGeneratingRef.current = false
-          onErrorRef.current?.(turnError)
-        }
-      }
+      const handleEvent = createStreamEventHandler(requestId)
 
       try {
         const api = getEffectiveApi()
@@ -297,6 +394,8 @@ export function useConversationTurn(
         const result = await api.sendMessage(request, handleEvent)
 
         if (mountedRef.current && activeRequestIdRef.current === requestId) {
+          cancelScheduledFlush()
+          pendingDeltaRef.current = ''
           setFinishResult(result)
           setStage('completed')
           setIsGenerating(false)
@@ -309,6 +408,8 @@ export function useConversationTurn(
 
         return result
       } catch (err) {
+        cancelScheduledFlush()
+        pendingDeltaRef.current = ''
         const turnError = sanitizeConversationError(err)
         if (mountedRef.current && activeRequestIdRef.current === requestId) {
           setStage(turnError.code === 'OPERATION_ABORTED' ? 'cancelled' : 'failed')
@@ -325,7 +426,7 @@ export function useConversationTurn(
         throw err
       }
     },
-    [conversationId, getEffectiveApi]
+    [conversationId, getEffectiveApi, cancelScheduledFlush, createStreamEventHandler]
   )
 
   const retryLastUserMessage = useCallback(
@@ -356,42 +457,21 @@ export function useConversationTurn(
       const requestId = generateUuid()
       activeRequestIdRef.current = requestId
       isGeneratingRef.current = true
+      cancelScheduledFlush()
+      pendingDeltaRef.current = ''
+      hasCommittedFirstVisibleRef.current = false
+      turnStartPerfMsRef.current = performance.now()
 
       setIsGenerating(true)
       setIsCancelling(false)
       setStage('preparing')
       setStreamingText('')
+      setFirstVisibleTextMs(null)
       setActiveRequestId(requestId)
       setError(null)
       setFinishResult(null)
 
-      const handleEvent = (event: PublicConversationTurnEvent): void => {
-        if (!mountedRef.current || activeRequestIdRef.current !== requestId) {
-          return
-        }
-
-        if (event.type === 'stage_change') {
-          setStage(event.stage)
-        } else if (event.type === 'text_delta') {
-          setStage('streaming')
-          setStreamingText((prev) => prev + event.textDelta)
-        } else if (event.type === 'finish') {
-          setStage('completed')
-        } else if (event.type === 'error') {
-          const isCancelled = event.error.code === 'OPERATION_ABORTED'
-          setStage(isCancelled ? 'cancelled' : 'failed')
-          const turnError: TurnError = {
-            code: event.error.code,
-            message: event.error.message,
-            retryable: event.error.retryable,
-            partialMessage: event.partialMessage
-          }
-          setError(turnError)
-          setIsGenerating(false)
-          isGeneratingRef.current = false
-          onErrorRef.current?.(turnError)
-        }
-      }
+      const handleEvent = createStreamEventHandler(requestId)
 
       try {
         const api = getEffectiveApi()
@@ -404,6 +484,8 @@ export function useConversationTurn(
         const result = await api.retryLastUserMessage(request, handleEvent)
 
         if (mountedRef.current && activeRequestIdRef.current === requestId) {
+          cancelScheduledFlush()
+          pendingDeltaRef.current = ''
           setFinishResult(result)
           setStage('completed')
           setIsGenerating(false)
@@ -416,6 +498,8 @@ export function useConversationTurn(
 
         return result
       } catch (err) {
+        cancelScheduledFlush()
+        pendingDeltaRef.current = ''
         const turnError = sanitizeConversationError(err)
         if (mountedRef.current && activeRequestIdRef.current === requestId) {
           setStage(turnError.code === 'OPERATION_ABORTED' ? 'cancelled' : 'failed')
@@ -432,7 +516,7 @@ export function useConversationTurn(
         throw err
       }
     },
-    [conversationId, getEffectiveApi]
+    [conversationId, getEffectiveApi, cancelScheduledFlush, createStreamEventHandler]
   )
 
   const cancelGeneration = useCallback(async (): Promise<void> => {
@@ -441,6 +525,8 @@ export function useConversationTurn(
       return
     }
 
+    cancelScheduledFlush()
+    pendingDeltaRef.current = ''
     setIsCancelling(true)
 
     try {
@@ -448,6 +534,8 @@ export function useConversationTurn(
       await api.cancelGeneration(currentReqId)
     } finally {
       if (mountedRef.current) {
+        cancelScheduledFlush()
+        pendingDeltaRef.current = ''
         setStage('cancelled')
         setIsGenerating(false)
         setIsCancelling(false)
@@ -457,13 +545,14 @@ export function useConversationTurn(
         setStreamingText('')
       }
     }
-  }, [getEffectiveApi])
+  }, [getEffectiveApi, cancelScheduledFlush])
 
   return {
     isGenerating,
     isCancelling,
     stage,
     streamingText,
+    firstVisibleTextMs,
     activeRequestId,
     finishResult,
     error,

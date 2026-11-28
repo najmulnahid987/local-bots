@@ -244,7 +244,10 @@ export const createBotRequestSchema = z
       .string()
       .trim()
       .min(1, { message: 'Model ID cannot be blank.' })
-      .max(100, { message: 'Model ID cannot exceed 100 characters.' }),
+      .max(200, { message: 'Model ID cannot exceed 200 characters.' })
+      .refine((val) => /^[a-zA-Z0-9._:/-]+$/.test(val) && !val.includes('..'), {
+        message: 'Model ID contains invalid characters.'
+      }),
     description: z
       .string()
       .max(2000, { message: 'Description cannot exceed 2000 characters.' })
@@ -291,7 +294,10 @@ export const updateBotRequestSchema = z
       .string()
       .trim()
       .min(1, { message: 'Model ID cannot be blank.' })
-      .max(100, { message: 'Model ID cannot exceed 100 characters.' })
+      .max(200, { message: 'Model ID cannot exceed 200 characters.' })
+      .refine((val) => /^[a-zA-Z0-9._:/-]+$/.test(val) && !val.includes('..'), {
+        message: 'Model ID contains invalid characters.'
+      })
       .optional(),
     providerConnectionId: z
       .string()

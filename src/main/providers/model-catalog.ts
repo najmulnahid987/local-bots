@@ -5,6 +5,7 @@ import {
   CURRENT_APPLICATION_CAPABILITIES,
   computeEffectiveCapabilities
 } from './types'
+import { getPerplexityCuratedCatalogModels } from './perplexity/model-metadata'
 
 /**
  * Curated registry of first-wave AI model providers.
@@ -37,6 +38,33 @@ export const INITIAL_PROVIDERS: ReadonlyArray<ProviderDescriptor> = Object.freez
     docUrl: 'https://ai.google.dev/gemini-api/docs/models',
     isSupported: true,
     defaultModelId: 'gemini-3.8-flash'
+  }),
+  Object.freeze({
+    id: 'groq',
+    displayName: 'Groq',
+    description:
+      'High-speed LPU inference platform hosting Llama, GPT-OSS, Qwen, and Kimi open models.',
+    docUrl: 'https://console.groq.com/docs/models',
+    isSupported: true,
+    defaultModelId: 'llama-3.3-70b-versatile'
+  }),
+  Object.freeze({
+    id: 'openrouter',
+    displayName: 'OpenRouter',
+    description:
+      'Unified HTTPS routing API providing access to diverse foundation and open-weight models through one key.',
+    docUrl: 'https://openrouter.ai/models',
+    isSupported: true,
+    defaultModelId: 'openrouter/auto'
+  }),
+  Object.freeze({
+    id: 'perplexity',
+    displayName: 'Perplexity',
+    description:
+      'Perplexity Agent API supporting native real-time web research, Sonar models, effort presets, and third-party routed models.',
+    docUrl: 'https://docs.perplexity.ai/docs/agent-api/quickstart',
+    isSupported: true,
+    defaultModelId: 'perplexity/sonar'
   })
 ])
 
@@ -400,5 +428,175 @@ export const INITIAL_MODELS: ReadonlyArray<ModelDescriptor> = Object.freeze([
       structuredOutput: false
     },
     docUrl: 'https://ai.google.dev/gemini-api/docs/models'
-  })
+  }),
+
+  // --- Groq Models ---
+  defineModel({
+    id: 'llama-3.3-70b-versatile',
+    providerId: 'groq',
+    displayName: 'Llama 3.3 70B Versatile (Groq)',
+    description: 'High-capability general-purpose Meta Llama 3.3 70B model on Groq LPU.',
+    availability: 'stable',
+    contextWindow: {
+      inputTokens: 131072,
+      outputTokens: 32768
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: false,
+      structuredOutput: false
+    },
+    docUrl: 'https://console.groq.com/docs/models'
+  }),
+  defineModel({
+    id: 'llama-3.1-8b-instant',
+    providerId: 'groq',
+    displayName: 'Llama 3.1 8B Instant (Groq)',
+    description:
+      'Ultra-low-latency 8B Meta Llama model for fast responses and lightweight tool calls.',
+    availability: 'stable',
+    contextWindow: {
+      inputTokens: 131072,
+      outputTokens: 131072
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: false,
+      structuredOutput: false
+    },
+    docUrl: 'https://console.groq.com/docs/models'
+  }),
+  defineModel({
+    id: 'openai/gpt-oss-120b',
+    providerId: 'groq',
+    displayName: 'GPT-OSS 120B (Groq)',
+    description:
+      'Open-weight 120B flagship reasoning model with native tool calling and JSON Schema support.',
+    availability: 'stable',
+    contextWindow: {
+      inputTokens: 131072,
+      outputTokens: 65536
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: false,
+      structuredOutput: true
+    },
+    docUrl: 'https://console.groq.com/docs/models'
+  }),
+  defineModel({
+    id: 'openai/gpt-oss-20b',
+    providerId: 'groq',
+    displayName: 'GPT-OSS 20B (Groq)',
+    description: 'Fast open-weight 20B reasoning model with tool calling and JSON Schema support.',
+    availability: 'stable',
+    contextWindow: {
+      inputTokens: 131072,
+      outputTokens: 65536
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: false,
+      structuredOutput: true
+    },
+    docUrl: 'https://console.groq.com/docs/models'
+  }),
+  defineModel({
+    id: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    providerId: 'groq',
+    displayName: 'Llama 4 Scout 17B (Groq)',
+    description: 'Multimodal Mixture-of-Experts Llama 4 Scout model with vision and tool use.',
+    availability: 'preview',
+    contextWindow: {
+      inputTokens: 131072,
+      outputTokens: 8192
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: true,
+      structuredOutput: true
+    },
+    docUrl: 'https://console.groq.com/docs/models'
+  }),
+  defineModel({
+    id: 'meta-llama/llama-4-maverick-17b-128e-instruct',
+    providerId: 'groq',
+    displayName: 'Llama 4 Maverick 17B (Groq)',
+    description: 'Multimodal Llama 4 Maverick model with vision and tool calling support.',
+    availability: 'preview',
+    contextWindow: {
+      inputTokens: 131072,
+      outputTokens: 8192
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: true,
+      structuredOutput: false
+    },
+    docUrl: 'https://console.groq.com/docs/models'
+  }),
+  defineModel({
+    id: 'qwen/qwen3-32b',
+    providerId: 'groq',
+    displayName: 'Qwen3 32B (Groq)',
+    description: 'Qwen3 32B model with strong reasoning and tool use support.',
+    availability: 'preview',
+    contextWindow: {
+      inputTokens: 131072,
+      outputTokens: 40960
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: false,
+      structuredOutput: true
+    },
+    docUrl: 'https://console.groq.com/docs/models'
+  }),
+  defineModel({
+    id: 'moonshotai/kimi-k2-instruct-0905',
+    providerId: 'groq',
+    displayName: 'Kimi K2 Instruct 0905 (Groq)',
+    description: 'Long-context Moonshot Kimi K2 model with tool calling and structured outputs.',
+    availability: 'preview',
+    contextWindow: {
+      inputTokens: 262144,
+      outputTokens: 16384
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: true,
+      imageInput: false,
+      structuredOutput: true
+    },
+    docUrl: 'https://console.groq.com/docs/models'
+  }),
+  // --- OpenRouter Baseline Router ---
+  defineModel({
+    id: 'openrouter/auto',
+    providerId: 'openrouter',
+    displayName: 'OpenRouter Auto Router',
+    description:
+      'OpenRouter dynamic automatic router. Discover your key-accessible catalog to view exact model pricing and tool support.',
+    availability: 'stable',
+    contextWindow: {
+      inputTokens: 128000,
+      outputTokens: 16384
+    },
+    providerCapabilities: {
+      streaming: true,
+      tools: false,
+      imageInput: false,
+      structuredOutput: false
+    },
+    docUrl: 'https://openrouter.ai/openrouter/auto'
+  }),
+  // --- Perplexity Agent API Curated Models & Presets ---
+  ...getPerplexityCuratedCatalogModels()
 ])

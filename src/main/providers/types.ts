@@ -1,7 +1,14 @@
 /**
  * Supported first-wave provider IDs for application-level operations in Phase 3.
  */
-export const SUPPORTED_PROVIDER_IDS = ['openai', 'anthropic', 'google'] as const
+export const SUPPORTED_PROVIDER_IDS = [
+  'openai',
+  'anthropic',
+  'google',
+  'groq',
+  'openrouter',
+  'perplexity'
+] as const
 export type ProviderId = (typeof SUPPORTED_PROVIDER_IDS)[number]
 
 /**
@@ -21,6 +28,8 @@ import type { z } from 'zod'
 import {
   type ProviderNativeCapabilities,
   type ApplicationCapabilities,
+  type ModelPricingDto,
+  type OpenRouterRoutingPreferences,
   CURRENT_APPLICATION_CAPABILITIES,
   computeEffectiveCapabilities
 } from '../../shared/providers'
@@ -28,6 +37,8 @@ import {
 export {
   type ProviderNativeCapabilities,
   type ApplicationCapabilities,
+  type ModelPricingDto,
+  type OpenRouterRoutingPreferences,
   CURRENT_APPLICATION_CAPABILITIES,
   computeEffectiveCapabilities
 }
@@ -61,7 +72,13 @@ export interface ModelDescriptor {
   readonly displayName: string
   readonly description: string
   readonly availability: ModelAvailability
+  readonly canonicalSlug?: string
   readonly contextWindow?: ContextWindowMetadata
+  readonly inputModalities?: readonly string[]
+  readonly outputModalities?: readonly string[]
+  readonly supportedParameters?: readonly string[]
+  readonly pricing?: ModelPricingDto
+  readonly metadataSource?: 'catalog' | 'user_models' | 'public_catalog'
   readonly providerCapabilities?: ProviderNativeCapabilities
   readonly applicationCapabilities?: ApplicationCapabilities
   readonly capabilities: ModelCapabilities
@@ -206,6 +223,9 @@ export interface GenerateTextOptions {
   readonly maxTokens?: number
   readonly tools?: ReadonlyArray<ToolDefinition>
   readonly jsonSchema?: Record<string, unknown>
+  readonly openrouterRouting?: OpenRouterRoutingPreferences
+  /** Internal Main-process connection scope for resolving dynamically discovered models. Never accepted from IPC. */
+  readonly connectionId?: string
   readonly abortSignal?: AbortSignal
 }
 
@@ -219,6 +239,31 @@ export interface TokenUsage {
 }
 
 /**
+ * Verified external web source reported by a provider (strictly distinct from KB citations).
+ */
+export interface ProviderWebSource {
+  readonly id: string
+  readonly title: string
+  readonly url: string
+  readonly snippet?: string
+  readonly publishedDate?: string
+  readonly lastUpdated?: string
+  readonly sourceType?: 'web' | 'search'
+  readonly originLabel?: string
+}
+
+/**
+ * Optional provider-reported financial cost breakdown metadata.
+ */
+export interface ProviderCostMetadata {
+  readonly inputTokensCost?: number | null
+  readonly outputTokensCost?: number | null
+  readonly totalCost?: number | null
+  readonly toolCallsCost?: number | null
+  readonly currency?: string | null
+}
+
+/**
  * Result of a non-streaming text generation request.
  */
 export interface GenerateTextResult {
@@ -226,6 +271,8 @@ export interface GenerateTextResult {
   readonly toolCalls?: ReadonlyArray<ToolCall>
   readonly finishReason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'abort' | 'other'
   readonly usage: TokenUsage
+  readonly webSources?: ReadonlyArray<ProviderWebSource>
+  readonly providerCost?: ProviderCostMetadata
 }
 
 /**
@@ -233,6 +280,7 @@ export interface GenerateTextResult {
  */
 export type StreamTextChunk =
   | { readonly type: 'text-delta'; readonly textDelta: string }
+  | { readonly type: 'source'; readonly source: ProviderWebSource }
   | {
       readonly type: 'tool-call-delta'
       readonly toolCallId: string
@@ -244,6 +292,8 @@ export type StreamTextChunk =
       readonly type: 'finish'
       readonly finishReason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'abort' | 'other'
       readonly usage?: TokenUsage
+      readonly webSources?: ReadonlyArray<ProviderWebSource>
+      readonly providerCost?: ProviderCostMetadata
     }
   | { readonly type: 'error'; readonly error: ProviderError }
 
@@ -256,6 +306,7 @@ export interface ConnectionTestResult {
   readonly testedModelId: string
   readonly error?: ProviderError
   readonly availableModels?: readonly string[]
+  readonly discoveredModels?: ReadonlyArray<ModelDescriptor>
 }
 
 /**
@@ -272,4 +323,8 @@ export interface ProviderAdapter {
   generateText(apiKey: string, options: GenerateTextOptions): Promise<GenerateTextResult>
   streamText(apiKey: string, options: GenerateTextOptions): AsyncIterable<StreamTextChunk>
   discoverAvailableModels?(apiKey: string, signal?: AbortSignal): Promise<readonly string[]>
+  discoverModelMetadata?(
+    apiKey: string,
+    signal?: AbortSignal
+  ): Promise<ReadonlyArray<ModelDescriptor>>
 }

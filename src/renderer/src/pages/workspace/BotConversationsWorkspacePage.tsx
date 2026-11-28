@@ -116,7 +116,9 @@ export function BotConversationsWorkspacePage(): ReactElement {
     isClearing: conversationClearing,
     error: conversationError,
     refresh: refreshConversation,
-    clearConversation
+    clearConversation,
+    appendMessage,
+    appendMessages
   } = useBotConversation({
     botId: bot?.id ?? null,
     enabled: Boolean(bot)
@@ -143,11 +145,22 @@ export function BotConversationsWorkspacePage(): ReactElement {
     resetTurn
   } = useConversationTurn({
     conversationId: canonicalConversationId,
-    onFinish: () => {
-      void refreshConversation()
+    onFinish: (result) => {
+      const toAppend = [result.userMessage, result.assistantMessage].filter(
+        (m): m is NonNullable<typeof m> => Boolean(m)
+      )
+      if (result.assistantMessage && typeof appendMessages === 'function') {
+        appendMessages(toAppend)
+      } else {
+        void refreshConversation()
+      }
     },
-    onError: () => {
-      void refreshConversation()
+    onError: (err) => {
+      if (err.partialMessage && typeof appendMessage === 'function') {
+        appendMessage(err.partialMessage)
+      } else {
+        void refreshConversation()
+      }
     }
   })
 
@@ -244,6 +257,17 @@ export function BotConversationsWorkspacePage(): ReactElement {
     setIsApprovalModalOpen(false)
     setIsClearDialogOpen(false)
   }
+
+  const handleSaveResponseAsMemory = useCallback(
+    (content: string): void => {
+      setTaskSummaryModal({
+        isOpen: true,
+        content,
+        taskTitle: 'Assistant Response'
+      })
+    },
+    [setTaskSummaryModal]
+  )
 
   const handleClearConversation = useCallback(async (): Promise<void> => {
     if (isGenerating || isTaskActive) {
@@ -954,13 +978,7 @@ export function BotConversationsWorkspacePage(): ReactElement {
                 isArchived={isArchived}
                 onCitationClick={handleCitationClick}
                 activeTaskElement={activeTaskElement}
-                onSaveAsMemory={(content) =>
-                  setTaskSummaryModal({
-                    isOpen: true,
-                    content,
-                    taskTitle: 'Assistant Response'
-                  })
-                }
+                onSaveAsMemory={handleSaveResponseAsMemory}
               />
 
               {/* Fixed Bottom Message Composer */}

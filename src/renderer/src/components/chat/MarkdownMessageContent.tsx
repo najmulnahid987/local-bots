@@ -1,4 +1,4 @@
-import { ReactElement, useMemo } from 'react'
+import { ReactElement, useMemo, memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { CitationDto, MessageContentFormat } from '../../../../shared/conversations'
@@ -18,7 +18,7 @@ export interface MarkdownMessageContentProps {
  * Reusable message content component respecting MessageDto.contentFormat.
  * Renders Markdown, plain text, or JSON safely with XSS protection and interactive citations.
  */
-export function MarkdownMessageContent({
+export const MarkdownMessageContent = memo(function MarkdownMessageContent({
   content,
   contentFormat,
   citations = [],
@@ -33,6 +33,11 @@ export function MarkdownMessageContent({
     }
     return map
   }, [citations])
+
+  const remarkPlugins = useMemo(
+    () => [remarkGfm, [remarkCitations, { citations: isGenerating ? [] : citations }]],
+    [isGenerating, citations]
+  ) as React.ComponentProps<typeof ReactMarkdown>['remarkPlugins']
 
   // 1. Plain Text format — zero markdown interpretation
   if (contentFormat === 'text') {
@@ -94,7 +99,7 @@ export function MarkdownMessageContent({
       }}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, [remarkCitations, { citations: isGenerating ? [] : citations }]]}
+        remarkPlugins={remarkPlugins}
         urlTransform={safeUrlTransform}
         components={{
           // Fenced code blocks vs inline code
@@ -105,7 +110,7 @@ export function MarkdownMessageContent({
             if (isFenced) {
               const lang = match ? match[1] : className?.replace('language-', '') || ''
               const codeString = String(children).replace(/\n$/, '')
-              return <CodeBlock code={codeString} language={lang} />
+              return <CodeBlock code={codeString} language={lang} isGenerating={isGenerating} />
             }
 
             // Inline code
@@ -340,4 +345,4 @@ export function MarkdownMessageContent({
       </ReactMarkdown>
     </div>
   )
-}
+})
